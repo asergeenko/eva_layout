@@ -6,7 +6,31 @@ import uuid
 from datetime import datetime
 from io import BytesIO
 
-from layout_optimizer import parse_dxf, bin_packing, bin_packing_with_inventory, save_dxf_layout, plot_layout, plot_input_polygons, scale_polygons_to_fit
+try:
+    from layout_optimizer import (
+        parse_dxf, 
+        bin_packing, 
+        bin_packing_with_inventory, 
+        save_dxf_layout, 
+        plot_layout, 
+        plot_input_polygons, 
+        scale_polygons_to_fit
+    )
+except ImportError as e:
+    # Fallback import
+    try:
+        import layout_optimizer as lo
+        parse_dxf = lo.parse_dxf
+        bin_packing = lo.bin_packing
+        bin_packing_with_inventory = lo.bin_packing_with_inventory
+        save_dxf_layout = lo.save_dxf_layout
+        plot_layout = lo.plot_layout
+        plot_input_polygons = lo.plot_input_polygons
+        scale_polygons_to_fit = lo.scale_polygons_to_fit
+    except Exception as e2:
+        st.error(f"Критическая ошибка импорта: {e2}")
+        st.error("Убедитесь, что файл layout_optimizer.py присутствует и доступен")
+        st.stop()
 
 # Configuration
 DEFAULT_SHEET_TYPES = [

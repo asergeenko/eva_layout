@@ -1,5 +1,8 @@
 """Helper functions for EVA mat nesting optimization."""
 
+# Version for cache busting
+__version__ = "1.1.0"
+
 import numpy as np
 from shapely.geometry import Polygon
 from shapely import affinity
@@ -10,6 +13,25 @@ import streamlit as st
 import tempfile
 import os
 import hashlib
+
+
+# Export list for explicit importing
+__all__ = [
+    'get_color_for_file',
+    'parse_dxf', 
+    'rotate_polygon',
+    'translate_polygon',
+    'place_polygon_at_origin',
+    'check_collision',
+    'bin_packing_with_inventory',
+    'calculate_usage_percent',
+    'bin_packing',
+    'save_dxf_layout',
+    'plot_layout',
+    'plot_single_polygon',
+    'plot_input_polygons',
+    'scale_polygons_to_fit'
+]
 
 
 def get_color_for_file(filename: str):
@@ -196,68 +218,6 @@ def check_collision(polygon1: Polygon, polygon2: Polygon) -> bool:
     return polygon1.intersects(polygon2) and not polygon1.touches(polygon2)
 
 
-def bin_packing_with_inventory(polygons: list[tuple[Polygon, str]], available_sheets: list[dict], verbose: bool = True) -> tuple[list[dict], list[tuple[Polygon, str]]]:
-    """Optimize placement of polygons on available sheets with inventory tracking."""
-    placed_layouts = []
-    unplaced = polygons.copy()
-    sheet_inventory = [sheet.copy() for sheet in available_sheets]  # Copy to avoid modifying original
-    
-    if verbose:
-        total_available = sum(sheet['count'] - sheet['used'] for sheet in sheet_inventory)
-        st.info(f"Начинаем размещение {len(polygons)} полигонов на {total_available} доступных листах")
-    
-    sheet_counter = 0
-    
-    while unplaced and any(sheet['count'] - sheet['used'] > 0 for sheet in sheet_inventory):
-        placed_on_current_sheet = False
-        
-        # Try each available sheet type
-        for sheet_type in sheet_inventory:
-            if sheet_type['count'] - sheet_type['used'] <= 0:
-                continue  # No more sheets of this type
-            
-            sheet_size = (sheet_type['width'], sheet_type['height'])
-            sheet_counter += 1
-            
-            if verbose:
-                st.info(f"Пробуем лист #{sheet_counter}: {sheet_type['name']} ({sheet_size[0]}x{sheet_size[1]} см)")
-            
-            # Try to place polygons on this sheet
-            placed, remaining = bin_packing(unplaced, sheet_size, verbose=verbose)
-            
-            if placed:  # If we managed to place something
-                sheet_type['used'] += 1
-                placed_layouts.append({
-                    'sheet_number': sheet_counter,
-                    'sheet_type': sheet_type['name'],
-                    'sheet_size': sheet_size,
-                    'placed_polygons': placed,
-                    'usage_percent': calculate_usage_percent(placed, sheet_size)
-                })
-                unplaced = remaining
-                placed_on_current_sheet = True
-                
-                if verbose:
-                    st.success(f"Размещено {len(placed)} объектов на листе {sheet_type['name']}")
-                break  # Move to next iteration with remaining polygons
-        
-        if not placed_on_current_sheet:
-            # No sheet type could accommodate any remaining polygons
-            break
-    
-    if verbose:
-        st.info(f"Размещение завершено: {len(placed_layouts)} листов использовано, {len(unplaced)} объектов не размещено")
-    
-    return placed_layouts, unplaced
-
-
-def calculate_usage_percent(placed_polygons: list[tuple[Polygon, float, float, float, str]], sheet_size: tuple[float, float]) -> float:
-    """Calculate material usage percentage for a sheet."""
-    used_area_mm2 = sum(p[0].area for p in placed_polygons)
-    sheet_area_mm2 = (sheet_size[0] * 10) * (sheet_size[1] * 10)
-    return (used_area_mm2 / sheet_area_mm2) * 100
-
-
 def bin_packing(polygons: list[tuple[Polygon, str]], sheet_size: tuple[float, float], max_attempts: int = 1000, verbose: bool = True) -> tuple[list[tuple[Polygon, float, float, float, str]], list[tuple[Polygon, str]]]:
     """Optimize placement of complex polygons on a sheet."""
     # Convert sheet size from cm to mm to match DXF polygon units
@@ -392,6 +352,68 @@ def bin_packing(polygons: list[tuple[Polygon, str]], sheet_size: tuple[float, fl
     if verbose:
         st.info(f"Упаковка завершена: {len(placed)} размещено, {len(unplaced)} не размещено")
     return placed, unplaced
+
+
+def bin_packing_with_inventory(polygons: list[tuple[Polygon, str]], available_sheets: list[dict], verbose: bool = True) -> tuple[list[dict], list[tuple[Polygon, str]]]:
+    """Optimize placement of polygons on available sheets with inventory tracking."""
+    placed_layouts = []
+    unplaced = polygons.copy()
+    sheet_inventory = [sheet.copy() for sheet in available_sheets]  # Copy to avoid modifying original
+    
+    if verbose:
+        total_available = sum(sheet['count'] - sheet['used'] for sheet in sheet_inventory)
+        st.info(f"Начинаем размещение {len(polygons)} полигонов на {total_available} доступных листах")
+    
+    sheet_counter = 0
+    
+    while unplaced and any(sheet['count'] - sheet['used'] > 0 for sheet in sheet_inventory):
+        placed_on_current_sheet = False
+        
+        # Try each available sheet type
+        for sheet_type in sheet_inventory:
+            if sheet_type['count'] - sheet_type['used'] <= 0:
+                continue  # No more sheets of this type
+            
+            sheet_size = (sheet_type['width'], sheet_type['height'])
+            sheet_counter += 1
+            
+            if verbose:
+                st.info(f"Пробуем лист #{sheet_counter}: {sheet_type['name']} ({sheet_size[0]}x{sheet_size[1]} см)")
+            
+            # Try to place polygons on this sheet
+            placed, remaining = bin_packing(unplaced, sheet_size, verbose=verbose)
+            
+            if placed:  # If we managed to place something
+                sheet_type['used'] += 1
+                placed_layouts.append({
+                    'sheet_number': sheet_counter,
+                    'sheet_type': sheet_type['name'],
+                    'sheet_size': sheet_size,
+                    'placed_polygons': placed,
+                    'usage_percent': calculate_usage_percent(placed, sheet_size)
+                })
+                unplaced = remaining
+                placed_on_current_sheet = True
+                
+                if verbose:
+                    st.success(f"Размещено {len(placed)} объектов на листе {sheet_type['name']}")
+                break  # Move to next iteration with remaining polygons
+        
+        if not placed_on_current_sheet:
+            # No sheet type could accommodate any remaining polygons
+            break
+    
+    if verbose:
+        st.info(f"Размещение завершено: {len(placed_layouts)} листов использовано, {len(unplaced)} объектов не размещено")
+    
+    return placed_layouts, unplaced
+
+
+def calculate_usage_percent(placed_polygons: list[tuple[Polygon, float, float, float, str]], sheet_size: tuple[float, float]) -> float:
+    """Calculate material usage percentage for a sheet."""
+    used_area_mm2 = sum(p[0].area for p in placed_polygons)
+    sheet_area_mm2 = (sheet_size[0] * 10) * (sheet_size[1] * 10)
+    return (used_area_mm2 / sheet_area_mm2) * 100
 
 
 def save_dxf_layout(placed_polygons: list[tuple[Polygon, float, float, float, str]], sheet_size: tuple[float, float], output_path: str):
