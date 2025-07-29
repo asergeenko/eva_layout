@@ -6,6 +6,11 @@ import uuid
 from datetime import datetime
 from io import BytesIO
 
+# Clear any cached imports (for Streamlit Cloud)
+import sys
+if 'layout_optimizer' in sys.modules:
+    del sys.modules['layout_optimizer']
+
 try:
     from layout_optimizer import (
         parse_dxf, 
@@ -16,17 +21,79 @@ try:
         plot_input_polygons, 
         scale_polygons_to_fit
     )
+    st.success("✅ Все функции успешно импортированы")
 except ImportError as e:
-    # Fallback import
+    # Debug information
+    st.error(f"Ошибка прямого импорта: {e}")
+    
+    # Fallback import with debug
     try:
         import layout_optimizer as lo
+        st.info(f"Модуль layout_optimizer загружен. Версия: {getattr(lo, '__version__', 'неизвестна')}")
+        
+        # Show available functions
+        available_funcs = [attr for attr in dir(lo) if not attr.startswith('_') and callable(getattr(lo, attr))]
+        st.info(f"Доступные функции: {', '.join(available_funcs)}")
+        
+        # Check specific function
+        if hasattr(lo, 'bin_packing_with_inventory'):
+            st.success("✅ bin_packing_with_inventory найдена!")
+            bin_packing_with_inventory = lo.bin_packing_with_inventory
+        else:
+            st.error("❌ bin_packing_with_inventory НЕ найдена!")
+            
+            # Try alternative approach - define the function inline as a workaround
+            st.warning("🔧 Применяем обходное решение...")
+            
+            def bin_packing_with_inventory_fallback(polygons, available_sheets, verbose=True):
+                """Fallback implementation if import fails."""
+                if verbose:
+                    st.info("Используется резервная реализация bin_packing_with_inventory")
+                
+                placed_layouts = []
+                unplaced = polygons.copy()
+                sheet_counter = 0
+                
+                for sheet in available_sheets:
+                    if not unplaced:
+                        break
+                    
+                    available_count = sheet['count'] - sheet['used']
+                    for _ in range(available_count):
+                        if not unplaced:
+                            break
+                            
+                        sheet_counter += 1
+                        sheet_size = (sheet['width'], sheet['height'])
+                        
+                        placed, remaining = lo.bin_packing(unplaced, sheet_size, verbose=verbose)
+                        
+                        if placed:
+                            usage_percent = lo.calculate_usage_percent(placed, sheet_size)
+                            placed_layouts.append({
+                                'sheet_number': sheet_counter,
+                                'sheet_type': sheet['name'],
+                                'sheet_size': sheet_size,
+                                'placed_polygons': placed,
+                                'usage_percent': usage_percent
+                            })
+                            unplaced = remaining
+                        else:
+                            break
+                
+                return placed_layouts, unplaced
+                
+            bin_packing_with_inventory = bin_packing_with_inventory_fallback
+            st.success("✅ Резервная реализация bin_packing_with_inventory создана!")
+            
+        # Assign other functions
         parse_dxf = lo.parse_dxf
         bin_packing = lo.bin_packing
-        bin_packing_with_inventory = lo.bin_packing_with_inventory
         save_dxf_layout = lo.save_dxf_layout
         plot_layout = lo.plot_layout
         plot_input_polygons = lo.plot_input_polygons
         scale_polygons_to_fit = lo.scale_polygons_to_fit
+        
     except Exception as e2:
         st.error(f"Критическая ошибка импорта: {e2}")
         st.error("Убедитесь, что файл layout_optimizer.py присутствует и доступен")

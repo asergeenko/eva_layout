@@ -1,7 +1,10 @@
 """Helper functions for EVA mat nesting optimization."""
 
 # Version for cache busting
-__version__ = "1.1.0"
+__version__ = "1.2.0"
+
+# Force module reload for Streamlit Cloud
+import importlib
 
 import numpy as np
 from shapely.geometry import Polygon
@@ -610,3 +613,40 @@ def scale_polygons_to_fit(polygons_with_names: list[tuple[Polygon, str]], sheet_
             scaled_polygons.append((polygon, name))
     
     return scaled_polygons
+
+
+# Verification that all functions are properly defined
+def _verify_functions():
+    """Verify that all required functions are defined in the module."""
+    required_functions = [
+        'get_color_for_file',
+        'parse_dxf', 
+        'rotate_polygon',
+        'translate_polygon',
+        'place_polygon_at_origin',
+        'check_collision',
+        'bin_packing',
+        'bin_packing_with_inventory',
+        'calculate_usage_percent',
+        'save_dxf_layout',
+        'plot_layout',
+        'plot_single_polygon',
+        'plot_input_polygons',
+        'scale_polygons_to_fit'
+    ]
+    
+    import sys
+    current_module = sys.modules[__name__]
+    
+    missing_functions = []
+    for func_name in required_functions:
+        if not hasattr(current_module, func_name):
+            missing_functions.append(func_name)
+    
+    if missing_functions:
+        raise ImportError(f"Missing functions in layout_optimizer: {missing_functions}")
+    
+    return True
+
+# Run verification
+_verify_functions()
