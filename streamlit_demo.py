@@ -5,6 +5,11 @@ import os
 import uuid
 from datetime import datetime
 from io import BytesIO
+import functools
+import zipfile
+
+# Константы
+MAX_SHEETS_PER_ORDER = 5  # Максимальное количество листов на один заказ
 
 # Clear any cached imports (for Streamlit Cloud)
 import sys
@@ -13,6 +18,8 @@ if 'layout_optimizer' in sys.modules:
 
 try:
     from layout_optimizer import (
+        parse_dxf_complete, 
+        save_dxf_layout_complete,
         parse_dxf, 
         bin_packing, 
         bin_packing_with_inventory, 
@@ -87,6 +94,8 @@ except ImportError as e:
             st.success("✅ Резервная реализация bin_packing_with_inventory создана!")
             
         # Assign other functions
+        parse_dxf_complete = lo.parse_dxf_complete
+        save_dxf_layout_complete = lo.save_dxf_layout_complete
         parse_dxf = lo.parse_dxf
         bin_packing = lo.bin_packing
         save_dxf_layout = lo.save_dxf_layout
@@ -121,6 +130,11 @@ st.write("Укажите какие листы у вас есть в налич�
 if 'available_sheets' not in st.session_state:
     st.session_state.available_sheets = []
 
+# Update existing sheets to have color if missing (for backward compatibility)
+for sheet in st.session_state.available_sheets:
+    if 'color' not in sheet:
+        sheet['color'] = 'серый'  # Default color for existing sheets
+
 # Add new sheet type
 st.subheader("Добавить тип листа")
 col1, col2, col3 = st.columns([2, 2, 1])
@@ -139,10 +153,17 @@ with col1:
     else:
         selected_size = tuple(map(float, sheet_type_option.split("x")))
         
+    # Color selection
+    sheet_color = st.selectbox(
+        "Цвет листа", 
+        ["серый", "чёрный"],
+        key="sheet_color"
+    )
+        
 with col2:
     sheet_count = st.number_input("Количество листов", min_value=1, max_value=100, value=5, key="sheet_count")
     sheet_name = st.text_input("Название типа листа (опционально)", 
-                              value=f"Лист {selected_size[0]}x{selected_size[1]}", 
+                              value=f"Лист {selected_size[0]}x{selected_size[1]} {sheet_color}", 
                               key="sheet_name")
 
 with col3:
@@ -153,6 +174,7 @@ with col3:
             "name": sheet_name,
             "width": selected_size[0],
             "height": selected_size[1], 
+            "color": sheet_color,
             "count": sheet_count,
             "used": 0
         }
@@ -168,10 +190,16 @@ if st.session_state.available_sheets:
     sheets_data = []
     total_sheets = 0
     for i, sheet in enumerate(st.session_state.available_sheets):
+        # Add color indicator
+        color = sheet.get('color', 'не указан')
+        color_emoji = "⚫" if color == "чёрный" else "⚪" if color == "серый" else "🔘"
+        color_display = f"{color_emoji} {color}"
+        
         sheets_data.append({
             "№": i + 1,
             "Название": sheet['name'],
             "Размер (см)": f"{sheet['width']}x{sheet['height']}",
+            "Цвет": color_display,
             "Доступно": f"{sheet['count'] - sheet['used']}/{sheet['count']}",
             "Использовано": sheet['used']
         })
@@ -190,9 +218,657 @@ if st.session_state.available_sheets:
 else:
     st.info("Добавьте типы листов, которые у вас есть в наличии.")
 
-# DXF Files Section
-st.header("📄 Файлы для раскроя")
-dxf_files = st.file_uploader("Загрузите DXF файлы", type=["dxf"], accept_multiple_files=True)
+# Order Loading Section
+st.header("📋 Загрузка заказов из Excel таблицы")
+
+# Initialize session state for orders
+if 'selected_orders' not in st.session_state:
+    st.session_state.selected_orders = []
+
+# Excel file upload
+excel_file = st.file_uploader("Загрузите файл заказов Excel", type=["xlsx", "xls"], key="excel_upload")
+
+if excel_file is not None:
+    try:
+        with st.spinner("Загрузка Excel файла..."):
+            # Read Excel file with all sheets
+            excel_data = pd.read_excel(excel_file, sheet_name=None, header=None)
+        
+        # Get current month name and previous month
+        from datetime import datetime
+        current_date = datetime.now()
+        current_month = current_date.strftime("%B %Y").upper()
+    
+        # Russian month names mapping
+        month_mapping = {
+            "JANUARY": "ЯНВАРЬ", "FEBRUARY": "ФЕВРАЛЬ", "MARCH": "МАРТ", 
+            "APRIL": "АПРЕЛЬ", "MAY": "МАЙ", "JUNE": "ИЮНЬ",
+            "JULY": "ИЮЛЬ", "AUGUST": "АВГУСТ", "SEPTEMBER": "СЕНТЯБРЬ",
+            "OCTOBER": "ОКТЯБРЬ", "NOVEMBER": "НОЯБРЬ", "DECEMBER": "ДЕКАБРЬ"
+        }
+        
+        current_month_ru = month_mapping.get(current_date.strftime("%B").upper(), "ИЮЛЬ") + " " + str(current_date.year)
+        
+        # Get previous month
+        if current_date.month == 1:
+            prev_month_ru = "ДЕКАБРЬ " + str(current_date.year - 1)
+        else:
+            prev_date = current_date.replace(month=current_date.month - 1)
+            prev_month_ru = month_mapping.get(prev_date.strftime("%B").upper(), "ИЮНЬ") + " " + str(prev_date.year)
+        
+        target_sheets = [current_month_ru, prev_month_ru]
+        
+        st.info(f"🗓️ Ищем листы для: {', '.join(target_sheets)}")
+        
+        # Process target sheets
+        all_orders = []
+        for sheet_name in target_sheets:
+            if sheet_name in excel_data:
+                df = excel_data[sheet_name]
+                
+                # Skip first 2 rows (headers), start from row 2 (index 2)
+                if df.shape[0] > 2:
+                    data_rows = df.iloc[2:].copy()
+                    
+                    # Check for empty "Сделано" column (index 2)
+                    if df.shape[1] > 3:  # Make sure we have enough columns
+                        pending_orders = data_rows[data_rows.iloc[:, 2].isna() | (data_rows.iloc[:, 2] == '')]
+                        
+                        for idx, row in pending_orders.iterrows():
+                            if pd.notna(row.iloc[3]):  # Check if Артикул (column D) is not empty
+                                # Get color from column I (index 8)
+                                color = str(row.iloc[8]).lower().strip() if pd.notna(row.iloc[8]) and df.shape[1] > 8 else ''
+                                # Normalize color values
+                                if 'черн' in color or 'black' in color:
+                                    color = 'чёрный'
+                                elif 'сер' in color or 'gray' in color or 'grey' in color:
+                                    color = 'серый'
+                                else:
+                                    color = 'серый'  # Default color if not specified
+                                
+                                order = {
+                                    'sheet': sheet_name,
+                                    'row_index': idx,
+                                    'date': str(row.iloc[0]) if pd.notna(row.iloc[0]) else '',
+                                    'article': str(row.iloc[3]),
+                                    'product': str(row.iloc[4]) if pd.notna(row.iloc[4]) else '',
+                                    'client': str(row.iloc[5]) if pd.notna(row.iloc[5]) else '' if df.shape[1] > 5 else '',
+                                    'order_id': str(row.iloc[14]) if pd.notna(row.iloc[14]) and df.shape[1] > 13 else '',
+                                    'color': color
+                                }
+                                all_orders.append(order)
+        
+        if all_orders:
+            st.success(f"✅ Найдено {len(all_orders)} невыполненных заказов")
+            
+            # Display orders for selection
+            st.subheader("📝 Выберите заказы для раскроя")
+            
+            # Add search/filter options
+            col_filter1, col_filter2 = st.columns([1, 1])
+            with col_filter1:
+                search_article = st.text_input("🔍 Поиск по артикулу:", placeholder="Введите часть артикула", key="search_article")
+            with col_filter2:
+                search_product = st.text_input("🔍 Поиск по товару:", placeholder="Введите часть названия", key="search_product")
+            
+            # Filter orders based on search
+            filtered_orders = all_orders
+            if search_article:
+                filtered_orders = [order for order in filtered_orders if search_article.lower() in order['article'].lower()]
+            if search_product:
+                filtered_orders = [order for order in filtered_orders if search_product.lower() in order['product'].lower()]
+            
+            if filtered_orders != all_orders:
+                st.info(f"🔍 Найдено {len(filtered_orders)} заказов из {len(all_orders)} (применены фильтры)")
+            
+            # Update all_orders with filtered results for display
+            display_orders = filtered_orders
+        
+            # Create selection interface
+            selected_indices = []
+            
+            # Show orders in batches of 10 for better UX
+            orders_per_page = 10
+            total_pages = (len(display_orders) + orders_per_page - 1) // orders_per_page
+            
+            if total_pages > 1:
+                page = st.selectbox("Страница", range(1, total_pages + 1), key="orders_page") - 1
+                start_idx = page * orders_per_page
+                end_idx = min(start_idx + orders_per_page, len(display_orders))
+                orders_to_show = display_orders[start_idx:end_idx]
+            else:
+                orders_to_show = display_orders
+                start_idx = 0
+            
+            # Create table data for orders
+            table_data = []
+            for i, order in enumerate(orders_to_show):
+                actual_idx = start_idx + i
+                # Get checkbox state
+                is_selected = st.session_state.get(f"order_{actual_idx}", False)
+                
+                # Add color emoji for display
+                color = order.get('color', 'серый')
+                color_emoji = "⚫" if color == "чёрный" else "⚪" if color == "серый" else "🔘"
+                color_display = f"{color_emoji} {color}"
+                
+                table_data.append({
+                    "Выбрать": is_selected,
+                    "Артикул": order['article'],
+                    "Товар": order['product'][:50] + "..." if len(order['product']) > 50 else order['product'],
+                    "Цвет": color_display,
+                    "Клиент": order.get('client', '')[:25] + "..." if len(order.get('client', '')) > 25 else order.get('client', ''),
+                    "Дата": order.get('date', '')[:10],  # Show only date part
+                    "Месяц": order['sheet'],
+                    "№ заказа": order.get('order_id', '')
+                })
+            
+            # Display orders table with selection
+            if table_data:
+                orders_df = pd.DataFrame(table_data)
+                
+                # Use data_editor for selection
+                edited_df = st.data_editor(
+                    orders_df,
+                    column_config={
+                        "Выбрать": st.column_config.CheckboxColumn(
+                            "Выбрать",
+                            help="Отметьте заказы для раскроя",
+                            default=False,
+                        ),
+                        "Артикул": st.column_config.TextColumn(
+                            "Артикул",
+                            help="Код артикула для поиска DXF файлов",
+                            width="medium"
+                        ),
+                        "Товар": st.column_config.TextColumn(
+                            "Товар",
+                            help="Название товара",
+                            width="large"
+                        ),
+                        "Цвет": st.column_config.TextColumn(
+                            "Цвет",
+                            help="Цвет листа для заказа",
+                            width="small"
+                        ),
+                        "Клиент": st.column_config.TextColumn(
+                            "Клиент",
+                            help="Название клиента",
+                            width="medium"
+                        ),
+                        "Дата": st.column_config.TextColumn(
+                            "Дата",
+                            help="Дата заказа",
+                            width="small"
+                        ),
+                        "Месяц": st.column_config.TextColumn(
+                            "Месяц",
+                            help="Месяц из Excel листа",
+                            width="small"
+                        ),
+                        "№ заказа": st.column_config.TextColumn(
+                            "№ заказа",
+                            help="Номер заказа",
+                            width="small"
+                        )
+                    },
+                    disabled=["Артикул", "Товар", "Цвет", "Клиент", "Дата", "Месяц", "№ заказа"],
+                    hide_index=True,
+                    use_container_width=True,
+                    key=f"orders_table_page_{start_idx}"
+                )
+                
+                # Update session state based on table selections
+                for i, row in edited_df.iterrows():
+                    actual_idx = start_idx + i
+                    st.session_state[f"order_{actual_idx}"] = row["Выбрать"]
+            
+            # Bulk selection controls
+            col1, col2, col3 = st.columns([1, 1, 2])
+            with col1:
+                if st.button("✅ Выбрать все", key=f"select_all_{start_idx}"):
+                    for i in range(len(orders_to_show)):
+                        st.session_state[f"order_{start_idx + i}"] = True
+                    st.rerun()
+            with col2:
+                if st.button("❌ Снять все", key=f"deselect_all_{start_idx}"):
+                    for i in range(len(orders_to_show)):
+                        st.session_state[f"order_{start_idx + i}"] = False
+                    st.rerun()
+            
+            # Collect all selected orders from all pages
+            all_selected_orders = []
+            for i in range(len(all_orders)):
+                if st.session_state.get(f"order_{i}", False):
+                    all_selected_orders.append(all_orders[i])
+            
+            if all_selected_orders:
+                st.success(f"🎯 Выбрано заказов: {len(all_selected_orders)}")
+                
+                # Show selected orders summary in table format
+                with st.expander("📋 Выбранные заказы", expanded=False):
+                    selected_summary = []
+                    for order in all_selected_orders:
+                        selected_summary.append({
+                            "Артикул": order['article'],
+                            "Товар": order['product'][:40] + "..." if len(order['product']) > 40 else order['product'],
+                            "Месяц": order['sheet']
+                            })
+                        
+                        selected_df = pd.DataFrame(selected_summary)
+                        st.dataframe(selected_df, use_container_width=True, hide_index=True)
+                    
+                # Store selected orders in session state
+                st.session_state.selected_orders = all_selected_orders
+        else:
+            st.warning("⚠️ Не найдено невыполненных заказов в указанных месяцах")
+            
+    except Exception as e:
+        st.error(f"❌ Ошибка обработки Excel файла: {e}")
+
+# Initialize auto_loaded_files
+auto_loaded_files = []
+
+# Auto-load DXF files when orders are selected
+if st.session_state.selected_orders:
+    st.subheader("🤖 Автоматическая загрузка DXF файлов")
+    
+    articles_found = []
+    articles_not_found = []
+    
+    # Create a file-like object with name attribute
+    class FileObj:
+        def __init__(self, content, name):
+            self.content = BytesIO(content)
+            self.name = name
+        def read(self):
+            return self.content.read()
+        def seek(self, pos):
+            return self.content.seek(pos)
+
+    @st.cache_data(ttl=300)  # Cache for 5 minutes
+    def find_dxf_files_for_article(article, product_name=''):
+        """Find DXF files for a given article by searching in the dxf_samples directory structure."""
+        import re
+        found_files = []
+        
+        # Strategy 1: Search by product name (e.g., "AUDI A6 (C7) 4")
+        if product_name and not found_files:
+            # Extract brand and model from product name
+            product_upper = product_name.upper()
+            
+            # Handle common brand name mappings
+            brand_mapping = {
+                'AUDI': 'AUDI',
+                'BMW': 'BMW',
+                'MERCEDES': 'MERCEDES',
+                'VOLKSWAGEN': 'VOLKSWAGEN',
+                'FORD': 'FORD',
+                'TOYOTA': 'TOYOTA',
+                'NISSAN': 'NISSAN',
+                'HYUNDAI': 'HYUNDAI',
+                'KIA': 'KIA',
+                'CHERY': 'CHERY',
+                'CHANGAN': 'CHANGAN'
+            }
+            
+            # Find brand in product name
+            detected_brand = None
+            for brand_key, brand_folder in brand_mapping.items():
+                if brand_key in product_upper:
+                    detected_brand = brand_folder
+                    break
+            
+            if detected_brand:
+                brand_path = f"dxf_samples/{detected_brand}"
+                if os.path.exists(brand_path):
+                    # Create search keywords from product name
+                    product_keywords = []
+                    
+                    # Clean product name and extract model parts
+                    model_part = product_upper.replace(detected_brand, '').strip()
+                    
+                    # Add full product name as keyword
+                    product_keywords.append(product_name.lower())
+                    
+                    # Handle parentheses and extract parts
+                    if '(' in model_part and ')' in model_part:
+                        parentheses_content = re.findall(r'\((.*?)\)', model_part)
+                        base_model = re.sub(r'\s*\([^)]*\)\s*', ' ', model_part).strip()
+                        
+                        product_keywords.extend([
+                            base_model.lower(),
+                            model_part.replace('(', '').replace(')', '').lower(),
+                        ])
+                        
+                        for content in parentheses_content:
+                            product_keywords.extend([
+                                content.lower(),
+                                f"{base_model} {content}".lower(),
+                            ])
+                    
+                    # Extract individual parts
+                    model_parts = re.sub(r'[^\w\s]', ' ', model_part).split()
+                    product_keywords.extend([part.lower() for part in model_parts if len(part) > 1])
+                    
+                    # Remove duplicates
+                    product_keywords = list(set([k.strip() for k in product_keywords if k.strip()]))
+                    
+                    # Search through brand folders
+                    for model_folder in os.listdir(brand_path):
+                        model_folder_path = os.path.join(brand_path, model_folder)
+                        if os.path.isdir(model_folder_path):
+                            folder_name_lower = model_folder.lower()
+                            
+                            # Calculate match score with Cyrillic/Latin normalization
+                            match_score = 0
+                            
+                            # Normalize folder name for better matching (handle Cyrillic/Latin)
+                            normalized_folder = folder_name_lower
+                            # Replace common Cyrillic letters with Latin equivalents
+                            cyrillic_to_latin = {
+                                'а': 'a', 'А': 'A',
+                                'с': 'c', 'С': 'C',
+                                'е': 'e', 'Е': 'E',
+                                'о': 'o', 'О': 'O',
+                                'р': 'p', 'Р': 'P',
+                                'х': 'x', 'Х': 'X'
+                            }
+                            for cyrillic, latin in cyrillic_to_latin.items():
+                                normalized_folder = normalized_folder.replace(cyrillic, latin)
+                            
+                            for keyword in product_keywords:
+                                if keyword and len(keyword) > 2:
+                                    # Direct match in normalized folder name
+                                    if keyword in normalized_folder:
+                                        match_score += len(keyword) * 2
+                                    # Direct match in original folder name
+                                    elif keyword in folder_name_lower:
+                                        match_score += len(keyword) * 2
+                                    else:
+                                        # Check partial matches in normalized folder
+                                        keyword_parts = keyword.split()
+                                        matched_parts = sum(1 for part in keyword_parts 
+                                                          if part in normalized_folder or part in folder_name_lower)
+                                        if matched_parts > 0:
+                                            match_score += matched_parts * 3
+                            
+                            # If we have a good match, look for DXF files
+                            if match_score >= 6:  # Threshold for product name matching
+                                dxf_folder = os.path.join(model_folder_path, "DXF")
+                                if os.path.exists(dxf_folder):
+                                    dxf_files_found = [f for f in os.listdir(dxf_folder) if f.lower().endswith('.dxf')]
+                                    for dxf_file in dxf_files_found:
+                                        found_files.append(os.path.join(dxf_folder, dxf_file))
+                                    if found_files:
+                                        break
+                                else:
+                                    # Check for DXF files directly in model folder
+                                    dxf_files_found = [f for f in os.listdir(model_folder_path) if f.lower().endswith('.dxf')]
+                                    for dxf_file in dxf_files_found:
+                                        found_files.append(os.path.join(model_folder_path, dxf_file))
+                                    if found_files:
+                                        break
+        
+        # Strategy 2: Direct path mapping (if article matches folder structure)
+        if not found_files:
+            direct_path = f"dxf_samples/{article}"
+            if os.path.exists(direct_path):
+                dxf_files = [f for f in os.listdir(direct_path) if f.lower().endswith('.dxf')]
+                for dxf_file in dxf_files:
+                    found_files.append(os.path.join(direct_path, dxf_file))
+        
+        # Strategy 2: Parse article and search in brand folders
+        if not found_files and '+' in article:
+            parts = article.split('+')
+            if len(parts) >= 3:
+                # Extract brand and model (e.g., EVA_BORT+Chery+Tiggo 4 -> Chery, Tiggo 4)
+                brand = parts[1].strip()
+                model_info = parts[2].strip() if len(parts) > 2 else ""
+                
+                # Create search variants for the brand
+                brand_variants = [
+                    brand.upper(),
+                    brand.capitalize(),
+                    brand.lower()
+                ]
+                
+                # Find matching brand folder
+                for brand_variant in brand_variants:
+                    brand_path = f"dxf_samples/{brand_variant}"
+                    if os.path.exists(brand_path):
+                        # Look for model folders that might match
+                        for model_folder in os.listdir(brand_path):
+                            model_folder_path = os.path.join(brand_path, model_folder)
+                            if os.path.isdir(model_folder_path):
+                                # Create search keywords from model info
+                                search_keywords = []
+                                
+                                # Clean model info and create variants
+                                if model_info:
+                                    # Handle specific transformations
+                                    model_variants = [model_info]
+                                    
+                                    # Handle parentheses (e.g., "A6 (C7) 4" -> "A6", "A6 C7", "A6 4", "A6 C7 4")
+                                    if '(' in model_info and ')' in model_info:
+                                        # Extract parts from parentheses
+                                        parentheses_content = re.findall(r'\((.*?)\)', model_info)
+                                        base_model = re.sub(r'\s*\([^)]*\)\s*', ' ', model_info).strip()
+                                        
+                                        # Create variants with and without parentheses content
+                                        model_variants.extend([
+                                            base_model,  # "A6 4"
+                                            model_info.replace('(', '').replace(')', ''),  # "A6 C7 4"
+                                        ])
+                                        
+                                        # Add variants with parentheses content integrated
+                                        for content in parentheses_content:
+                                            model_variants.extend([
+                                                f"{base_model} {content}",  # "A6 4 C7"
+                                                f"{content} {base_model}",  # "C7 A6 4"
+                                                content,  # "C7"
+                                            ])
+                                    
+                                    # Handle "CX35PLUS" -> "CS35", "CS35 PLUS" 
+                                    if 'CX35PLUS' in model_info:
+                                        model_variants.append(model_info.replace('CX35PLUS', 'CS35'))
+                                        model_variants.append(model_info.replace('CX35PLUS', 'CS35 PLUS'))
+                                    
+                                    # Handle "PLUS" variations
+                                    if 'PLUS' in model_info:
+                                        model_variants.append(model_info.replace('PLUS', ' PLUS'))
+                                        model_variants.append(model_info.replace('PLUS', ''))
+                                    
+                                    # Handle "PRO" variations
+                                    if 'PRO' in model_info:
+                                        model_variants.append(model_info.replace('PRO', ' PRO'))
+                                        model_variants.append(model_info.replace('PRO', ''))
+                                    
+                                    # Extract individual model parts (e.g., "A6 (C7) 4" -> ["A6", "C7", "4"])
+                                    model_parts = re.sub(r'[^\w\s]', ' ', model_info).split()
+                                    model_variants.extend(model_parts)
+                                    
+                                    # Create combinations of model parts
+                                    if len(model_parts) >= 2:
+                                        for i in range(len(model_parts)):
+                                            for j in range(i+1, len(model_parts)+1):
+                                                combination = ' '.join(model_parts[i:j])
+                                                if len(combination.strip()) > 1:
+                                                    model_variants.append(combination)
+                                    
+                                    # Create search keywords from all variants
+                                    for variant in model_variants:
+                                        search_keywords.extend([
+                                            variant.lower().strip(),
+                                            variant.replace(' ', '').lower(),
+                                            variant[:10].lower().strip()  # First 10 chars
+                                        ])
+                                    
+                                    # Remove duplicates and empty strings
+                                    search_keywords = list(set([k for k in search_keywords if k.strip()]))
+                                
+                                # Check if this model folder matches our search keywords
+                                folder_name_lower = model_folder.lower()
+                                match_found = False
+                                match_score = 0
+                                
+                                # Calculate match score for better ranking
+                                for keyword in search_keywords:
+                                    if keyword and len(keyword) > 1:  # Check even short keywords
+                                        keyword_parts = keyword.split()
+                                        current_score = 0
+                                        
+                                        if len(keyword_parts) >= 2:
+                                            # Multi-word keyword like "a6 c7" or "a6 4"
+                                            matched_parts = sum(1 for part in keyword_parts if part in folder_name_lower)
+                                            if matched_parts == len(keyword_parts):
+                                                current_score = 10 + len(keyword_parts)  # High score for complete matches
+                                                match_found = True
+                                            elif matched_parts > 0:
+                                                current_score = matched_parts * 2  # Partial match score
+                                        else:
+                                            # Single word keyword
+                                            if keyword in folder_name_lower:
+                                                # Exact substring match
+                                                current_score = 8 + len(keyword)
+                                                match_found = True
+                                            elif len(keyword) >= 3:
+                                                # Check for partial matches in folder name parts
+                                                folder_parts = re.split(r'[\s\-_]', folder_name_lower)
+                                                for folder_part in folder_parts:
+                                                    if keyword in folder_part or folder_part in keyword:
+                                                        current_score = max(current_score, 3)
+                                                        match_found = True
+                                        
+                                        match_score = max(match_score, current_score)
+                                
+                                # Only proceed if we have a reasonable match
+                                if match_found and match_score >= 3:
+                                    # Look for DXF folder first
+                                    dxf_folder = os.path.join(model_folder_path, "DXF")
+                                    if os.path.exists(dxf_folder):
+                                        dxf_files = [f for f in os.listdir(dxf_folder) if f.lower().endswith('.dxf')]
+                                        for dxf_file in dxf_files:
+                                            found_files.append(os.path.join(dxf_folder, dxf_file))
+                                        if found_files:
+                                            break
+                                    else:
+                                        # Look for DXF files directly in model folder
+                                        dxf_files = [f for f in os.listdir(model_folder_path) if f.lower().endswith('.dxf')]
+                                        for dxf_file in dxf_files:
+                                            found_files.append(os.path.join(model_folder_path, dxf_file))
+                                        if found_files:
+                                            break
+                        
+                        if found_files:
+                            break
+        
+        return found_files
+
+    # Create progress tracking
+    total_orders = len(st.session_state.selected_orders)
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    # Create detailed progress info
+    progress_info = st.empty()
+    
+    for i, order in enumerate(st.session_state.selected_orders):
+        article = order['article']
+        product = order['product']
+        
+        # Update progress
+        progress = (i + 1) / total_orders
+        progress_bar.progress(progress)
+        status_text.text(f"Обработка заказа {i + 1} из {total_orders}: {product[:50]}...")
+        
+        # Update detailed info
+        with progress_info.container():
+            st.write(f"🔍 Поиск DXF файлов для: **{product}**")
+            st.write(f"📋 Артикул: `{article}`")
+        
+        found_dxf_files = find_dxf_files_for_article(article, product)
+        
+        if found_dxf_files:
+            articles_found.append((product, "auto-detected", [os.path.basename(f) for f in found_dxf_files]))
+            
+            # Show files being loaded
+            with progress_info.container():
+                st.write(f"✅ Найдено {len(found_dxf_files)} файлов")
+                for idx, file_path in enumerate(found_dxf_files):
+                    st.write(f"   📄 {idx + 1}. {os.path.basename(file_path)}")
+            
+            for file_path in found_dxf_files:
+                try:
+                    with open(file_path, 'rb') as f:
+                        file_content = f.read()
+                    
+                    # Use product name for file display, but keep article for uniqueness
+                    display_name = f"{product}_{os.path.basename(file_path)}"
+                    file_obj = FileObj(file_content, display_name)
+                    # Add color information from the order
+                    file_obj.color = order.get('color', 'серый')
+                    auto_loaded_files.append(file_obj)
+                except Exception as e:
+                    st.warning(f"⚠️ Ошибка загрузки {file_path}: {e}")
+        else:
+            articles_not_found.append((product, f"dxf_samples/{article}"))
+            with progress_info.container():
+                st.write("❌ DXF файлы не найдены")
+        
+        # Small delay for visual effect
+        import time
+        time.sleep(0.1)
+    
+    # Final progress update
+    progress_bar.progress(1.0)
+    status_text.text(f"✅ Обработка завершена! Загружено {len(articles_found)} из {total_orders} заказов")
+    progress_info.empty()  # Clear detailed info
+    
+    if articles_found:
+        st.success(f"✅ Найдены DXF файлы для {len(articles_found)} товаров:")
+        for product, path, files in articles_found:
+            st.write(f"• {product}: {len(files)} файлов")
+    
+    if articles_not_found:
+        st.warning(f"⚠️ Не найдены DXF файлы для {len(articles_not_found)} товаров:")
+        for product, path in articles_not_found:
+            st.write(f"• {product} (путь: {path})")
+
+# Additional DXF files section (always shown when there are auto-loaded files)
+if auto_loaded_files:
+    st.subheader("📎 Дополнительные DXF файлы (опционально)")
+    manual_files = st.file_uploader("Добавьте дополнительные DXF файлы при необходимости", type=["dxf"], accept_multiple_files=True, key="manual_dxf")
+    
+    # If manual files are uploaded, ask for color
+    manual_files_with_color = []
+    if manual_files:
+        st.write("**Выберите цвет для дополнительных файлов:**")
+        manual_color = st.selectbox(
+            "Цвет листа для дополнительных файлов:",
+            options=["серый", "чёрный"],
+            index=0,
+            key="manual_files_color",
+            help="Выберите цвет листа, на который должны быть размещены дополнительные файлы"
+        )
+        
+        # Add color information to manual files
+        for file in manual_files:
+            # Create a file wrapper with color info
+            file.color = manual_color
+            manual_files_with_color.append(file)
+    
+    # Combine auto-loaded and manual files
+    dxf_files = auto_loaded_files + manual_files_with_color
+    
+    st.info(f"📁 Всего файлов для раскроя: {len(dxf_files)} (из заказов: {len(auto_loaded_files)}, дополнительные: {len(manual_files_with_color)})")
+else:
+    # No orders selected or no files found - show message
+    dxf_files = []
+    if st.session_state.selected_orders:
+        st.warning("⚠️ Для выбранных заказов не найдены DXF файлы. Проверьте наличие файлов в папке dxf_samples.")
+    else:
+        st.info("💡 Выберите заказы из Excel таблицы выше для автоматической загрузки DXF файлов.")
 
 if st.button("🚀 Оптимизировать раскрой"):
     if not st.session_state.available_sheets:
@@ -203,23 +879,29 @@ if st.button("🚀 Оптимизировать раскрой"):
         # Parse DXF files
         st.header("📄 Обработка DXF файлов")
         polygons = []
+        original_dxf_data_map = {}  # Store original DXF data for each file
         
-        # Parse files quietly first
+        # Parse files quietly first using improved DXF handling
         for file in dxf_files:
             file.seek(0)
             file_bytes = BytesIO(file.read())
-            file_polygon = parse_dxf(file_bytes, verbose=False)
-            if file_polygon:
-                polygons.append((file_polygon, file.name))
+            parsed_data = parse_dxf_complete(file_bytes, verbose=False)
+            if parsed_data and parsed_data['combined_polygon']:
+                # Add color information to polygon tuple
+                file_color = getattr(file, 'color', 'серый')
+                # Use the combined polygon
+                polygons.append((parsed_data['combined_polygon'], file.name, file_color))
+                # Store original DXF data for this file
+                original_dxf_data_map[file.name] = parsed_data
         
         # Show detailed parsing info in expander
         with st.expander("🔍 Подробная информация о парсинге файлов", expanded=False):
-            st.write("Повторный анализ файлов с подробной информацией:")
+            st.write("Подробная информация об улучшенном парсинге файлов:")
             for file in dxf_files:
                 st.write(f"**Анализ файла: {file.name}**")
                 file.seek(0)
                 file_bytes = BytesIO(file.read())
-                parse_dxf(file_bytes, verbose=True)
+                parse_dxf_complete(file_bytes, verbose=True)
         
         if not polygons:
             st.error("В загруженных DXF файлах не найдено валидных полигонов!")
@@ -232,7 +914,11 @@ if st.button("🚀 Оптимизировать раскрой"):
             # Show color legend
             with st.expander("🎨 Цветовая схема файлов", expanded=False):
                 legend_cols = st.columns(min(5, len(polygons)))
-                for i, (_, file_name) in enumerate(polygons):
+                for i, polygon_tuple in enumerate(polygons):
+                    if len(polygon_tuple) >= 3:  # New format with color
+                        _, file_name, _ = polygon_tuple[:3]
+                    else:  # Old format without color
+                        _, file_name = polygon_tuple[:2]
                     with legend_cols[i % len(legend_cols)]:
                         from layout_optimizer import get_color_for_file
                         color = get_color_for_file(file_name)
@@ -255,7 +941,12 @@ if st.button("🚀 Оптимизировать раскрой"):
         # Create a summary table with proper unit conversion
         summary_data = []
         total_area_cm2 = 0
-        for poly, filename in polygons:
+        for polygon_tuple in polygons:
+            if len(polygon_tuple) >= 3:  # New format with color
+                poly, filename, color = polygon_tuple[:3]
+            else:  # Old format without color
+                poly, filename = polygon_tuple[:2]
+                color = 'серый'
             bounds = poly.bounds
             width_mm = bounds[2] - bounds[0]
             height_mm = bounds[3] - bounds[1]
@@ -274,11 +965,16 @@ if st.button("🚀 Оптимизировать раскрой"):
             }
             
             total_area_cm2 += area_cm2
+            # Add color emoji for display
+            color_emoji = "⚫" if color == "чёрный" else "⚪" if color == "серый" else "🔘"
+            color_display = f"{color_emoji} {color}"
+            
             summary_data.append({
                 "Файл": filename,
                 "Ширина (см)": f"{width_cm:.1f}",
                 "Высота (см)": f"{height_cm:.1f}",
-                "Площадь (см²)": f"{area_cm2:.2f}"
+                "Площадь (см²)": f"{area_cm2:.2f}",
+                "Цвет": color_display
             })
         
         summary_df = pd.DataFrame(summary_data)
@@ -330,15 +1026,27 @@ if st.button("🚀 Оптимизировать раскрой"):
         report_data = []
         
         for i, layout in enumerate(placed_layouts):
-            # Save and visualize layout
-            output_file = os.path.join(OUTPUT_FOLDER, f"layout_{layout['sheet_type'].replace(' ', '_')}_{layout['sheet_number']}_{uuid.uuid4()}.dxf")
-            save_dxf_layout(layout['placed_polygons'], layout['sheet_size'], output_file)
+            # Save and visualize layout with new naming format: length_width_number.dxf
+            sheet_width = int(layout['sheet_size'][0])
+            sheet_height = int(layout['sheet_size'][1]) 
+            sheet_number = layout['sheet_number']
+            output_filename = f"{sheet_height}_{sheet_width}_{sheet_number}.dxf"
+            output_file = os.path.join(OUTPUT_FOLDER, output_filename)
+            save_dxf_layout_complete(layout['placed_polygons'], layout['sheet_size'], output_file, original_dxf_data_map)
             layout_plot = plot_layout(layout['placed_polygons'], layout['sheet_size'])
 
+            # Find sheet color from original sheet data
+            sheet_color = "не указан"
+            for sheet in st.session_state.available_sheets:
+                if sheet['name'] == layout['sheet_type']:
+                    sheet_color = sheet.get('color', 'не указан')
+                    break
+            
             # Store layout info in old format for compatibility
             all_layouts.append({
                 "Sheet": layout['sheet_number'],
                 "Sheet Type": layout['sheet_type'],
+                "Sheet Color": sheet_color,
                 "Sheet Size": f"{layout['sheet_size'][0]}x{layout['sheet_size'][1]} см",
                 "Output File": output_file,
                 "Plot": layout_plot,
@@ -380,9 +1088,15 @@ if st.button("🚀 Оптимизировать раскрой"):
             st.subheader("📦 Обновленный инвентарь листов")
             updated_sheets_data = []
             for sheet in st.session_state.available_sheets:
+                # Add color indicator
+                color = sheet.get('color', 'не указан')
+                color_emoji = "⚫" if color == "чёрный" else "⚪" if color == "серый" else "🔘"
+                color_display = f"{color_emoji} {color}"
+                
                 updated_sheets_data.append({
                     "Тип листа": sheet['name'],
                     "Размер (см)": f"{sheet['width']}x{sheet['height']}",
+                    "Цвет": color_display,
                     "Было": sheet['count'],
                     "Использовано": sheet['used'],
                     "Осталось": sheet['count'] - sheet['used']
@@ -396,7 +1110,12 @@ if st.button("🚀 Оптимизировать раскрой"):
             # Create enhanced report with sizes
             enhanced_report_data = []
             for layout in all_layouts:
-                for polygon, _, _, angle, file_name in layout["Placed Polygons"]:
+                for placed_tuple in layout["Placed Polygons"]:
+                    if len(placed_tuple) >= 6:  # New format with color
+                        polygon, _, _, angle, file_name, color = placed_tuple[:6]
+                    else:  # Old format without color
+                        polygon, _, _, angle, file_name = placed_tuple[:5]
+                        color = 'серый'
                     bounds = polygon.bounds
                     width_cm = (bounds[2] - bounds[0]) / 10
                     height_cm = (bounds[3] - bounds[1]) / 10
@@ -420,7 +1139,6 @@ if st.button("🚀 Оптимизировать раскрой"):
                         "Размер (см)": size_comparison,
                         "Площадь (см²)": f"{area_cm2:.2f}",
                         "Поворот (°)": f"{angle:.0f}",
-                        "Масштаб": f"{scale_factor:.3f}" if abs(scale_factor - 1.0) > 0.01 else "1.000",
                         "Выходной файл": layout["Output File"]
                     })
             
@@ -436,12 +1154,16 @@ if st.button("🚀 Оптимизировать раскрой"):
             # Sheet visualizations
             st.subheader("📐 Схемы раскроя листов")
             for layout in all_layouts:
-                st.write(f"**Лист №{layout['Sheet']}: {layout['Sheet Type']} ({layout['Sheet Size']}) - {layout['Shapes Placed']} объектов - {layout['Material Usage (%)']}% расход**")
+                # Add color indicator emoji
+                color_emoji = "⚫" if layout['Sheet Color'] == "чёрный" else "⚪" if layout['Sheet Color'] == "серый" else "🔘"
+                
+                st.write(f"**Лист №{layout['Sheet']}: {color_emoji} {layout['Sheet Type']} ({layout['Sheet Size']}) - {layout['Shapes Placed']} объектов - {layout['Material Usage (%)']}% расход**")
                 col1, col2 = st.columns([2, 1])
                 with col1:
                     st.image(layout["Plot"], caption=f"Раскрой листа №{layout['Sheet']} ({layout['Sheet Type']})", use_container_width=True)
                 with col2:
                     st.write(f"**Тип листа:** {layout['Sheet Type']}")
+                    st.write(f"**Цвет листа:** {color_emoji} {layout['Sheet Color']}")
                     st.write(f"**Размер листа:** {layout['Sheet Size']}")
                     st.write(f"**Размещено объектов:** {layout['Shapes Placed']}")
                     st.write(f"**Расход материала:** {layout['Material Usage (%)']}%")
@@ -461,8 +1183,16 @@ if st.button("🚀 Оптимизировать раскрой"):
         if unplaced_polygons:
             st.warning(f"⚠️ {len(unplaced_polygons)} объектов не удалось разместить.")
             st.subheader("🚫 Неразмещенные объекты")
-            unplaced_df = pd.DataFrame([(name, f"{poly.area/100:.2f}") for poly, name in unplaced_polygons], 
-                                     columns=["Файл", "Площадь (см²)"])
+            unplaced_data = []
+            for polygon_tuple in unplaced_polygons:
+                if len(polygon_tuple) >= 3:  # New format with color
+                    poly, name, color = polygon_tuple[:3]
+                else:  # Old format without color
+                    poly, name = polygon_tuple[:2]
+                    color = 'серый'
+                unplaced_data.append((name, f"{poly.area/100:.2f}", color))
+            
+            unplaced_df = pd.DataFrame(unplaced_data, columns=["Файл", "Площадь (см²)", "Цвет"])
             st.dataframe(unplaced_df, use_container_width=True)
 
         # Save report
@@ -479,13 +1209,43 @@ if st.button("🚀 Оптимизировать раскрой"):
                 fallback_df = pd.DataFrame(report_data, columns=["DXF файл", "Номер листа", "Выходной файл"])
                 fallback_df.to_excel(report_file, index=False)
             
-            with open(report_file, "rb") as f:
-                st.download_button(
-                    label="📊 Скачать отчет",
-                    data=f,
-                    file_name=os.path.basename(report_file),
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+            # Create ZIP archive with all DXF files
+            zip_filename = f"layout_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+            zip_path = os.path.join(OUTPUT_FOLDER, zip_filename)
+            
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                # Add all DXF layout files
+                for layout in all_layouts:
+                    dxf_file_path = layout["Output File"]
+                    if os.path.exists(dxf_file_path):
+                        # Use the new naming format for files in zip
+                        arcname = os.path.basename(dxf_file_path)
+                        zipf.write(dxf_file_path, arcname)
+                
+                # Add report file
+                if os.path.exists(report_file):
+                    zipf.write(report_file, os.path.basename(report_file))
+            
+            # Download buttons
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                with open(report_file, "rb") as f:
+                    st.download_button(
+                        label="📊 Скачать отчет Excel",
+                        data=f,
+                        file_name=os.path.basename(report_file),
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+            
+            with col2:
+                with open(zip_path, "rb") as f:
+                    st.download_button(
+                        label="📦 Скачать все файлы (ZIP)",
+                        data=f,
+                        file_name=zip_filename,
+                        mime="application/zip"
+                    )
 
 # Footer
 #st.write("Примечание: Приложение использует простой алгоритм упаковки. Для лучшей оптимизации рассмотрите продвинутые методы, такие как BL-NFP.")

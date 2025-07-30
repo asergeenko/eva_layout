@@ -7,8 +7,9 @@ __version__ = "1.2.0"
 import importlib
 
 import numpy as np
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, MultiPolygon
 from shapely import affinity
+from shapely.ops import unary_union
 import ezdxf
 import matplotlib.pyplot as plt
 from io import BytesIO
@@ -21,7 +22,9 @@ import hashlib
 # Export list for explicit importing
 __all__ = [
     'get_color_for_file',
-    'parse_dxf', 
+    'parse_dxf_complete', 
+    'convert_entity_to_polygon_improved',
+    'save_dxf_layout_complete',
     'rotate_polygon',
     'translate_polygon',
     'place_polygon_at_origin',
@@ -54,6 +57,316 @@ def get_color_for_file(filename: str):
     b = max(0.2, min(0.9, b))
     
     return (r, g, b)
+
+
+def parse_dxf_complete(file, verbose=True):
+    """Parse DXF file preserving all elements without loss."""
+    
+    if hasattr(file, 'read'):
+        # If it's a file-like object (BytesIO), write to temp file first
+        with tempfile.NamedTemporaryFile(suffix='.dxf', delete=False) as tmp_file:
+            file.seek(0)  # Ensure we're at the beginning
+            tmp_file.write(file.read())
+            tmp_file.flush()
+            temp_path = tmp_file.name
+        
+        try:
+            doc = ezdxf.readfile(temp_path)
+        finally:
+            # Clean up temp file
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+    else:
+        # If it's a file path string
+        doc = ezdxf.readfile(file)
+    
+    msp = doc.modelspace()
+    
+    result = {
+        'polygons': [],           # List of Shapely polygons for layout optimization
+        'original_entities': [],  # All original entities for reconstruction
+        'bounds': None,          # Overall bounds
+        'layers': set(),         # All layers
+        'doc_header': {}  # Skip header for now to avoid issues
+    }
+    
+    total_entities = 0
+    entity_types = {}
+    
+    # Store all original entities
+    for entity in msp:
+        total_entities += 1
+        entity_type = entity.dxftype()
+        entity_types[entity_type] = entity_types.get(entity_type, 0) + 1
+        
+        # Store original entity with all attributes
+        entity_data = {
+            'type': entity_type,
+            'entity': entity,  # Store reference to original entity
+            'layer': getattr(entity.dxf, 'layer', '0'),
+            'color': getattr(entity.dxf, 'color', 256),
+            'dxf_attribs': entity.dxfattribs()
+        }
+        result['original_entities'].append(entity_data)
+        result['layers'].add(entity_data['layer'])
+        
+        # Try to convert to polygon for layout purposes
+        try:
+            polygon = convert_entity_to_polygon_improved(entity)
+            if polygon and polygon.is_valid and polygon.area > 0.1:  # Minimum area threshold
+                result['polygons'].append(polygon)
+        except Exception as e:
+            if verbose:
+                st.warning(f"⚠️ Не удалось конвертировать {entity_type} в полигон: {e}")
+    
+    if verbose:
+        st.info(f"📊 Парсинг завершен:")
+        st.info(f"   • Всего элементов: {total_entities}")
+        st.info(f"   • Типы: {entity_types}")
+        st.info(f"   • Полигонов для оптимизации: {len(result['polygons'])}")
+        st.info(f"   • Сохранено исходных элементов: {len(result['original_entities'])}")
+    
+    # Calculate overall bounds
+    if result['polygons']:
+        all_bounds = [p.bounds for p in result['polygons']]
+        min_x = min(b[0] for b in all_bounds)
+        min_y = min(b[1] for b in all_bounds)
+        max_x = max(b[2] for b in all_bounds)
+        max_y = max(b[3] for b in all_bounds)
+        result['bounds'] = (min_x, min_y, max_x, max_y)
+        
+        # Create combined polygon for layout optimization (without convex_hull)
+        if len(result['polygons']) == 1:
+            result['combined_polygon'] = result['polygons'][0]
+        else:
+            # Use unary_union but don't simplify to convex_hull
+            combined = unary_union(result['polygons'])
+            if isinstance(combined, MultiPolygon):
+                # Keep as MultiPolygon or take the largest polygon
+                largest_polygon = max(combined.geoms, key=lambda p: p.area)
+                result['combined_polygon'] = largest_polygon
+                if verbose:
+                    st.info(f"   • Взят наибольший полигон из {len(combined.geoms)} (без упрощения)")
+            else:
+                result['combined_polygon'] = combined
+    else:
+        if verbose:
+            st.warning("⚠️ Не найдено полигонов для оптимизации")
+        result['combined_polygon'] = None
+    
+    # Store original data separately since Shapely polygons don't allow attribute assignment
+    # We'll pass this data through function parameters instead
+    
+    return result
+
+
+def convert_entity_to_polygon_improved(entity):
+    """Improved entity to polygon conversion with better SPLINE handling."""
+    entity_type = entity.dxftype()
+    
+    try:
+        if entity_type == "LWPOLYLINE":
+            points = [(p[0], p[1]) for p in entity.get_points()]
+            if len(points) >= 3:
+                return Polygon(points)
+                
+        elif entity_type == "POLYLINE":
+            points = [(vertex.dxf.location[0], vertex.dxf.location[1]) for vertex in entity.vertices]
+            if len(points) >= 3:
+                return Polygon(points)
+                
+        elif entity_type == "SPLINE":
+            # Improved SPLINE handling
+            try:
+                # Try to get more points for better accuracy
+                sampled_points = []
+                construction_tool = entity.construction_tool()
+                # Sample more points (100 instead of 50) for better accuracy
+                for t in np.linspace(0, 1, 100):
+                    point = construction_tool.point(t)
+                    sampled_points.append((point.x, point.y))
+                
+                if len(sampled_points) >= 3:
+                    return Polygon(sampled_points)
+            except Exception:
+                # Fallback: use control points or fit points
+                try:
+                    if hasattr(entity, 'control_points') and entity.control_points:
+                        control_points = [(cp[0], cp[1]) for cp in entity.control_points]
+                        if len(control_points) >= 3:
+                            return Polygon(control_points)
+                    elif hasattr(entity, 'fit_points') and entity.fit_points:
+                        fit_points = [(fp[0], fp[1]) for fp in entity.fit_points]
+                        if len(fit_points) >= 3:
+                            return Polygon(fit_points)
+                except Exception:
+                    pass
+                    
+        elif entity_type == "ELLIPSE":
+            # Improved ELLIPSE with more points
+            try:
+                sampled_points = []
+                for angle in np.linspace(0, 2*np.pi, 72):  # 72 points for smoother curve
+                    point = entity.construction_tool().point(angle)
+                    sampled_points.append((point.x, point.y))
+                if len(sampled_points) >= 3:
+                    return Polygon(sampled_points)
+            except Exception:
+                pass
+                
+        elif entity_type == "CIRCLE":
+            center = entity.dxf.center
+            radius = entity.dxf.radius
+            points = []
+            for angle in np.linspace(0, 2*np.pi, 36):  # 36 points for circle
+                x = center[0] + radius * np.cos(angle)
+                y = center[1] + radius * np.sin(angle)
+                points.append((x, y))
+            return Polygon(points)
+            
+        elif entity_type == "ARC":
+            center = entity.dxf.center
+            radius = entity.dxf.radius
+            start_angle = np.radians(entity.dxf.start_angle)
+            end_angle = np.radians(entity.dxf.end_angle)
+            
+            # Create arc as polygon (sector)
+            points = [center[:2]]  # Start from center
+            angles = np.linspace(start_angle, end_angle, 20)
+            for angle in angles:
+                x = center[0] + radius * np.cos(angle)
+                y = center[1] + radius * np.sin(angle)
+                points.append((x, y))
+            points.append(center[:2])  # Back to center
+            
+            if len(points) >= 3:
+                return Polygon(points)
+                
+    except Exception as e:
+        print(f"⚠️ Ошибка конвертации {entity_type}: {e}")
+        
+    return None
+
+
+def save_dxf_layout_complete(placed_elements, sheet_size, output_path, original_dxf_data_map=None):
+    """Save layout preserving all original elements from source DXF files.
+    
+    Args:
+        placed_elements: List of placed polygon tuples
+        sheet_size: Sheet dimensions
+        output_path: Output file path
+        original_dxf_data_map: Dictionary mapping filenames to original DXF data
+    """
+    
+    # Create new DXF document
+    doc = ezdxf.new('R2010')  # Use R2010 for better compatibility
+    
+    # Set DXF units to millimeters
+    doc.header['$INSUNITS'] = 4  # 4 = millimeters
+    doc.header['$LUNITS'] = 2    # 2 = decimal units
+    
+    msp = doc.modelspace()
+    
+    # Add sheet boundary
+    sheet_width_mm = sheet_size[0] * 10
+    sheet_height_mm = sheet_size[1] * 10
+    sheet_corners = [(0, 0), (sheet_width_mm, 0), (sheet_width_mm, sheet_height_mm), (0, sheet_height_mm), (0, 0)]
+    msp.add_lwpolyline(sheet_corners, dxfattribs={"layer": "SHEET_BOUNDARY", "color": 1})
+    
+    # Process each placed element
+    for placed_element in placed_elements:
+        if len(placed_element) >= 6:  # New format with color
+            transformed_polygon, x_offset, y_offset, rotation_angle, file_name, color = placed_element[:6]
+        else:  # Old format without color
+            transformed_polygon, x_offset, y_offset, rotation_angle, file_name = placed_element[:5]
+            color = 'серый'
+        
+        # If we have original DXF data for this file, use it
+        if original_dxf_data_map and file_name in original_dxf_data_map:
+            # Reconstruct from original elements
+            original_data = original_dxf_data_map[file_name]
+            
+            for entity_data in original_data['original_entities']:
+                try:
+                    # Clone the original entity
+                    new_entity = entity_data['entity'].copy()
+                    
+                    # Calculate the transformation needed to match the final polygon position
+                    
+                    if original_data['combined_polygon']:
+                        original_polygon = original_data['combined_polygon']
+                        
+                        # The transformed_polygon represents where the polygon ended up
+                        # We need to calculate what transformation gets us from original to final
+                        
+                        # Step 1: Move to origin from original position
+                        original_bounds = original_polygon.bounds
+                        origin_offset_x = -original_bounds[0]
+                        origin_offset_y = -original_bounds[1]
+                        new_entity.transform(ezdxf.math.Matrix44.translate(origin_offset_x, origin_offset_y, 0))
+                        
+                        # Calculate the polygon after moving to origin (needed for both rotation and final translation)
+                        origin_placed_polygon = translate_polygon(original_polygon, origin_offset_x, origin_offset_y)
+                        
+                        # Step 2: Apply rotation if needed
+                        if rotation_angle != 0:
+                            # Get the centroid after moving to origin
+                            origin_centroid = origin_placed_polygon.centroid
+                            
+                            # Rotate around this centroid
+                            new_entity.transform(ezdxf.math.Matrix44.chain(
+                                ezdxf.math.Matrix44.translate(-origin_centroid.x, -origin_centroid.y, 0),
+                                ezdxf.math.Matrix44.z_rotate(np.radians(rotation_angle)),
+                                ezdxf.math.Matrix44.translate(origin_centroid.x, origin_centroid.y, 0)
+                            ))
+                        
+                        # Step 3: Now calculate where we need to move to match the final position
+                        # After rotation, what would be the polygon's position?
+                        if rotation_angle != 0:
+                            intermediate_polygon = rotate_polygon(origin_placed_polygon, rotation_angle)
+                        else:
+                            intermediate_polygon = origin_placed_polygon
+                        
+                        # Calculate the final translation needed
+                        intermediate_bounds = intermediate_polygon.bounds
+                        final_bounds = transformed_polygon.bounds
+                        
+                        final_translation_x = final_bounds[0] - intermediate_bounds[0]
+                        final_translation_y = final_bounds[1] - intermediate_bounds[1]
+                        
+                        # Apply this final translation
+                        new_entity.transform(ezdxf.math.Matrix44.translate(final_translation_x, final_translation_y, 0))
+                    
+                    # Update layer name to include file name
+                    base_layer = entity_data['layer']
+                    new_layer = f"{file_name.replace('.dxf', '').replace('..', '_')}_{base_layer}"
+                    new_entity.dxf.layer = new_layer
+                    
+                    # Add to modelspace
+                    msp.add_entity(new_entity)
+                    
+                except Exception as e:
+                    st.warning(f"⚠️ Ошибка добавления элемента {entity_data['type']}: {e}")
+                    # Fallback: add as simple polyline
+                    if hasattr(transformed_polygon, 'exterior'):
+                        points = list(transformed_polygon.exterior.coords)[:-1]
+                        layer_name = file_name.replace('.dxf', '').replace('..', '_')
+                        msp.add_lwpolyline(points, dxfattribs={"layer": layer_name})
+        else:
+            # Fallback: save as simple polyline (current method)
+            if hasattr(transformed_polygon, 'exterior'):
+                points = list(transformed_polygon.exterior.coords)[:-1]
+                layer_name = file_name.replace('.dxf', '').replace('..', '_')
+                msp.add_lwpolyline(points, dxfattribs={"layer": layer_name})
+                
+                # Add interior holes if any
+                for interior in transformed_polygon.interiors:
+                    hole_points = list(interior.coords)[:-1]
+                    msp.add_lwpolyline(hole_points, dxfattribs={"layer": f"{layer_name}_HOLE"})
+    
+    # Save the document
+    doc.saveas(output_path)
+    st.success(f"💾 Сохранен улучшенный выходной DXF файл: {output_path}")
 
 
 def parse_dxf(file, verbose=True) -> Polygon:
@@ -221,7 +534,7 @@ def check_collision(polygon1: Polygon, polygon2: Polygon) -> bool:
     return polygon1.intersects(polygon2) and not polygon1.touches(polygon2)
 
 
-def bin_packing(polygons: list[tuple[Polygon, str]], sheet_size: tuple[float, float], max_attempts: int = 1000, verbose: bool = True) -> tuple[list[tuple[Polygon, float, float, float, str]], list[tuple[Polygon, str]]]:
+def bin_packing(polygons: list[tuple], sheet_size: tuple[float, float], max_attempts: int = 1000, verbose: bool = True) -> tuple[list[tuple], list[tuple]]:
     """Optimize placement of complex polygons on a sheet."""
     # Convert sheet size from cm to mm to match DXF polygon units
     sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
@@ -232,7 +545,12 @@ def bin_packing(polygons: list[tuple[Polygon, str]], sheet_size: tuple[float, fl
     if verbose:
         st.info(f"Начинаем упаковку {len(polygons)} полигонов на листе {sheet_size[0]}x{sheet_size[1]} см")
     
-    for i, (polygon, file_name) in enumerate(polygons):
+    for i, polygon_tuple in enumerate(polygons):
+        if len(polygon_tuple) >= 3:  # New format with color
+            polygon, file_name, color = polygon_tuple[:3]
+        else:  # Old format without color
+            polygon, file_name = polygon_tuple[:2]
+            color = 'серый'
         placed_successfully = False
         if verbose:
             st.info(f"Обрабатываем полигон {i+1}/{len(polygons)} из файла {file_name}, площадь: {polygon.area:.2f}")
@@ -245,7 +563,7 @@ def bin_packing(polygons: list[tuple[Polygon, str]], sheet_size: tuple[float, fl
         if poly_width > sheet_width_mm or poly_height > sheet_height_mm:
             if verbose:
                 st.warning(f"Полигон из {file_name} слишком большой: {poly_width/10:.1f}x{poly_height/10:.1f} см > {sheet_size[0]}x{sheet_size[1]} см")
-            unplaced.append((polygon, file_name))
+            unplaced.append((polygon, file_name, color))
             continue
         
         # First try simple placement without rotation
@@ -262,7 +580,7 @@ def bin_packing(polygons: list[tuple[Polygon, str]], sheet_size: tuple[float, fl
             origin_bounds = origin_polygon.bounds
             
             if (origin_bounds[2] <= sheet_width_mm and origin_bounds[3] <= sheet_height_mm):
-                placed.append((origin_polygon, 0, 0, 0, file_name))
+                placed.append((origin_polygon, 0, 0, 0, file_name, color))
                 placed_successfully = True
                 if verbose:
                     st.success(f"Успешно размещен полигон из {file_name} в начале координат")
@@ -286,7 +604,7 @@ def bin_packing(polygons: list[tuple[Polygon, str]], sheet_size: tuple[float, fl
                         # Check for collisions with already placed polygons
                         collision = any(check_collision(translated, p[0]) for p in placed)
                         if not collision:
-                            placed.append((translated, grid_x - simple_bounds[0], grid_y - simple_bounds[1], 0, file_name))
+                            placed.append((translated, grid_x - simple_bounds[0], grid_y - simple_bounds[1], 0, file_name, color))
                             placed_successfully = True
                             if verbose:
                                 st.success(f"Успешно размещен полигон из {file_name} (сетчатое размещение в позиции {grid_x:.1f}, {grid_y:.1f})")
@@ -321,7 +639,7 @@ def bin_packing(polygons: list[tuple[Polygon, str]], sheet_size: tuple[float, fl
                     if (origin_bounds[2] <= sheet_width_mm and origin_bounds[3] <= sheet_height_mm):
                         collision = any(check_collision(origin_rotated, p[0]) for p in placed)
                         if not collision:
-                            placed.append((origin_rotated, 0, 0, angle, file_name))
+                            placed.append((origin_rotated, 0, 0, angle, file_name, color))
                             placed_successfully = True
                             if verbose:
                                 st.success(f"Успешно размещен полигон из {file_name} (поворот {angle}°, начало координат)")
@@ -339,7 +657,7 @@ def bin_packing(polygons: list[tuple[Polygon, str]], sheet_size: tuple[float, fl
                                     
                                     collision = any(check_collision(translated, p[0]) for p in placed)
                                     if not collision:
-                                        placed.append((translated, grid_x - rotated_bounds[0], grid_y - rotated_bounds[1], angle, file_name))
+                                        placed.append((translated, grid_x - rotated_bounds[0], grid_y - rotated_bounds[1], angle, file_name, color))
                                         placed_successfully = True
                                         if verbose:
                                             st.success(f"Успешно размещен полигон из {file_name} (поворот {angle}°, позиция {grid_x:.1f}, {grid_y:.1f})")
@@ -350,14 +668,14 @@ def bin_packing(polygons: list[tuple[Polygon, str]], sheet_size: tuple[float, fl
         if not placed_successfully:
             if verbose:
                 st.warning(f"Не удалось разместить полигон из {file_name}")
-            unplaced.append((polygon, file_name))
+            unplaced.append((polygon, file_name, color))
     
     if verbose:
         st.info(f"Упаковка завершена: {len(placed)} размещено, {len(unplaced)} не размещено")
     return placed, unplaced
 
 
-def bin_packing_with_inventory(polygons: list[tuple[Polygon, str]], available_sheets: list[dict], verbose: bool = True) -> tuple[list[dict], list[tuple[Polygon, str]]]:
+def bin_packing_with_inventory(polygons: list[tuple], available_sheets: list[dict], verbose: bool = True) -> tuple[list[dict], list[tuple]]:
     """Optimize placement of polygons on available sheets with inventory tracking."""
     placed_layouts = []
     unplaced = polygons.copy()
@@ -378,13 +696,36 @@ def bin_packing_with_inventory(polygons: list[tuple[Polygon, str]], available_sh
                 continue  # No more sheets of this type
             
             sheet_size = (sheet_type['width'], sheet_type['height'])
+            sheet_color = sheet_type.get('color', 'серый')
+            
+            # Filter polygons that match this sheet's color
+            compatible_polygons = []
+            remaining_polygons = []
+            
+            for polygon_tuple in unplaced:
+                if len(polygon_tuple) >= 3:  # Has color information
+                    polygon, name, color = polygon_tuple[:3]
+                    if color == sheet_color:
+                        compatible_polygons.append(polygon_tuple)
+                    else:
+                        remaining_polygons.append(polygon_tuple)
+                else:  # Old format without color, default to серый
+                    if sheet_color == 'серый':
+                        compatible_polygons.append(polygon_tuple)
+                    else:
+                        remaining_polygons.append(polygon_tuple)
+            
+            if not compatible_polygons:
+                continue  # No compatible polygons for this sheet color
+            
             sheet_counter += 1
             
             if verbose:
-                st.info(f"Пробуем лист #{sheet_counter}: {sheet_type['name']} ({sheet_size[0]}x{sheet_size[1]} см)")
+                st.info(f"Пробуем лист #{sheet_counter}: {sheet_type['name']} ({sheet_size[0]}x{sheet_size[1]} см, цвет: {sheet_color})")
+                st.info(f"Совместимых полигонов: {len(compatible_polygons)}")
             
-            # Try to place polygons on this sheet
-            placed, remaining = bin_packing(unplaced, sheet_size, verbose=verbose)
+            # Try to place compatible polygons on this sheet
+            placed, remaining_from_sheet = bin_packing(compatible_polygons, sheet_size, verbose=verbose)
             
             if placed:  # If we managed to place something
                 sheet_type['used'] += 1
@@ -395,11 +736,12 @@ def bin_packing_with_inventory(polygons: list[tuple[Polygon, str]], available_sh
                     'placed_polygons': placed,
                     'usage_percent': calculate_usage_percent(placed, sheet_size)
                 })
-                unplaced = remaining
+                # Update unplaced: combine remaining from this color group + all other colors
+                unplaced = remaining_from_sheet + remaining_polygons
                 placed_on_current_sheet = True
                 
                 if verbose:
-                    st.success(f"Размещено {len(placed)} объектов на листе {sheet_type['name']}")
+                    st.success(f"Размещено {len(placed)} объектов на листе {sheet_type['name']} (цвет: {sheet_color})")
                 break  # Move to next iteration with remaining polygons
         
         if not placed_on_current_sheet:
@@ -412,9 +754,9 @@ def bin_packing_with_inventory(polygons: list[tuple[Polygon, str]], available_sh
     return placed_layouts, unplaced
 
 
-def calculate_usage_percent(placed_polygons: list[tuple[Polygon, float, float, float, str]], sheet_size: tuple[float, float]) -> float:
+def calculate_usage_percent(placed_polygons: list[tuple], sheet_size: tuple[float, float]) -> float:
     """Calculate material usage percentage for a sheet."""
-    used_area_mm2 = sum(p[0].area for p in placed_polygons)
+    used_area_mm2 = sum(placed_tuple[0].area for placed_tuple in placed_polygons)
     sheet_area_mm2 = (sheet_size[0] * 10) * (sheet_size[1] * 10)
     return (used_area_mm2 / sheet_area_mm2) * 100
 
@@ -436,7 +778,12 @@ def save_dxf_layout(placed_polygons: list[tuple[Polygon, float, float, float, st
     msp.add_lwpolyline(sheet_corners, dxfattribs={"layer": "SHEET_BOUNDARY", "color": 1})
     
     # Add placed polygons
-    for polygon, _, _, _, file_name in placed_polygons:
+    for placed_tuple in placed_polygons:
+        if len(placed_tuple) >= 6:  # New format with color
+            polygon, _, _, _, file_name, color = placed_tuple[:6]
+        else:  # Old format without color
+            polygon, _, _, _, file_name = placed_tuple[:5]
+            color = 'серый'
         points = list(polygon.exterior.coords)[:-1]
         # Create layer name from file name (remove .dxf extension)
         layer_name = file_name.replace('.dxf', '').replace('..', '_')
@@ -464,11 +811,17 @@ def plot_layout(placed_polygons: list[tuple[Polygon, float, float, float, str]],
     ax.add_patch(sheet_boundary)
     
     # Use consistent colors for each file
-    for polygon, _, _, angle, file_name in placed_polygons:
+    for placed_tuple in placed_polygons:
+        if len(placed_tuple) >= 6:  # New format with color
+            polygon, _, _, angle, file_name, color = placed_tuple[:6]
+        else:  # Old format without color
+            polygon, _, _, angle, file_name = placed_tuple[:5]
+            color = 'серый'
         x, y = polygon.exterior.xy
-        color = get_color_for_file(file_name)
-        ax.fill(x, y, alpha=0.7, color=color, edgecolor='black', linewidth=1, 
-                label=f"{file_name} ({angle:.0f}°)")
+        # Use file-based color for visualization consistency
+        display_color = get_color_for_file(file_name)
+        ax.fill(x, y, alpha=0.7, color=display_color, edgecolor='black', linewidth=1, 
+                label=f"{file_name} ({angle:.0f}°) - {color}")
         
         # Add file name at polygon centroid
         centroid = polygon.centroid
@@ -544,14 +897,20 @@ def plot_input_polygons(polygons_with_names: list[tuple[Polygon, str]]) -> dict[
         return {}
     
     plots = {}
-    for polygon, file_name in polygons_with_names:
-        plot_buf = plot_single_polygon(polygon, f"Файл: {file_name}", filename=file_name)
+    for polygon_tuple in polygons_with_names:
+        if len(polygon_tuple) >= 3:  # New format with color
+            polygon, file_name, color = polygon_tuple[:3]
+        else:  # Old format without color
+            polygon, file_name = polygon_tuple[:2]
+            color = 'серый'
+        
+        plot_buf = plot_single_polygon(polygon, f"Файл: {file_name} (цвет: {color})", filename=file_name)
         plots[file_name] = plot_buf
     
     return plots
 
 
-def scale_polygons_to_fit(polygons_with_names: list[tuple[Polygon, str]], sheet_size: tuple[float, float], verbose: bool = True) -> list[tuple[Polygon, str]]:
+def scale_polygons_to_fit(polygons_with_names: list[tuple], sheet_size: tuple[float, float], verbose: bool = True) -> list[tuple]:
     """Scale polygons to fit better on the sheet if they are too large."""
     if not polygons_with_names:
         return polygons_with_names
@@ -561,8 +920,8 @@ def scale_polygons_to_fit(polygons_with_names: list[tuple[Polygon, str]], sheet_
     scaled_polygons = []
     
     # First, find the overall scale factor needed (all in mm)
-    max_width = max((poly.bounds[2] - poly.bounds[0]) for poly, _ in polygons_with_names)
-    max_height = max((poly.bounds[3] - poly.bounds[1]) for poly, _ in polygons_with_names)
+    max_width = max((poly_tuple[0].bounds[2] - poly_tuple[0].bounds[0]) for poly_tuple in polygons_with_names)
+    max_height = max((poly_tuple[0].bounds[3] - poly_tuple[0].bounds[1]) for poly_tuple in polygons_with_names)
     
     # Calculate a global scale factor only if polygons are too large for the sheet
     # Only scale if polygons are larger than 90% of sheet size
@@ -573,7 +932,12 @@ def scale_polygons_to_fit(polygons_with_names: list[tuple[Polygon, str]], sheet_
     if global_scale < 1.0 and verbose:
         st.info(f"Применяем глобальный масштабный коэффициент {global_scale:.4f} ко всем полигонам")
     
-    for polygon, name in polygons_with_names:
+    for polygon_tuple in polygons_with_names:
+        if len(polygon_tuple) >= 3:  # New format with color
+            polygon, name, color = polygon_tuple[:3]
+        else:  # Old format without color
+            polygon, name = polygon_tuple[:2]
+            color = 'серый'
         bounds = polygon.bounds
         poly_width = bounds[2] - bounds[0]
         poly_height = bounds[3] - bounds[1]
@@ -608,9 +972,9 @@ def scale_polygons_to_fit(polygons_with_names: list[tuple[Polygon, str]], sheet_
                 new_width_cm = (scaled_polygon.bounds[2]-scaled_polygon.bounds[0]) / 10.0
                 new_height_cm = (scaled_polygon.bounds[3]-scaled_polygon.bounds[1]) / 10.0
                 st.info(f"Масштабирован {name}: {original_width_cm:.1f}x{original_height_cm:.1f} см → {new_width_cm:.1f}x{new_height_cm:.1f} см (коэффициент: {scale_factor:.4f})")
-            scaled_polygons.append((scaled_polygon, name))
+            scaled_polygons.append((scaled_polygon, name, color))
         else:
-            scaled_polygons.append((polygon, name))
+            scaled_polygons.append((polygon, name, color))
     
     return scaled_polygons
 
