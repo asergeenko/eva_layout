@@ -164,7 +164,6 @@ Desktop.ini
 
 # Project specific
 output_layouts/
-*.dxf
 .streamlit/
 
 .claude/
