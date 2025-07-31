@@ -17,6 +17,10 @@ import streamlit as st
 import tempfile
 import os
 import hashlib
+import logging
+
+# Настройка логирования
+logger = logging.getLogger(__name__)
 
 
 # Export list for explicit importing
@@ -546,11 +550,19 @@ def bin_packing(polygons: list[tuple], sheet_size: tuple[float, float], max_atte
         st.info(f"Начинаем упаковку {len(polygons)} полигонов на листе {sheet_size[0]}x{sheet_size[1]} см")
     
     for i, polygon_tuple in enumerate(polygons):
-        if len(polygon_tuple) >= 3:  # New format with color
+        logger.debug(f"bin_packing: входящий tuple {i}: длина={len(polygon_tuple)}, элементы={polygon_tuple}")
+        
+        if len(polygon_tuple) >= 4:  # Extended format with color and order_id
+            polygon, file_name, color, order_id = polygon_tuple[:4]
+        elif len(polygon_tuple) >= 3:  # Format with color
             polygon, file_name, color = polygon_tuple[:3]
+            order_id = 'unknown'  
         else:  # Old format without color
             polygon, file_name = polygon_tuple[:2]
             color = 'серый'
+            order_id = 'unknown'
+        
+        logger.debug(f"bin_packing: извлечено file_name='{file_name}' (тип: {type(file_name)}), order_id='{order_id}')")
         placed_successfully = False
         if verbose:
             st.info(f"Обрабатываем полигон {i+1}/{len(polygons)} из файла {file_name}, площадь: {polygon.area:.2f}")
@@ -563,7 +575,7 @@ def bin_packing(polygons: list[tuple], sheet_size: tuple[float, float], max_atte
         if poly_width > sheet_width_mm or poly_height > sheet_height_mm:
             if verbose:
                 st.warning(f"Полигон из {file_name} слишком большой: {poly_width/10:.1f}x{poly_height/10:.1f} см > {sheet_size[0]}x{sheet_size[1]} см")
-            unplaced.append((polygon, file_name, color))
+            unplaced.append((polygon, file_name, color, order_id))
             continue
         
         # First try simple placement without rotation
@@ -580,7 +592,7 @@ def bin_packing(polygons: list[tuple], sheet_size: tuple[float, float], max_atte
             origin_bounds = origin_polygon.bounds
             
             if (origin_bounds[2] <= sheet_width_mm and origin_bounds[3] <= sheet_height_mm):
-                placed.append((origin_polygon, 0, 0, 0, file_name, color))
+                placed.append((origin_polygon, 0, 0, 0, file_name, color, order_id))
                 placed_successfully = True
                 if verbose:
                     st.success(f"Успешно размещен полигон из {file_name} в начале координат")
@@ -604,7 +616,7 @@ def bin_packing(polygons: list[tuple], sheet_size: tuple[float, float], max_atte
                         # Check for collisions with already placed polygons
                         collision = any(check_collision(translated, p[0]) for p in placed)
                         if not collision:
-                            placed.append((translated, grid_x - simple_bounds[0], grid_y - simple_bounds[1], 0, file_name, color))
+                            placed.append((translated, grid_x - simple_bounds[0], grid_y - simple_bounds[1], 0, file_name, color, order_id))
                             placed_successfully = True
                             if verbose:
                                 st.success(f"Успешно размещен полигон из {file_name} (сетчатое размещение в позиции {grid_x:.1f}, {grid_y:.1f})")
@@ -639,7 +651,7 @@ def bin_packing(polygons: list[tuple], sheet_size: tuple[float, float], max_atte
                     if (origin_bounds[2] <= sheet_width_mm and origin_bounds[3] <= sheet_height_mm):
                         collision = any(check_collision(origin_rotated, p[0]) for p in placed)
                         if not collision:
-                            placed.append((origin_rotated, 0, 0, angle, file_name, color))
+                            placed.append((origin_rotated, 0, 0, angle, file_name, color, order_id))
                             placed_successfully = True
                             if verbose:
                                 st.success(f"Успешно размещен полигон из {file_name} (поворот {angle}°, начало координат)")
@@ -657,7 +669,7 @@ def bin_packing(polygons: list[tuple], sheet_size: tuple[float, float], max_atte
                                     
                                     collision = any(check_collision(translated, p[0]) for p in placed)
                                     if not collision:
-                                        placed.append((translated, grid_x - rotated_bounds[0], grid_y - rotated_bounds[1], angle, file_name, color))
+                                        placed.append((translated, grid_x - rotated_bounds[0], grid_y - rotated_bounds[1], angle, file_name, color, order_id))
                                         placed_successfully = True
                                         if verbose:
                                             st.success(f"Успешно размещен полигон из {file_name} (поворот {angle}°, позиция {grid_x:.1f}, {grid_y:.1f})")
@@ -668,26 +680,83 @@ def bin_packing(polygons: list[tuple], sheet_size: tuple[float, float], max_atte
         if not placed_successfully:
             if verbose:
                 st.warning(f"Не удалось разместить полигон из {file_name}")
-            unplaced.append((polygon, file_name, color))
+            unplaced.append((polygon, file_name, color, order_id))
     
     if verbose:
         st.info(f"Упаковка завершена: {len(placed)} размещено, {len(unplaced)} не размещено")
     return placed, unplaced
 
 
-def bin_packing_with_inventory(polygons: list[tuple], available_sheets: list[dict], verbose: bool = True) -> tuple[list[dict], list[tuple]]:
+def bin_packing_with_inventory(polygons: list[tuple], available_sheets: list[dict], verbose: bool = True, max_sheets_per_order: int = None) -> tuple[list[dict], list[tuple]]:
     """Optimize placement of polygons on available sheets with inventory tracking."""
+    logger.info(f"=== НАЧАЛО bin_packing_with_inventory ===")
+    logger.info(f"Входные параметры: {len(polygons)} полигонов, {len(available_sheets)} типов листов, max_sheets_per_order={max_sheets_per_order}")
+    
     placed_layouts = []
-    unplaced = polygons.copy()
+    all_unplaced = []
     sheet_inventory = [sheet.copy() for sheet in available_sheets]  # Copy to avoid modifying original
     
     if verbose:
         total_available = sum(sheet['count'] - sheet['used'] for sheet in sheet_inventory)
         st.info(f"Начинаем размещение {len(polygons)} полигонов на {total_available} доступных листах")
+        if max_sheets_per_order:
+            st.info(f"Ограничение: максимум {max_sheets_per_order} листов на заказ")
+    
+    # Group polygons by order_id
+    logger.info("Группировка полигонов по order_id...")
+    order_groups = {}
+    for polygon_tuple in polygons:
+        if len(polygon_tuple) >= 4:  # Extended format with color and order_id
+            polygon, name, color, order_id = polygon_tuple[:4]
+        elif len(polygon_tuple) >= 3:  # Format with color
+            polygon, name, color = polygon_tuple[:3]
+            order_id = 'unknown'
+        else:  # Old format without color
+            polygon, name = polygon_tuple[:2]
+            color = 'серый'
+            order_id = 'unknown'
+        
+        if order_id not in order_groups:
+            order_groups[order_id] = []
+            logger.debug(f"Создана новая группа для заказа: {order_id}")
+        order_groups[order_id].append(polygon_tuple)
+    
+    logger.info(f"Группировка завершена: {len(order_groups)} уникальных заказов")
+    for order_id, group in order_groups.items():
+        logger.info(f"  • Заказ {order_id}: {len(group)} файлов")
+    
+    if verbose:
+        st.info(f"Найдено {len(order_groups)} уникальных заказов для размещения:")
+        for order_id, group in order_groups.items():
+            st.info(f"  • Заказ {order_id}: {len(group)} файлов")
+            # Show filenames for debugging
+            for polygon_tuple in group:
+                filename = polygon_tuple[1] if len(polygon_tuple) > 1 else 'unknown'
+                st.write(f"    - {filename}")
     
     sheet_counter = 0
     
-    while unplaced and any(sheet['count'] - sheet['used'] > 0 for sheet in sheet_inventory):
+    # Track sheets used per order for constraint checking
+    order_sheet_usage = {order_id: 0 for order_id in order_groups.keys()}
+    
+    logger.info(f"Используем упрощенный эффективный алгоритм: {len(order_groups)} заказов")
+    
+    # Process orders one by one, but allow filling sheets with multiple orders
+    remaining_orders = dict(order_groups)  # Copy to modify
+    max_iterations = len(remaining_orders) * 10  # Safety limit
+    iteration_count = 0
+    
+    while remaining_orders and any(sheet['count'] - sheet['used'] > 0 for sheet in sheet_inventory):
+        iteration_count += 1
+        logger.info(f"--- ИТЕРАЦИЯ {iteration_count} ---")
+        logger.info(f"Остается заказов: {len(remaining_orders)}")
+        for order_id, polygons in remaining_orders.items():
+            logger.info(f"  {order_id}: {len(polygons)} полигонов")
+        
+        if iteration_count > max_iterations:
+            logger.error(f"Превышен лимит итераций ({max_iterations}), прерываем выполнение")
+            break
+            
         placed_on_current_sheet = False
         
         # Try each available sheet type
@@ -698,22 +767,27 @@ def bin_packing_with_inventory(polygons: list[tuple], available_sheets: list[dic
             sheet_size = (sheet_type['width'], sheet_type['height'])
             sheet_color = sheet_type.get('color', 'серый')
             
-            # Filter polygons that match this sheet's color
+            # Collect polygons from orders that can fit on this sheet
             compatible_polygons = []
-            remaining_polygons = []
+            orders_to_try = []
             
-            for polygon_tuple in unplaced:
-                if len(polygon_tuple) >= 3:  # Has color information
-                    polygon, name, color = polygon_tuple[:3]
-                    if color == sheet_color:
-                        compatible_polygons.append(polygon_tuple)
-                    else:
-                        remaining_polygons.append(polygon_tuple)
-                else:  # Old format without color, default to серый
-                    if sheet_color == 'серый':
-                        compatible_polygons.append(polygon_tuple)
-                    else:
-                        remaining_polygons.append(polygon_tuple)
+            for order_id, order_polygons in remaining_orders.items():
+                # Check if this order can still use more sheets
+                if max_sheets_per_order is None or order_id == 'additional' or order_sheet_usage[order_id] < max_sheets_per_order:
+                    # Filter polygons by color
+                    color_matched_polygons = []
+                    for polygon_tuple in order_polygons:
+                        if len(polygon_tuple) >= 3:
+                            color = polygon_tuple[2]
+                        else:
+                            color = 'серый'
+                        
+                        if color == sheet_color:
+                            color_matched_polygons.append(polygon_tuple)
+                    
+                    if color_matched_polygons:
+                        compatible_polygons.extend(color_matched_polygons)
+                        orders_to_try.append(order_id)
             
             if not compatible_polygons:
                 continue  # No compatible polygons for this sheet color
@@ -721,37 +795,167 @@ def bin_packing_with_inventory(polygons: list[tuple], available_sheets: list[dic
             sheet_counter += 1
             
             if verbose:
-                st.info(f"Пробуем лист #{sheet_counter}: {sheet_type['name']} ({sheet_size[0]}x{sheet_size[1]} см, цвет: {sheet_color})")
-                st.info(f"Совместимых полигонов: {len(compatible_polygons)}")
+                st.info(f"  Лист #{sheet_counter}: {sheet_type['name']} ({sheet_size[0]}x{sheet_size[1]} см, цвет: {sheet_color})")
+                st.info(f"  Совместимых полигонов: {len(compatible_polygons)} из заказов: {orders_to_try}")
+            
+            logger.info(f"Обрабатываем лист #{sheet_counter}: {len(compatible_polygons)} совместимых полигонов из заказов {orders_to_try}")
+            
+            # Debug logging before bin_packing call
+            logger.debug(f"=== ПОЛИГОНЫ ПЕРЕД bin_packing ===")
+            for idx, poly_tuple in enumerate(compatible_polygons):
+                logger.debug(f"  [{idx}] длина={len(poly_tuple)}, элементы={poly_tuple}")
+                if len(poly_tuple) > 1:
+                    logger.debug(f"      имя файла: '{poly_tuple[1]}' (тип: {type(poly_tuple[1])})")
             
             # Try to place compatible polygons on this sheet
             placed, remaining_from_sheet = bin_packing(compatible_polygons, sheet_size, verbose=verbose)
             
+            # Debug logging after bin_packing call
+            logger.debug(f"=== ПОЛИГОНЫ ПОСЛЕ bin_packing ===")
+            logger.debug(f"  Размещено: {len(placed)} полигонов")
+            for idx, poly_tuple in enumerate(placed):
+                logger.debug(f"  [{idx}] длина={len(poly_tuple)}, элементы={poly_tuple}")
+                if len(poly_tuple) >= 5:
+                    logger.debug(f"      имя файла: '{poly_tuple[4]}' (тип: {type(poly_tuple[4])})")  # file_name at index 4
+                elif len(poly_tuple) > 1:
+                    logger.debug(f"      элемент [1]: '{poly_tuple[1]}' (тип: {type(poly_tuple[1])})")  # what was mistaken for filename
+            
             if placed:  # If we managed to place something
                 sheet_type['used'] += 1
+                
+                # Track which orders are represented on this sheet
+                orders_on_sheet = set()
+                placed_polygon_names = set()
+                
+                for polygon_tuple in placed:
+                    # bin_packing returns: (polygon, x_offset, y_offset, angle, file_name, color, order_id)
+                    if len(polygon_tuple) >= 5:
+                        filename = polygon_tuple[4]  # file_name is at index 4
+                    else:
+                        filename = 'unknown'  # fallback
+                    
+                    placed_polygon_names.add(filename)
+                    
+                    # Find which order this polygon belongs to
+                    found_order = False
+                    for order_id, order_polygons in remaining_orders.items():
+                        for orig_tuple in order_polygons:
+                            if len(orig_tuple) > 1 and orig_tuple[1] == filename:
+                                orders_on_sheet.add(order_id)
+                                logger.debug(f"    Полигон {filename} принадлежит заказу {order_id}")
+                                found_order = True
+                                break
+                        if found_order:
+                            break
+                    
+                    if not found_order:
+                        logger.warning(f"    Не найден заказ для полигона {filename}")
+                
+                logger.info(f"УСПЕХ: Лист #{sheet_counter} содержит заказы: {orders_on_sheet}")
+                
+                # Update order sheet usage
+                for order_id in orders_on_sheet:
+                    if order_id in order_sheet_usage:
+                        order_sheet_usage[order_id] += 1
+                        logger.info(f"  Заказ {order_id}: теперь использует {order_sheet_usage[order_id]} листов")
+                
                 placed_layouts.append({
                     'sheet_number': sheet_counter,
                     'sheet_type': sheet_type['name'],
                     'sheet_size': sheet_size,
                     'placed_polygons': placed,
-                    'usage_percent': calculate_usage_percent(placed, sheet_size)
+                    'usage_percent': calculate_usage_percent(placed, sheet_size),
+                    'orders_on_sheet': list(orders_on_sheet)
                 })
-                # Update unplaced: combine remaining from this color group + all other colors
-                unplaced = remaining_from_sheet + remaining_polygons
+                
+                # Remove placed polygons from remaining orders
+                # We need to match polygons by both filename AND order_id
+                placed_polygon_map = {}  # Maps (filename, order_id) -> True
+                for polygon_tuple in placed:
+                    if len(polygon_tuple) >= 5:
+                        filename = polygon_tuple[4]  # file_name is at index 4
+                        if len(polygon_tuple) >= 7:
+                            order_id = polygon_tuple[6]  # order_id is at index 6
+                            placed_polygon_map[(filename, order_id)] = True
+                            logger.debug(f"  Размещен полигон: файл='{filename}', заказ='{order_id}'")
+                
+                total_removed = 0
+                for order_id in list(remaining_orders.keys()):
+                    original_count = len(remaining_orders[order_id])
+                    # Only remove polygons that were actually placed from this specific order
+                    remaining_orders[order_id] = [
+                        p for p in remaining_orders[order_id] 
+                        if len(p) < 2 or (p[1], order_id) not in placed_polygon_map
+                    ]
+                    removed_count = original_count - len(remaining_orders[order_id])
+                    total_removed += removed_count
+                    
+                    if removed_count > 0:
+                        logger.info(f"  Из заказа {order_id} удалено {removed_count} размещенных полигонов")
+                    
+                    # Remove empty orders
+                    if not remaining_orders[order_id]:
+                        logger.info(f"  Заказ {order_id} полностью размещен")
+                        del remaining_orders[order_id]
+                
+                logger.info(f"Общее количество удаленных полигонов: {total_removed}")
+                logger.info(f"Оставшиеся заказы: {list(remaining_orders.keys())}")
+                for order_id, polygons in remaining_orders.items():
+                    logger.info(f"  {order_id}: {len(polygons)} полигонов")
+                
                 placed_on_current_sheet = True
                 
                 if verbose:
-                    st.success(f"Размещено {len(placed)} объектов на листе {sheet_type['name']} (цвет: {sheet_color})")
-                break  # Move to next iteration with remaining polygons
+                    st.success(f"  ✅ Размещено {len(placed)} объектов на листе {sheet_type['name']}")
+                    st.info(f"  📊 Заказы на листе: {', '.join(orders_on_sheet)}")
+                
+                break  # Move to next iteration with remaining orders
         
         if not placed_on_current_sheet:
             # No sheet type could accommodate any remaining polygons
+            logger.warning(f"Не удалось разместить оставшиеся заказы: {list(remaining_orders.keys())}")
             break
     
-    if verbose:
-        st.info(f"Размещение завершено: {len(placed_layouts)} листов использовано, {len(unplaced)} объектов не размещено")
+    # Check order constraints after placement
+    violated_orders = []
+    for order_id, sheets_used in order_sheet_usage.items():
+        if max_sheets_per_order and order_id != 'additional' and sheets_used > max_sheets_per_order:
+            violated_orders.append((order_id, sheets_used))
+            logger.error(f"НАРУШЕНИЕ ОГРАНИЧЕНИЙ: Заказ {order_id} использует {sheets_used} листов (лимит: {max_sheets_per_order})")
     
-    return placed_layouts, unplaced
+    if violated_orders:
+        error_msg = "❌ Нарушение ограничений заказов:\n" + "\n".join([
+            f"Заказ {order_id}: {sheets_used} листов (лимит: {max_sheets_per_order})" 
+            for order_id, sheets_used in violated_orders
+        ])
+        if verbose:
+            st.error(error_msg)
+        raise ValueError(error_msg)
+    
+    # Add any completely unplaced polygons to the unplaced list
+    for order_id, remaining_polygons in remaining_orders.items():
+        all_unplaced.extend(remaining_polygons)
+    
+    
+    logger.info(f"=== ОКОНЧАНИЕ bin_packing_with_inventory ===")
+    logger.info(f"ИТОГОВЫЙ РЕЗУЛЬТАТ: {len(placed_layouts)} листов использовано, {len(all_unplaced)} объектов не размещено")
+    
+    logger.info("Финальное распределение по заказам:")
+    for order_id, sheets_used in order_sheet_usage.items():
+        logger.info(f"  • Заказ {order_id}: {sheets_used} листов")
+    
+    if verbose:
+        st.info(f"Размещение завершено: {len(placed_layouts)} листов использовано, {len(all_unplaced)} объектов не размещено")
+        
+        # Show summary by orders using the tracked usage
+        if order_sheet_usage:
+            st.success("✅ Распределение по заказам:")
+            for order_id, sheet_count in order_sheet_usage.items():
+                if order_id != 'unknown':  # Only show real orders
+                    status = "✅" if sheet_count <= (max_sheets_per_order or float('inf')) else "❌"
+                    st.info(f"  {status} Заказ {order_id}: {sheet_count} листов")
+    
+    return placed_layouts, all_unplaced
 
 
 def calculate_usage_percent(placed_polygons: list[tuple], sheet_size: tuple[float, float]) -> float:
@@ -933,11 +1137,15 @@ def scale_polygons_to_fit(polygons_with_names: list[tuple], sheet_size: tuple[fl
         st.info(f"Применяем глобальный масштабный коэффициент {global_scale:.4f} ко всем полигонам")
     
     for polygon_tuple in polygons_with_names:
-        if len(polygon_tuple) >= 3:  # New format with color
+        if len(polygon_tuple) >= 4:  # Extended format with color and order_id
+            polygon, name, color, order_id = polygon_tuple[:4]
+        elif len(polygon_tuple) >= 3:  # Format with color
             polygon, name, color = polygon_tuple[:3]
+            order_id = 'unknown'
         else:  # Old format without color
             polygon, name = polygon_tuple[:2]
             color = 'серый'
+            order_id = 'unknown'
         bounds = polygon.bounds
         poly_width = bounds[2] - bounds[0]
         poly_height = bounds[3] - bounds[1]
@@ -972,9 +1180,9 @@ def scale_polygons_to_fit(polygons_with_names: list[tuple], sheet_size: tuple[fl
                 new_width_cm = (scaled_polygon.bounds[2]-scaled_polygon.bounds[0]) / 10.0
                 new_height_cm = (scaled_polygon.bounds[3]-scaled_polygon.bounds[1]) / 10.0
                 st.info(f"Масштабирован {name}: {original_width_cm:.1f}x{original_height_cm:.1f} см → {new_width_cm:.1f}x{new_height_cm:.1f} см (коэффициент: {scale_factor:.4f})")
-            scaled_polygons.append((scaled_polygon, name, color))
+            scaled_polygons.append((scaled_polygon, name, color, order_id))
         else:
-            scaled_polygons.append((polygon, name, color))
+            scaled_polygons.append((polygon, name, color, order_id))
     
     return scaled_polygons
 

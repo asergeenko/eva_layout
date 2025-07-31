@@ -7,14 +7,37 @@ from datetime import datetime
 from io import BytesIO
 import functools
 import zipfile
+import logging
 
 # Константы
-MAX_SHEETS_PER_ORDER = 5  # Максимальное количество листов на один заказ
+MAX_SHEETS_PER_ORDER = 5  # Максимальное количество листов на один заказ (номер заказа из колонки O)
+
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('eva_layout_debug.log', mode='w', encoding='utf-8'),
+        logging.StreamHandler()  # Также выводить в консоль
+    ]
+)
+logger = logging.getLogger(__name__)
+
+logger.info("=== НАЧАЛО СЕССИИ EVA LAYOUT ===")
+logger.info(f"MAX_SHEETS_PER_ORDER = {MAX_SHEETS_PER_ORDER}")
 
 # Clear any cached imports (for Streamlit Cloud)
 import sys
 if 'layout_optimizer' in sys.modules:
     del sys.modules['layout_optimizer']
+
+# Force cache clear
+import importlib
+try:
+    import layout_optimizer
+    importlib.reload(layout_optimizer)
+except:
+    pass
 
 try:
     from layout_optimizer import (
@@ -52,7 +75,7 @@ except ImportError as e:
             # Try alternative approach - define the function inline as a workaround
             st.warning("🔧 Применяем обходное решение...")
             
-            def bin_packing_with_inventory_fallback(polygons, available_sheets, verbose=True):
+            def bin_packing_with_inventory_fallback(polygons, available_sheets, verbose=True, max_sheets_per_order=None):
                 """Fallback implementation if import fails."""
                 if verbose:
                     st.info("Используется резервная реализация bin_packing_with_inventory")
@@ -156,7 +179,7 @@ with col1:
     # Color selection
     sheet_color = st.selectbox(
         "Цвет листа", 
-        ["серый", "чёрный"],
+        ["чёрный", "серый"],
         key="sheet_color"
     )
         
@@ -231,8 +254,10 @@ excel_file = st.file_uploader("Загрузите файл заказов Excel"
 if excel_file is not None:
     try:
         with st.spinner("Загрузка Excel файла..."):
-            # Read Excel file with all sheets
-            excel_data = pd.read_excel(excel_file, sheet_name=None, header=None)
+            # Read Excel file with all sheets (disable date parsing to avoid date errors)
+            excel_data = pd.read_excel(excel_file, sheet_name=None, header=None, 
+                                     date_format=None, parse_dates=False)
+            logger.info(f"Excel файл загружен. Листы: {list(excel_data.keys())}")
         
         # Get current month name and previous month
         from datetime import datetime
@@ -249,11 +274,13 @@ if excel_file is not None:
         
         current_month_ru = month_mapping.get(current_date.strftime("%B").upper(), "ИЮЛЬ") + " " + str(current_date.year)
         
-        # Get previous month
+        # Get previous month (handle day overflow correctly)
         if current_date.month == 1:
             prev_month_ru = "ДЕКАБРЬ " + str(current_date.year - 1)
         else:
-            prev_date = current_date.replace(month=current_date.month - 1)
+            # Use first day of month to avoid day overflow issues
+            first_of_current_month = current_date.replace(day=1)
+            prev_date = first_of_current_month.replace(month=first_of_current_month.month - 1)
             prev_month_ru = month_mapping.get(prev_date.strftime("%B").upper(), "ИЮНЬ") + " " + str(prev_date.year)
         
         target_sheets = [current_month_ru, prev_month_ru]
@@ -300,6 +327,7 @@ if excel_file is not None:
         
         if all_orders:
             st.success(f"✅ Найдено {len(all_orders)} невыполненных заказов")
+            logger.info(f"Найдено {len(all_orders)} невыполненных заказов в Excel")
             
             # Display orders for selection
             st.subheader("📝 Выберите заказы для раскроя")
@@ -460,11 +488,21 @@ if excel_file is not None:
                     
                 # Store selected orders in session state
                 st.session_state.selected_orders = all_selected_orders
+                logger.info(f"Выбрано {len(all_selected_orders)} заказов для обработки")
+                for order in all_selected_orders:
+                    logger.info(f"  Заказ {order.get('order_id', 'N/A')}: {order.get('article', 'N/A')}")
         else:
             st.warning("⚠️ Не найдено невыполненных заказов в указанных месяцах")
             
     except Exception as e:
         st.error(f"❌ Ошибка обработки Excel файла: {e}")
+        logger.error(f"Ошибка при обработке Excel: {e}")
+        import traceback
+        logger.error(f"Полная трассировка ошибки: {traceback.format_exc()}")
+        st.error("💡 **Возможные решения:**")
+        st.error("• Сохраните Excel файл в новом формате (.xlsx)")
+        st.error("• Проверьте правильность дат в файле") 
+        st.error("• Убедитесь, что в датах нет некорректных значений (например, 30 февраля)")
 
 # Initialize auto_loaded_files
 auto_loaded_files = []
@@ -491,6 +529,8 @@ if st.session_state.selected_orders:
         """Find DXF files for a given article by searching in the dxf_samples directory structure."""
         import re
         found_files = []
+        
+        logger.info(f"Поиск DXF файлов для артикула: '{article}', товар: '{product_name}'")
         
         # Strategy 1: Search by product name (e.g., "AUDI A6 (C7) 4")
         if product_name and not found_files:
@@ -521,6 +561,7 @@ if st.session_state.selected_orders:
             
             if detected_brand:
                 brand_path = f"dxf_samples/{detected_brand}"
+                logger.debug(f"Обнаружен бренд: {detected_brand}, путь: {brand_path}")
                 if os.path.exists(brand_path):
                     # Create search keywords from product name
                     product_keywords = []
@@ -601,6 +642,7 @@ if st.session_state.selected_orders:
                                     for dxf_file in dxf_files_found:
                                         found_files.append(os.path.join(dxf_folder, dxf_file))
                                     if found_files:
+                                        logger.debug(f"Найдены DXF файлы в папке {dxf_folder}: {len(dxf_files_found)} файлов")
                                         break
                                 else:
                                     # Check for DXF files directly in model folder
@@ -763,6 +805,9 @@ if st.session_state.selected_orders:
                         if found_files:
                             break
         
+        logger.info(f"Результат поиска для '{article}': найдено {len(found_files)} файлов")
+        if found_files:
+            logger.debug(f"Найденные файлы: {[os.path.basename(f) for f in found_files]}")
         return found_files
 
     # Create progress tracking
@@ -808,7 +853,10 @@ if st.session_state.selected_orders:
                     file_obj = FileObj(file_content, display_name)
                     # Add color information from the order
                     file_obj.color = order.get('color', 'серый')
+                    # Add order information for constraint tracking (one order per Excel row)
+                    file_obj.order_id = order.get('order_id', 'unknown')
                     auto_loaded_files.append(file_obj)
+                    logger.debug(f"Загружен файл {display_name} для заказа {file_obj.order_id}, цвет: {file_obj.color}")
                 except Exception as e:
                     st.warning(f"⚠️ Ошибка загрузки {file_path}: {e}")
         else:
@@ -856,6 +904,8 @@ if auto_loaded_files:
         for file in manual_files:
             # Create a file wrapper with color info
             file.color = manual_color
+            # Mark as additional files (not subject to order constraints)
+            file.order_id = 'additional'
             manual_files_with_color.append(file)
     
     # Combine auto-loaded and manual files
@@ -871,28 +921,45 @@ else:
         st.info("💡 Выберите заказы из Excel таблицы выше для автоматической загрузки DXF файлов.")
 
 if st.button("🚀 Оптимизировать раскрой"):
+    logger.info("=== НАЧАЛО ОПТИМИЗАЦИИ РАСКРОЯ ===")
     if not st.session_state.available_sheets:
+        logger.error("Нет доступных листов для оптимизации")
         st.error("⚠️ Пожалуйста, добавьте хотя бы один тип листа в наличии.")
     elif not dxf_files:
+        logger.error("Нет DXF файлов для оптимизации")
         st.error("⚠️ Пожалуйста, загрузите хотя бы один DXF файл.")
     else:
+        logger.info(f"Начинаем оптимизацию с {len(dxf_files)} DXF файлами и {len(st.session_state.available_sheets)} типами листов")
         # Parse DXF files
         st.header("📄 Обработка DXF файлов")
         polygons = []
         original_dxf_data_map = {}  # Store original DXF data for each file
         
         # Parse files quietly first using improved DXF handling
+        logger.info("Начинаем парсинг DXF файлов...")
         for file in dxf_files:
             file.seek(0)
             file_bytes = BytesIO(file.read())
             parsed_data = parse_dxf_complete(file_bytes, verbose=False)
             if parsed_data and parsed_data['combined_polygon']:
-                # Add color information to polygon tuple
+                # Add color and order information to polygon tuple
                 file_color = getattr(file, 'color', 'серый')
-                # Use the combined polygon
-                polygons.append((parsed_data['combined_polygon'], file.name, file_color))
+                file_order_id = getattr(file, 'order_id', 'unknown')
+                
+                # DEBUG: Log all file attributes to understand the issue
+                file_attrs = [attr for attr in dir(file) if not attr.startswith('_')]
+                logger.debug(f"ФАЙЛ {file.name}: атрибуты = {file_attrs}")
+                logger.debug(f"ФАЙЛ {file.name}: color = {file_color}, order_id = {file_order_id}")
+                
+                # Use the combined polygon with extended format: (polygon, filename, color, order_id)
+                polygon_tuple = (parsed_data['combined_polygon'], file.name, file_color, file_order_id)
+                polygons.append(polygon_tuple)
+                logger.info(f"ДОБАВЛЕН ПОЛИГОН: tuple длина={len(polygon_tuple)}, order_id={polygon_tuple[3] if len(polygon_tuple) > 3 else 'НЕТ'}")
                 # Store original DXF data for this file
                 original_dxf_data_map[file.name] = parsed_data
+                logger.info(f"СОЗДАН ПОЛИГОН: файл={file.name}, заказ={file_order_id}, цвет={file_color}")
+            else:
+                logger.warning(f"Не удалось получить полигон из файла {file.name}")
         
         # Show detailed parsing info in expander
         with st.expander("🔍 Подробная информация о парсинге файлов", expanded=False):
@@ -906,6 +973,21 @@ if st.button("🚀 Оптимизировать раскрой"):
         if not polygons:
             st.error("В загруженных DXF файлах не найдено валидных полигонов!")
             st.stop()
+        
+        # Show order distribution before optimization
+        order_counts = {}
+        for polygon_tuple in polygons:
+            if len(polygon_tuple) >= 4:
+                order_id = polygon_tuple[3]
+                order_counts[order_id] = order_counts.get(order_id, 0) + 1
+        
+        logger.info(f"Анализ заказов: найдено {len(order_counts)} уникальных заказов")
+        for order_id, count in order_counts.items():
+            logger.info(f"  • Заказ {order_id}: {count} файлов")
+        
+        st.info(f"📋 Найдено {len(order_counts)} уникальных заказов:")
+        for order_id, count in order_counts.items():
+            st.write(f"  • Заказ {order_id}: {count} файлов")
         
         # Show input visualization
         st.header("🔍 Визуализация входных файлов")
@@ -942,11 +1024,15 @@ if st.button("🚀 Оптимизировать раскрой"):
         summary_data = []
         total_area_cm2 = 0
         for polygon_tuple in polygons:
-            if len(polygon_tuple) >= 3:  # New format with color
+            if len(polygon_tuple) >= 4:  # Extended format with color and order_id
+                poly, filename, color, order_id = polygon_tuple[:4]
+            elif len(polygon_tuple) >= 3:  # Format with color
                 poly, filename, color = polygon_tuple[:3]
+                order_id = 'unknown'
             else:  # Old format without color
                 poly, filename = polygon_tuple[:2]
                 color = 'серый'
+                order_id = 'unknown'
             bounds = poly.bounds
             width_mm = bounds[2] - bounds[0]
             height_mm = bounds[3] - bounds[1]
@@ -974,7 +1060,8 @@ if st.button("🚀 Оптимизировать раскрой"):
                 "Ширина (см)": f"{width_cm:.1f}",
                 "Высота (см)": f"{height_cm:.1f}",
                 "Площадь (см²)": f"{area_cm2:.2f}",
-                "Цвет": color_display
+                "Цвет": color_display,
+                "Заказ": order_id if order_id != 'unknown' else '-'
             })
         
         summary_df = pd.DataFrame(summary_data)
@@ -1014,12 +1101,35 @@ if st.button("🚀 Оптимизировать раскрой"):
         
         st.header("🔄 Процесс оптимизации")
 
-        # Debug processing with detailed info
-        with st.expander("🔍 Подробная информация об оптимизации", expanded=False):
-            debug_layouts, debug_unplaced = bin_packing_with_inventory(polygons, st.session_state.available_sheets, verbose=True)
+        try:
+            # Debug processing with detailed info
+            with st.expander("🔍 Подробная информация об оптимизации", expanded=False):
+                debug_layouts, debug_unplaced = bin_packing_with_inventory(polygons, st.session_state.available_sheets, verbose=True, max_sheets_per_order=MAX_SHEETS_PER_ORDER)
+            
+            # Actual processing (quiet)
+            logger.info(f"Вызываем bin_packing_with_inventory с MAX_SHEETS_PER_ORDER={MAX_SHEETS_PER_ORDER}")
+            logger.info(f"Входные параметры: {len(polygons)} полигонов, {len(st.session_state.available_sheets)} типов листов")
+            
+            # DEBUG: Log what polygons we're sending
+            logger.info("ПОЛИГОНЫ ПЕРЕД ОТПРАВКОЙ В bin_packing_with_inventory:")
+            for i, polygon_tuple in enumerate(polygons):
+                if len(polygon_tuple) >= 4:
+                    logger.info(f"  Полигон {i}: файл={polygon_tuple[1]}, order_id={polygon_tuple[3]}")
+                else:
+                    logger.warning(f"  Полигон {i}: неполный tuple (длина={len(polygon_tuple)})")
+            
+            placed_layouts, unplaced_polygons = bin_packing_with_inventory(polygons, st.session_state.available_sheets, verbose=False, max_sheets_per_order=MAX_SHEETS_PER_ORDER)
+            logger.info(f"Результат bin_packing: {len(placed_layouts)} размещенных листов, {len(unplaced_polygons)} неразмещенных полигонов")
         
-        # Actual processing (quiet)
-        placed_layouts, unplaced_polygons = bin_packing_with_inventory(polygons, st.session_state.available_sheets, verbose=False)
+        except ValueError as e:
+            # Handle order constraint violations
+            if "Нарушение ограничений заказов" in str(e):
+                st.error(f"❌ {str(e)}")
+                st.info(f"💡 **Решение**: Увеличьте константу MAX_SHEETS_PER_ORDER (сейчас: {MAX_SHEETS_PER_ORDER}) или разделите файлы заказа на несколько частей.")
+                st.stop()
+            else:
+                # Re-raise other ValueError exceptions
+                raise
         
         # Convert to old format for compatibility with existing display code
         all_layouts = []
