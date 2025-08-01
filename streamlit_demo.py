@@ -879,7 +879,7 @@ if st.session_state.selected_orders:
         st.write("**Выберите цвет для дополнительных файлов:**")
         manual_color = st.selectbox(
             "Цвет листа для дополнительных файлов:",
-            options=["серый", "чёрный"],
+            options=["чёрный", "серый"],
             index=0,
             key="manual_files_color",
             help="Выберите цвет листа, на который должны быть размещены дополнительные файлы"
