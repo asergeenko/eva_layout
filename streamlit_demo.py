@@ -247,16 +247,25 @@ st.header("📋 Загрузка заказов из Excel таблицы")
 # Initialize session state for orders
 if 'selected_orders' not in st.session_state:
     st.session_state.selected_orders = []
+if 'manual_files' not in st.session_state:
+    st.session_state.manual_files = []
 
 # Excel file upload
 excel_file = st.file_uploader("Загрузите файл заказов Excel", type=["xlsx", "xls"], key="excel_upload")
 
+@st.cache_data(ttl=600)  # Cache for 10 minutes
+def load_excel_file(file_content):
+    """Load and cache Excel file processing"""
+    excel_data = pd.read_excel(BytesIO(file_content), sheet_name=None, header=None, 
+                              date_format=None, parse_dates=False)
+    return excel_data
+
 if excel_file is not None:
     try:
         with st.spinner("Загрузка Excel файла..."):
-            # Read Excel file with all sheets (disable date parsing to avoid date errors)
-            excel_data = pd.read_excel(excel_file, sheet_name=None, header=None, 
-                                     date_format=None, parse_dates=False)
+            # Read Excel file with caching
+            file_content = excel_file.read()
+            excel_data = load_excel_file(file_content)
             logger.info(f"Excel файл загружен. Листы: {list(excel_data.keys())}")
         
         # Get current month name and previous month
@@ -457,6 +466,8 @@ if excel_file is not None:
                 if st.button("✅ Выбрать все", key=f"select_all_{start_idx}"):
                     for i in range(len(orders_to_show)):
                         st.session_state[f"order_{start_idx + i}"] = True
+                    # Mark that we just performed bulk selection to avoid double processing
+                    st.session_state[f"bulk_selected_{start_idx}"] = True
                     st.rerun()
             with col2:
                 if st.button("❌ Снять все", key=f"deselect_all_{start_idx}"):
@@ -473,24 +484,36 @@ if excel_file is not None:
             if all_selected_orders:
                 st.success(f"🎯 Выбрано заказов: {len(all_selected_orders)}")
                 
-                # Show selected orders summary in table format
-                with st.expander("📋 Выбранные заказы", expanded=False):
-                    selected_summary = []
-                    for order in all_selected_orders:
-                        selected_summary.append({
-                            "Артикул": order['article'],
-                            "Товар": order['product'][:40] + "..." if len(order['product']) > 40 else order['product'],
-                            "Месяц": order['sheet']
-                            })
+                # Show selected orders summary in table format (only for reasonable number of orders)
+                if len(all_selected_orders) <= 20:
+                    with st.expander("📋 Выбранные заказы", expanded=False):
+                        selected_summary = []
+                        for order in all_selected_orders:
+                            selected_summary.append({
+                                "Артикул": order['article'],
+                                "Товар": order['product'][:40] + "..." if len(order['product']) > 40 else order['product'],
+                                "Месяц": order['sheet']
+                                })
                         
                         selected_df = pd.DataFrame(selected_summary)
                         st.dataframe(selected_df, use_container_width=True, hide_index=True)
+                else:
+                    st.info(f"📋 Выбрано {len(all_selected_orders)} заказов (список слишком большой для отображения)")
                     
                 # Store selected orders in session state
                 st.session_state.selected_orders = all_selected_orders
                 logger.info(f"Выбрано {len(all_selected_orders)} заказов для обработки")
-                for order in all_selected_orders:
-                    logger.info(f"  Заказ {order.get('order_id', 'N/A')}: {order.get('article', 'N/A')}")
+                # Log only first few orders to avoid slowdown
+                if len(all_selected_orders) <= 5:
+                    for order in all_selected_orders:
+                        logger.info(f"  Заказ {order.get('order_id', 'N/A')}: {order.get('article', 'N/A')}")
+                else:
+                    # Log only first 3 and last 2 for large lists
+                    for order in all_selected_orders[:3]:
+                        logger.info(f"  Заказ {order.get('order_id', 'N/A')}: {order.get('article', 'N/A')}")
+                    logger.info(f"  ... (пропущено {len(all_selected_orders) - 5} заказов) ...")
+                    for order in all_selected_orders[-2:]:
+                        logger.info(f"  Заказ {order.get('order_id', 'N/A')}: {order.get('article', 'N/A')}")
         else:
             st.warning("⚠️ Не найдено невыполненных заказов в указанных месяцах")
             
@@ -507,10 +530,15 @@ if excel_file is not None:
 # Initialize auto_loaded_files
 auto_loaded_files = []
 
-# Auto-load DXF files when orders are selected
+# DXF files will be loaded on demand during optimization
+# This section shows what will be processed when optimization starts
 if st.session_state.selected_orders:
-    st.subheader("🤖 Автоматическая загрузка DXF файлов")
+    st.subheader("📋 Готовые к обработке заказы")
     
+    st.success(f"✅ Выбрано {len(st.session_state.selected_orders)} заказов")
+    st.info("💡 DXF файлы будут загружены при нажатии кнопки 'Оптимизировать раскрой' для ускорения интерфейса.")
+    
+    # Show preview of what will be loaded
     articles_found = []
     articles_not_found = []
     
@@ -810,86 +838,22 @@ if st.session_state.selected_orders:
             logger.debug(f"Найденные файлы: {[os.path.basename(f) for f in found_files]}")
         return found_files
 
-    # Create progress tracking
-    total_orders = len(st.session_state.selected_orders)
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    # Show selected orders without file system search
+    st.info(f"📊 Готово к обработке: **{len(st.session_state.selected_orders)}** заказов")
     
-    # Create detailed progress info
-    progress_info = st.empty()
+    # Show selected orders in a compact format
+    with st.expander("📋 Список выбранных заказов", expanded=False):
+        for i, order in enumerate(st.session_state.selected_orders, 1):
+            st.write(f"{i}. **{order['product']}** (заказ: {order.get('order_id', 'N/A')})")
     
-    for i, order in enumerate(st.session_state.selected_orders):
-        article = order['article']
-        product = order['product']
-        
-        # Update progress
-        progress = (i + 1) / total_orders
-        progress_bar.progress(progress)
-        status_text.text(f"Обработка заказа {i + 1} из {total_orders}: {product[:50]}...")
-        
-        # Update detailed info
-        with progress_info.container():
-            st.write(f"🔍 Поиск DXF файлов для: **{product}**")
-            st.write(f"📋 Артикул: `{article}`")
-        
-        found_dxf_files = find_dxf_files_for_article(article, product)
-        
-        if found_dxf_files:
-            articles_found.append((product, "auto-detected", [os.path.basename(f) for f in found_dxf_files]))
-            
-            # Show files being loaded
-            with progress_info.container():
-                st.write(f"✅ Найдено {len(found_dxf_files)} файлов")
-                for idx, file_path in enumerate(found_dxf_files):
-                    st.write(f"   📄 {idx + 1}. {os.path.basename(file_path)}")
-            
-            for file_path in found_dxf_files:
-                try:
-                    with open(file_path, 'rb') as f:
-                        file_content = f.read()
-                    
-                    # Use product name for file display, but keep article for uniqueness
-                    display_name = f"{product}_{os.path.basename(file_path)}"
-                    file_obj = FileObj(file_content, display_name)
-                    # Add color information from the order
-                    file_obj.color = order.get('color', 'серый')
-                    # Add order information for constraint tracking (one order per Excel row)
-                    file_obj.order_id = order.get('order_id', 'unknown')
-                    auto_loaded_files.append(file_obj)
-                    logger.debug(f"Загружен файл {display_name} для заказа {file_obj.order_id}, цвет: {file_obj.color}")
-                except Exception as e:
-                    st.warning(f"⚠️ Ошибка загрузки {file_path}: {e}")
-        else:
-            articles_not_found.append((product, f"dxf_samples/{article}"))
-            with progress_info.container():
-                st.write("❌ DXF файлы не найдены")
-        
-        # Small delay for visual effect
-        import time
-        time.sleep(0.1)
-    
-    # Final progress update
-    progress_bar.progress(1.0)
-    status_text.text(f"✅ Обработка завершена! Загружено {len(articles_found)} из {total_orders} заказов")
-    progress_info.empty()  # Clear detailed info
-    
-    if articles_found:
-        st.success(f"✅ Найдены DXF файлы для {len(articles_found)} товаров:")
-        for product, path, files in articles_found:
-            st.write(f"• {product}: {len(files)} файлов")
-    
-    if articles_not_found:
-        st.warning(f"⚠️ Не найдены DXF файлы для {len(articles_not_found)} товаров:")
-        for product, path in articles_not_found:
-            st.write(f"• {product} (путь: {path})")
+    st.success("✅ DXF файлы будут найдены и загружены при запуске оптимизации")
 
-# Additional DXF files section (always shown when there are auto-loaded files)
-if auto_loaded_files:
+# Additional DXF files section (shown when orders are selected)
+if st.session_state.selected_orders:
     st.subheader("📎 Дополнительные DXF файлы (опционально)")
     manual_files = st.file_uploader("Добавьте дополнительные DXF файлы при необходимости", type=["dxf"], accept_multiple_files=True, key="manual_dxf")
     
-    # If manual files are uploaded, ask for color
-    manual_files_with_color = []
+    # Store manual files in session state for later processing
     if manual_files:
         st.write("**Выберите цвет для дополнительных файлов:**")
         manual_color = st.selectbox(
@@ -899,22 +863,14 @@ if auto_loaded_files:
             key="manual_files_color",
             help="Выберите цвет листа, на который должны быть размещены дополнительные файлы"
         )
-        
-        # Add color information to manual files
-        for file in manual_files:
-            # Create a file wrapper with color info
-            file.color = manual_color
-            # Mark as additional files (not subject to order constraints)
-            file.order_id = 'additional'
-            manual_files_with_color.append(file)
-    
-    # Combine auto-loaded and manual files
-    dxf_files = auto_loaded_files + manual_files_with_color
-    
-    st.info(f"📁 Всего файлов для раскроя: {len(dxf_files)} (из заказов: {len(auto_loaded_files)}, дополнительные: {len(manual_files_with_color)})")
+        # Store manual files and color in session state
+        st.session_state.manual_files = manual_files
+        st.session_state.manual_color = manual_color
+        st.success(f"✅ Добавлено {len(manual_files)} дополнительных файлов")
+    else:
+        st.session_state.manual_files = []
 else:
-    # No orders selected or no files found - show message
-    dxf_files = []
+    # No orders selected or no files found - show message  
     if st.session_state.selected_orders:
         st.warning("⚠️ Для выбранных заказов не найдены DXF файлы. Проверьте наличие файлов в папке dxf_samples.")
     else:
@@ -925,19 +881,90 @@ if st.button("🚀 Оптимизировать раскрой"):
     if not st.session_state.available_sheets:
         logger.error("Нет доступных листов для оптимизации")
         st.error("⚠️ Пожалуйста, добавьте хотя бы один тип листа в наличии.")
-    elif not dxf_files:
-        logger.error("Нет DXF файлов для оптимизации")
-        st.error("⚠️ Пожалуйста, загрузите хотя бы один DXF файл.")
+    elif not st.session_state.selected_orders:
+        logger.error("Нет выбранных заказов для оптимизации")
+        st.error("⚠️ Пожалуйста, выберите заказы из Excel таблицы.")
     else:
+        # Now load DXF files on demand  
+        st.header("📥 Загрузка DXF файлов")
+        
+        # Load files from selected orders
+        auto_loaded_files = []
+        manual_files_with_color = []
+        
+        # Create FileObj class for this context
+        class FileObj:
+            def __init__(self, content, name):
+                self.content = BytesIO(content)
+                self.name = name
+            def read(self):
+                return self.content.read()
+            def seek(self, pos):
+                return self.content.seek(pos)
+        
+        # Load files from orders
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        total_orders = len(st.session_state.selected_orders)
+        for i, order in enumerate(st.session_state.selected_orders):
+            progress = (i + 1) / total_orders
+            progress_bar.progress(progress)
+            status_text.text(f"Загружаем файлы для заказа {i + 1}/{total_orders}: {order['product'][:50]}...")
+            
+            article = order['article']
+            product = order['product']
+            found_dxf_files = find_dxf_files_for_article(article, product)
+            
+            if found_dxf_files:
+                for file_path in found_dxf_files:
+                    try:
+                        with open(file_path, 'rb') as f:
+                            file_content = f.read()
+                        
+                        display_name = f"{product}_{os.path.basename(file_path)}"
+                        file_obj = FileObj(file_content, display_name)
+                        file_obj.color = order.get('color', 'серый')
+                        file_obj.order_id = order.get('order_id', 'unknown')
+                        auto_loaded_files.append(file_obj)
+                        logger.debug(f"Загружен файл {display_name} для заказа {file_obj.order_id}")
+                    except Exception as e:
+                        st.warning(f"⚠️ Ошибка загрузки {file_path}: {e}")
+            else:
+                st.warning(f"⚠️ Не найдены DXF файлы для заказа: {product}")
+        
+        # Load manual files if any
+        if hasattr(st.session_state, 'manual_files') and st.session_state.manual_files:
+            for file in st.session_state.manual_files:
+                file.color = getattr(st.session_state, 'manual_color', 'серый')
+                file.order_id = 'additional'
+                manual_files_with_color.append(file)
+        
+        # Combine all files
+        dxf_files = auto_loaded_files + manual_files_with_color
+        
+        progress_bar.empty()
+        status_text.text(f"✅ Загружено {len(dxf_files)} файлов ({len(auto_loaded_files)} из заказов, {len(manual_files_with_color)} дополнительных)")
+        
         logger.info(f"Начинаем оптимизацию с {len(dxf_files)} DXF файлами и {len(st.session_state.available_sheets)} типами листов")
         # Parse DXF files
         st.header("📄 Обработка DXF файлов")
         polygons = []
         original_dxf_data_map = {}  # Store original DXF data for each file
         
-        # Parse files quietly first using improved DXF handling
+        # Parse loaded DXF files
         logger.info("Начинаем парсинг DXF файлов...")
-        for file in dxf_files:
+        
+        # Show progress for file parsing
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        for idx, file in enumerate(dxf_files):
+            # Update progress
+            progress = (idx + 1) / len(dxf_files)
+            progress_bar.progress(progress)
+            status_text.text(f"Парсим файл {idx + 1}/{len(dxf_files)}: {file.name}")
+            
             file.seek(0)
             file_bytes = BytesIO(file.read())
             parsed_data = parse_dxf_complete(file_bytes, verbose=False)
@@ -960,6 +987,10 @@ if st.button("🚀 Оптимизировать раскрой"):
                 logger.info(f"СОЗДАН ПОЛИГОН: файл={file.name}, заказ={file_order_id}, цвет={file_color}")
             else:
                 logger.warning(f"Не удалось получить полигон из файла {file.name}")
+        
+        # Clear progress indicators
+        progress_bar.empty()
+        status_text.text(f"✅ Обработка завершена! Загружено {len(polygons)} полигонов из {len(dxf_files)} файлов")
         
         # Show detailed parsing info in expander
         with st.expander("🔍 Подробная информация о парсинге файлов", expanded=False):
