@@ -377,88 +377,84 @@ if excel_file is not None:
                 orders_to_show = display_orders
                 start_idx = 0
             
-            # Create table data for orders
-            table_data = []
-            for i, order in enumerate(orders_to_show):
-                actual_idx = start_idx + i
-                # Get checkbox state
-                is_selected = st.session_state.get(f"order_{actual_idx}", False)
+            # Display orders with interactive controls
+            if orders_to_show:
+                # Add header row
+                col1, col2, col3, col4, col5, col6, col7, col8, col9 = st.columns([0.8, 0.8, 1.2, 2.5, 0.8, 1.5, 0.8, 0.8, 1.0])
+                with col1:
+                    st.markdown("**Выбрать**")
+                with col2:
+                    st.markdown("**Кол-во**")
+                with col3:
+                    st.markdown("**Артикул**")
+                with col4:
+                    st.markdown("**Товар**")
+                with col5:
+                    st.markdown("**Цвет**")
+                with col6:
+                    st.markdown("**Клиент**")
+                with col7:
+                    st.markdown("**Дата**")
+                with col8:
+                    st.markdown("**Месяц**")
+                with col9:
+                    st.markdown("**№ заказа**")
+                st.markdown("---")
                 
-                # Add color emoji for display
-                color = order.get('color', 'серый')
-                color_emoji = "⚫" if color == "чёрный" else "⚪" if color == "серый" else "🔘"
-                color_display = f"{color_emoji} {color}"
-                
-                table_data.append({
-                    "Выбрать": is_selected,
-                    "Артикул": order['article'],
-                    "Товар": order['product'][:50] + "..." if len(order['product']) > 50 else order['product'],
-                    "Цвет": color_display,
-                    "Клиент": order.get('client', '')[:25] + "..." if len(order.get('client', '')) > 25 else order.get('client', ''),
-                    "Дата": order.get('date', '')[:10],  # Show only date part
-                    "Месяц": order['sheet'],
-                    "№ заказа": order.get('order_id', '')
-                })
-            
-            # Display orders table with selection
-            if table_data:
-                orders_df = pd.DataFrame(table_data)
-                
-                # Use data_editor for selection
-                edited_df = st.data_editor(
-                    orders_df,
-                    column_config={
-                        "Выбрать": st.column_config.CheckboxColumn(
-                            "Выбрать",
-                            help="Отметьте заказы для раскроя",
-                            default=False,
-                        ),
-                        "Артикул": st.column_config.TextColumn(
-                            "Артикул",
-                            help="Код артикула для поиска DXF файлов",
-                            width="medium"
-                        ),
-                        "Товар": st.column_config.TextColumn(
-                            "Товар",
-                            help="Название товара",
-                            width="large"
-                        ),
-                        "Цвет": st.column_config.TextColumn(
-                            "Цвет",
-                            help="Цвет листа для заказа",
-                            width="small"
-                        ),
-                        "Клиент": st.column_config.TextColumn(
-                            "Клиент",
-                            help="Название клиента",
-                            width="medium"
-                        ),
-                        "Дата": st.column_config.TextColumn(
-                            "Дата",
-                            help="Дата заказа",
-                            width="small"
-                        ),
-                        "Месяц": st.column_config.TextColumn(
-                            "Месяц",
-                            help="Месяц из Excel листа",
-                            width="small"
-                        ),
-                        "№ заказа": st.column_config.TextColumn(
-                            "№ заказа",
-                            help="Номер заказа",
-                            width="small"
-                        )
-                    },
-                    disabled=["Артикул", "Товар", "Цвет", "Клиент", "Дата", "Месяц", "№ заказа"],
-                    hide_index=True,
-                    use_container_width=True,
-                    key=f"orders_table_page_{start_idx}"
-                )
-                
-                # Update session state based on table selections
-                for i, row in edited_df.iterrows():
+                # Create custom table with interactive elements
+                for i, order in enumerate(orders_to_show):
                     actual_idx = start_idx + i
-                    st.session_state[f"order_{actual_idx}"] = row["Выбрать"]
+                    
+                    # Create columns for each row
+                    col1, col2, col3, col4, col5, col6, col7, col8, col9 = st.columns([0.8, 0.8, 1.2, 2.5, 0.8, 1.5, 0.8, 0.8, 1.0])
+                    
+                    with col1:
+                        # Checkbox for selection
+                        is_selected = st.checkbox(
+                            "✓",
+                            value=st.session_state.get(f"order_{actual_idx}", False),
+                            key=f"select_{actual_idx}",
+                            label_visibility="collapsed"
+                        )
+                        st.session_state[f"order_{actual_idx}"] = is_selected
+                    
+                    with col2:
+                        # Number input with arrows for quantity
+                        quantity = st.number_input(
+                            "Кол-во",
+                            min_value=1,
+                            max_value=100,
+                            value=st.session_state.get(f"quantity_{actual_idx}", 1),
+                            step=1,
+                            key=f"quantity_input_{actual_idx}",
+                            label_visibility="collapsed"
+                        )
+                        st.session_state[f"quantity_{actual_idx}"] = quantity
+                    
+                    with col3:
+                        st.text(order['article'])
+                    
+                    with col4:
+                        product_display = order['product'][:50] + "..." if len(order['product']) > 50 else order['product']
+                        st.text(product_display)
+                    
+                    with col5:
+                        color = order.get('color', 'серый')
+                        color_emoji = "⚫" if color == "чёрный" else "⚪" if color == "серый" else "🔘"
+                        st.text(f"{color_emoji} {color}")
+                    
+                    with col6:
+                        client_display = order.get('client', '')[:25] + "..." if len(order.get('client', '')) > 25 else order.get('client', '')
+                        st.text(client_display)
+                    
+                    with col7:
+                        st.text(order.get('date', '')[:10])
+                    
+                    with col8:
+                        st.text(order['sheet'])
+                    
+                    with col9:
+                        st.text(order.get('order_id', ''))
             
             # Bulk selection controls
             col1, col2, col3 = st.columns([1, 1, 2])
@@ -475,23 +471,48 @@ if excel_file is not None:
                         st.session_state[f"order_{start_idx + i}"] = False
                     st.rerun()
             
-            # Collect all selected orders from all pages
+            # Collect all selected orders from all pages, multiplying by quantity
             all_selected_orders = []
             for i in range(len(all_orders)):
                 if st.session_state.get(f"order_{i}", False):
-                    all_selected_orders.append(all_orders[i])
+                    order = all_orders[i]
+                    quantity = st.session_state.get(f"quantity_{i}", 1)
+                    
+                    # Add the order multiple times based on quantity
+                    for repeat_num in range(quantity):
+                        # Create a copy of the order with a unique identifier
+                        repeated_order = order.copy()
+                        repeated_order['repeat_index'] = repeat_num + 1
+                        repeated_order['original_index'] = i
+                        
+                        # Make order_id unique for each repeat
+                        if quantity > 1:
+                            repeated_order['order_id'] = f"{order['order_id']}_повтор_{repeat_num + 1}"
+                        
+                        all_selected_orders.append(repeated_order)
             
             if all_selected_orders:
-                st.success(f"🎯 Выбрано заказов: {len(all_selected_orders)}")
+                # Count unique orders
+                unique_orders = len(set(order.get('original_index', i) for i, order in enumerate(all_selected_orders)))
+                total_orders = len(all_selected_orders)
+                
+                if unique_orders == total_orders:
+                    st.success(f"🎯 Выбрано заказов: {total_orders}")
+                else:
+                    st.success(f"🎯 Выбрано заказов: {unique_orders} уникальных ({total_orders} всего с повторами)")
                 
                 # Show selected orders summary in table format (only for reasonable number of orders)
                 if len(all_selected_orders) <= 20:
                     with st.expander("📋 Выбранные заказы", expanded=False):
                         selected_summary = []
                         for order in all_selected_orders:
+                            order_display = order['product'][:40] + "..." if len(order['product']) > 40 else order['product']
+                            if 'repeat_index' in order:
+                                order_display += f" (повтор {order['repeat_index']})"
+                            
                             selected_summary.append({
                                 "Артикул": order['article'],
-                                "Товар": order['product'][:40] + "..." if len(order['product']) > 40 else order['product'],
+                                "Товар": order_display,
                                 "Месяц": order['sheet']
                                 })
                         
