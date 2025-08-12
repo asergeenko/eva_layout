@@ -1075,7 +1075,7 @@ if st.button("🚀 Оптимизировать раскрой"):
             st.metric("Теоретический минимум листов", max(1, int(np.ceil(total_area_cm2 / largest_sheet_area))))
         
         # Auto-scale polygons if needed (use largest available sheet for scaling reference)
-        st.header("📐 Масштабирование полигонов")
+        #st.header("📐 Масштабирование полигонов")
         
         # Find largest sheet for scaling reference
         max_sheet_area = 0
@@ -1090,134 +1090,134 @@ if st.button("🚀 Оптимизировать раскрой"):
         scaled_polygons = scale_polygons_to_fit(polygons, reference_sheet_size, verbose=False)
         
         # Show scaling details in expander
-        with st.expander("🔍 Подробная информация о масштабировании", expanded=False):
-            st.info(f"Используем самый большой лист ({reference_sheet_size[0]}x{reference_sheet_size[1]} см) как эталон для масштабирования")
-            scale_polygons_to_fit(polygons, reference_sheet_size, verbose=True)
+        #with st.expander("🔍 Подробная информация о масштабировании", expanded=False):
+        #    st.info(f"Используем самый большой лист ({reference_sheet_size[0]}x{reference_sheet_size[1]} см) как эталон для масштабирования")
+        #    scale_polygons_to_fit(polygons, reference_sheet_size, verbose=True)
         
         polygons = scaled_polygons
         
-        with st.expander("🔄 Процесс оптимизации", expanded=False):
-            try:
-                # Debug processing with detailed info
-                with st.expander("🔍 Подробная информация об оптимизации", expanded=False):
-                    debug_layouts, debug_unplaced = bin_packing_with_inventory(polygons, st.session_state.available_sheets, verbose=True, max_sheets_per_order=MAX_SHEETS_PER_ORDER)
+        st.header("🔄 Процесс оптимизации")
+        try:
+            # Debug processing with detailed info
+            #with st.expander("🔍 Подробная информация об оптимизации", expanded=False):
+            #    debug_layouts, debug_unplaced = bin_packing_with_inventory(polygons, st.session_state.available_sheets, verbose=True, max_sheets_per_order=MAX_SHEETS_PER_ORDER)
 
-                # Actual processing with progress tracking
-                st.info("🔄 Запуск процесса оптимизации...")
-                optimization_progress = st.progress(0)
-                optimization_status = st.empty()
-                
-                # Initialize optimization
-                optimization_progress.progress(10)
-                optimization_status.text("Подготовка данных для оптимизации...")
-                
-                logger.info(f"Вызываем bin_packing_with_inventory с MAX_SHEETS_PER_ORDER={MAX_SHEETS_PER_ORDER}")
-                logger.info(f"Входные параметры: {len(polygons)} полигонов, {len(st.session_state.available_sheets)} типов листов")
+            # Actual processing with progress tracking
+            st.info("🔄 Запуск процесса оптимизации...")
+            optimization_progress = st.progress(0)
+            optimization_status = st.empty()
 
-                # DEBUG: Log what polygons we're sending
-                optimization_progress.progress(20)
-                optimization_status.text("Анализ входных полигонов...")
-                
-                logger.info("ПОЛИГОНЫ ПЕРЕД ОТПРАВКОЙ В bin_packing_with_inventory:")
-                for i, polygon_tuple in enumerate(polygons):
-                    if len(polygon_tuple) >= 4:
-                        logger.info(f"  Полигон {i}: файл={polygon_tuple[1]}, order_id={polygon_tuple[3]}")
-                    else:
-                        logger.warning(f"  Полигон {i}: неполный tuple (длина={len(polygon_tuple)})")
+            # Initialize optimization
+            optimization_progress.progress(10)
+            optimization_status.text("Подготовка данных для оптимизации...")
 
-                # Main optimization step
-                optimization_progress.progress(50)
-                optimization_status.text("Выполнение алгоритма размещения...")
-                
-                placed_layouts, unplaced_polygons = bin_packing_with_inventory(polygons, st.session_state.available_sheets, verbose=False, max_sheets_per_order=MAX_SHEETS_PER_ORDER)
-                
-                # Processing results
-                optimization_progress.progress(80)
-                optimization_status.text("Обработка результатов...")
-                
-                logger.info(f"Результат bin_packing: {len(placed_layouts)} размещенных листов, {len(unplaced_polygons)} неразмещенных полигонов")
-                
-                # Finalize
-                optimization_progress.progress(100)
-                optimization_status.text("✅ Оптимизация завершена!")
-                
-                # Clear progress indicators after a moment
-                import time
-                time.sleep(1)
-                optimization_progress.empty()
-                optimization_status.empty()
+            logger.info(f"Вызываем bin_packing_with_inventory с MAX_SHEETS_PER_ORDER={MAX_SHEETS_PER_ORDER}")
+            logger.info(f"Входные параметры: {len(polygons)} полигонов, {len(st.session_state.available_sheets)} типов листов")
 
-            except ValueError as e:
-                # Handle order constraint violations
-                if "Нарушение ограничений заказов" in str(e):
-                    st.error(f"❌ {str(e)}")
-                    st.info(f"💡 **Решение**: Увеличьте константу MAX_SHEETS_PER_ORDER (сейчас: {MAX_SHEETS_PER_ORDER}) или разделите файлы заказа на несколько частей.")
-                    st.stop()
+            # DEBUG: Log what polygons we're sending
+            optimization_progress.progress(20)
+            optimization_status.text("Анализ входных полигонов...")
+
+            logger.info("ПОЛИГОНЫ ПЕРЕД ОТПРАВКОЙ В bin_packing_with_inventory:")
+            for i, polygon_tuple in enumerate(polygons):
+                if len(polygon_tuple) >= 4:
+                    logger.info(f"  Полигон {i}: файл={polygon_tuple[1]}, order_id={polygon_tuple[3]}")
                 else:
-                    # Re-raise other ValueError exceptions
-                    raise
+                    logger.warning(f"  Полигон {i}: неполный tuple (длина={len(polygon_tuple)})")
 
-            # Convert to old format for compatibility with existing display code
-            st.info("🔨 Создание выходных файлов и визуализаций...")
-            results_progress = st.progress(0)
-            results_status = st.empty()
-            
-            all_layouts = []
-            report_data = []
+            # Main optimization step
+            optimization_progress.progress(50)
+            optimization_status.text("Выполнение алгоритма размещения...")
 
-            total_layouts = len(placed_layouts)
-            for i, layout in enumerate(placed_layouts):
-                # Update progress
-                progress_value = int((i / total_layouts) * 100) if total_layouts > 0 else 100
-                results_progress.progress(progress_value)
-                results_status.text(f"Создание файла {i + 1}/{total_layouts}: лист {layout['sheet_number']}")
-                
-                # Save and visualize layout with new naming format: length_width_number.dxf
-                sheet_width = int(layout['sheet_size'][0])
-                sheet_height = int(layout['sheet_size'][1])
-                sheet_number = layout['sheet_number']
-                output_filename = f"{sheet_height}_{sheet_width}_{sheet_number}.dxf"
-                output_file = os.path.join(OUTPUT_FOLDER, output_filename)
-                save_dxf_layout_complete(layout['placed_polygons'], layout['sheet_size'], output_file, original_dxf_data_map)
-                layout_plot = plot_layout(layout['placed_polygons'], layout['sheet_size'])
+            placed_layouts, unplaced_polygons = bin_packing_with_inventory(polygons, st.session_state.available_sheets, verbose=False, max_sheets_per_order=MAX_SHEETS_PER_ORDER)
 
-                # Find sheet color from original sheet data
-                sheet_color = "не указан"
-                for sheet in st.session_state.available_sheets:
-                    if sheet['name'] == layout['sheet_type']:
-                        sheet_color = sheet.get('color', 'не указан')
-                        break
+            # Processing results
+            optimization_progress.progress(80)
+            optimization_status.text("Обработка результатов...")
 
-                # Store layout info in old format for compatibility
-                all_layouts.append({
-                    "Sheet": layout['sheet_number'],
-                    "Sheet Type": layout['sheet_type'],
-                    "Sheet Color": sheet_color,
-                    "Sheet Size": f"{layout['sheet_size'][0]}x{layout['sheet_size'][1]} см",
-                    "Output File": output_file,
-                    "Plot": layout_plot,
-                    "Shapes Placed": len(layout['placed_polygons']),
-                    "Material Usage (%)": f"{layout['usage_percent']:.2f}",
-                    "Placed Polygons": layout['placed_polygons']
-                })
-                report_data.extend([(p[4], layout['sheet_number'], output_file) for p in layout['placed_polygons']])
+            logger.info(f"Результат bin_packing: {len(placed_layouts)} размещенных листов, {len(unplaced_polygons)} неразмещенных полигонов")
 
-            # Finalize results processing
-            results_progress.progress(100)
-            results_status.text("✅ Все файлы созданы!")
-            
-            # Update sheet inventory in session state
-            for layout in placed_layouts:
-                for original_sheet in st.session_state.available_sheets:
-                    if layout['sheet_type'] == original_sheet['name']:
-                        original_sheet['used'] += 1
-                        break
-            
-            # Clear progress indicators
+            # Finalize
+            optimization_progress.progress(100)
+            optimization_status.text("✅ Оптимизация завершена!")
+
+            # Clear progress indicators after a moment
             import time
             time.sleep(1)
-            results_progress.empty()
-            results_status.empty()
+            optimization_progress.empty()
+            optimization_status.empty()
+
+        except ValueError as e:
+            # Handle order constraint violations
+            if "Нарушение ограничений заказов" in str(e):
+                st.error(f"❌ {str(e)}")
+                st.info(f"💡 **Решение**: Увеличьте константу MAX_SHEETS_PER_ORDER (сейчас: {MAX_SHEETS_PER_ORDER}) или разделите файлы заказа на несколько частей.")
+                st.stop()
+            else:
+                # Re-raise other ValueError exceptions
+                raise
+
+        # Convert to old format for compatibility with existing display code
+        st.info("🔨 Создание выходных файлов и визуализаций...")
+        results_progress = st.progress(0)
+        results_status = st.empty()
+
+        all_layouts = []
+        report_data = []
+
+        total_layouts = len(placed_layouts)
+        for i, layout in enumerate(placed_layouts):
+            # Update progress
+            progress_value = int((i / total_layouts) * 100) if total_layouts > 0 else 100
+            results_progress.progress(progress_value)
+            results_status.text(f"Создание файла {i + 1}/{total_layouts}: лист {layout['sheet_number']}")
+
+            # Save and visualize layout with new naming format: length_width_number.dxf
+            sheet_width = int(layout['sheet_size'][0])
+            sheet_height = int(layout['sheet_size'][1])
+            sheet_number = layout['sheet_number']
+            output_filename = f"{sheet_height}_{sheet_width}_{sheet_number}.dxf"
+            output_file = os.path.join(OUTPUT_FOLDER, output_filename)
+            save_dxf_layout_complete(layout['placed_polygons'], layout['sheet_size'], output_file, original_dxf_data_map)
+            layout_plot = plot_layout(layout['placed_polygons'], layout['sheet_size'])
+
+            # Find sheet color from original sheet data
+            sheet_color = "не указан"
+            for sheet in st.session_state.available_sheets:
+                if sheet['name'] == layout['sheet_type']:
+                    sheet_color = sheet.get('color', 'не указан')
+                    break
+
+            # Store layout info in old format for compatibility
+            all_layouts.append({
+                "Sheet": layout['sheet_number'],
+                "Sheet Type": layout['sheet_type'],
+                "Sheet Color": sheet_color,
+                "Sheet Size": f"{layout['sheet_size'][0]}x{layout['sheet_size'][1]} см",
+                "Output File": output_file,
+                "Plot": layout_plot,
+                "Shapes Placed": len(layout['placed_polygons']),
+                "Material Usage (%)": f"{layout['usage_percent']:.2f}",
+                "Placed Polygons": layout['placed_polygons']
+            })
+            report_data.extend([(p[4], layout['sheet_number'], output_file) for p in layout['placed_polygons']])
+
+        # Finalize results processing
+        results_progress.progress(100)
+        results_status.text("✅ Все файлы созданы!")
+
+        # Update sheet inventory in session state
+        for layout in placed_layouts:
+            for original_sheet in st.session_state.available_sheets:
+                if layout['sheet_type'] == original_sheet['name']:
+                    original_sheet['used'] += 1
+                    break
+
+        # Clear progress indicators
+        import time
+        time.sleep(1)
+        results_progress.empty()
+        results_status.empty()
 
         # Display Results
         st.header("📊 Результаты")

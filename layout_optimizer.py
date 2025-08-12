@@ -370,7 +370,7 @@ def save_dxf_layout_complete(placed_elements, sheet_size, output_path, original_
     
     # Save the document
     doc.saveas(output_path)
-    st.success(f"💾 Сохранен улучшенный выходной DXF файл: {output_path}")
+    #st.success(f"💾 Сохранен улучшенный выходной DXF файл: {output_path}")
 
 
 def parse_dxf(file, verbose=True) -> Polygon:
