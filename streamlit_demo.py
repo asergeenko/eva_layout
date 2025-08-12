@@ -958,13 +958,13 @@ if st.button("🚀 Оптимизировать раскрой"):
         status_text.text(f"✅ Обработка завершена! Загружено {len(polygons)} полигонов из {len(dxf_files)} файлов")
         
         # Show detailed parsing info in expander
-        with st.expander("🔍 Подробная информация о парсинге файлов", expanded=False):
-            st.write("Подробная информация об улучшенном парсинге файлов:")
-            for file in dxf_files:
-                st.write(f"**Анализ файла: {file.name}**")
-                file.seek(0)
-                file_bytes = BytesIO(file.read())
-                parse_dxf_complete(file_bytes, verbose=True)
+        #with st.expander("🔍 Подробная информация о парсинге файлов", expanded=False):
+        #    st.write("Подробная информация об улучшенном парсинге файлов:")
+        #    for file in dxf_files:
+        #        st.write(f"**Анализ файла: {file.name}**")
+        #        file.seek(0)
+        #        file_bytes = BytesIO(file.read())
+        #        parse_dxf_complete(file_bytes, verbose=True)
         
         if not polygons:
             st.error("В загруженных DXF файлах не найдено валидных полигонов!")
@@ -1013,56 +1013,56 @@ if st.button("🚀 Оптимизировать раскрой"):
                         st.image(plot_buf, caption=f"{file_name}", use_container_width=True)
         
         # Show polygon statistics with real dimensions
-        st.subheader("📊 Статистика исходных файлов")
+        with st.expander("📊 Статистика исходных файлов", expanded=False):
         
-        # Store original dimensions for comparison later
-        original_dimensions = {}
-        
-        # Create a summary table with proper unit conversion
-        summary_data = []
-        total_area_cm2 = 0
-        for polygon_tuple in polygons:
-            if len(polygon_tuple) >= 4:  # Extended format with color and order_id
-                poly, filename, color, order_id = polygon_tuple[:4]
-            elif len(polygon_tuple) >= 3:  # Format with color
-                poly, filename, color = polygon_tuple[:3]
-                order_id = 'unknown'
-            else:  # Old format without color
-                poly, filename = polygon_tuple[:2]
-                color = 'серый'
-                order_id = 'unknown'
-            bounds = poly.bounds
-            width_mm = bounds[2] - bounds[0]
-            height_mm = bounds[3] - bounds[1]
-            area_mm2 = poly.area
-            
-            # Convert from mm to cm
-            width_cm = width_mm / 10.0
-            height_cm = height_mm / 10.0
-            area_cm2 = area_mm2 / 100.0
-            
-            # Store original dimensions
-            original_dimensions[filename] = {
-                "width_cm": width_cm,
-                "height_cm": height_cm,
-                "area_cm2": area_cm2
-            }
-            
-            total_area_cm2 += area_cm2
-            # Add color emoji for display
-            color_emoji = "⚫" if color == "чёрный" else "⚪" if color == "серый" else "🔘"
-            color_display = f"{color_emoji} {color}"
-            
-            summary_data.append({
-                "Файл": filename,
-                "Ширина (см)": f"{width_cm:.1f}",
-                "Высота (см)": f"{height_cm:.1f}",
-                "Площадь (см²)": f"{area_cm2:.2f}",
-                "Цвет": color_display,
-            })
-        
-        summary_df = pd.DataFrame(summary_data)
-        st.dataframe(summary_df, use_container_width=True)
+            # Store original dimensions for comparison later
+            original_dimensions = {}
+
+            # Create a summary table with proper unit conversion
+            summary_data = []
+            total_area_cm2 = 0
+            for polygon_tuple in polygons:
+                if len(polygon_tuple) >= 4:  # Extended format with color and order_id
+                    poly, filename, color, order_id = polygon_tuple[:4]
+                elif len(polygon_tuple) >= 3:  # Format with color
+                    poly, filename, color = polygon_tuple[:3]
+                    order_id = 'unknown'
+                else:  # Old format without color
+                    poly, filename = polygon_tuple[:2]
+                    color = 'серый'
+                    order_id = 'unknown'
+                bounds = poly.bounds
+                width_mm = bounds[2] - bounds[0]
+                height_mm = bounds[3] - bounds[1]
+                area_mm2 = poly.area
+
+                # Convert from mm to cm
+                width_cm = width_mm / 10.0
+                height_cm = height_mm / 10.0
+                area_cm2 = area_mm2 / 100.0
+
+                # Store original dimensions
+                original_dimensions[filename] = {
+                    "width_cm": width_cm,
+                    "height_cm": height_cm,
+                    "area_cm2": area_cm2
+                }
+
+                total_area_cm2 += area_cm2
+                # Add color emoji for display
+                color_emoji = "⚫" if color == "чёрный" else "⚪" if color == "серый" else "🔘"
+                color_display = f"{color_emoji} {color}"
+
+                summary_data.append({
+                    "Файл": filename,
+                    "Ширина (см)": f"{width_cm:.1f}",
+                    "Высота (см)": f"{height_cm:.1f}",
+                    "Площадь (см²)": f"{area_cm2:.2f}",
+                    "Цвет": color_display,
+                })
+
+            summary_df = pd.DataFrame(summary_data)
+            st.dataframe(summary_df, use_container_width=True)
         
         # Calculate theoretical minimum using largest available sheet
         largest_sheet_area = max(sheet['width'] * sheet['height'] for sheet in st.session_state.available_sheets)
