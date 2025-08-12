@@ -1102,11 +1102,22 @@ if st.button("🚀 Оптимизировать раскрой"):
                 with st.expander("🔍 Подробная информация об оптимизации", expanded=False):
                     debug_layouts, debug_unplaced = bin_packing_with_inventory(polygons, st.session_state.available_sheets, verbose=True, max_sheets_per_order=MAX_SHEETS_PER_ORDER)
 
-                # Actual processing (quiet)
+                # Actual processing with progress tracking
+                st.info("🔄 Запуск процесса оптимизации...")
+                optimization_progress = st.progress(0)
+                optimization_status = st.empty()
+                
+                # Initialize optimization
+                optimization_progress.progress(10)
+                optimization_status.text("Подготовка данных для оптимизации...")
+                
                 logger.info(f"Вызываем bin_packing_with_inventory с MAX_SHEETS_PER_ORDER={MAX_SHEETS_PER_ORDER}")
                 logger.info(f"Входные параметры: {len(polygons)} полигонов, {len(st.session_state.available_sheets)} типов листов")
 
                 # DEBUG: Log what polygons we're sending
+                optimization_progress.progress(20)
+                optimization_status.text("Анализ входных полигонов...")
+                
                 logger.info("ПОЛИГОНЫ ПЕРЕД ОТПРАВКОЙ В bin_packing_with_inventory:")
                 for i, polygon_tuple in enumerate(polygons):
                     if len(polygon_tuple) >= 4:
@@ -1114,8 +1125,27 @@ if st.button("🚀 Оптимизировать раскрой"):
                     else:
                         logger.warning(f"  Полигон {i}: неполный tuple (длина={len(polygon_tuple)})")
 
+                # Main optimization step
+                optimization_progress.progress(50)
+                optimization_status.text("Выполнение алгоритма размещения...")
+                
                 placed_layouts, unplaced_polygons = bin_packing_with_inventory(polygons, st.session_state.available_sheets, verbose=False, max_sheets_per_order=MAX_SHEETS_PER_ORDER)
+                
+                # Processing results
+                optimization_progress.progress(80)
+                optimization_status.text("Обработка результатов...")
+                
                 logger.info(f"Результат bin_packing: {len(placed_layouts)} размещенных листов, {len(unplaced_polygons)} неразмещенных полигонов")
+                
+                # Finalize
+                optimization_progress.progress(100)
+                optimization_status.text("✅ Оптимизация завершена!")
+                
+                # Clear progress indicators after a moment
+                import time
+                time.sleep(1)
+                optimization_progress.empty()
+                optimization_status.empty()
 
             except ValueError as e:
                 # Handle order constraint violations
@@ -1128,10 +1158,20 @@ if st.button("🚀 Оптимизировать раскрой"):
                     raise
 
             # Convert to old format for compatibility with existing display code
+            st.info("🔨 Создание выходных файлов и визуализаций...")
+            results_progress = st.progress(0)
+            results_status = st.empty()
+            
             all_layouts = []
             report_data = []
 
+            total_layouts = len(placed_layouts)
             for i, layout in enumerate(placed_layouts):
+                # Update progress
+                progress_value = int((i / total_layouts) * 100) if total_layouts > 0 else 100
+                results_progress.progress(progress_value)
+                results_status.text(f"Создание файла {i + 1}/{total_layouts}: лист {layout['sheet_number']}")
+                
                 # Save and visualize layout with new naming format: length_width_number.dxf
                 sheet_width = int(layout['sheet_size'][0])
                 sheet_height = int(layout['sheet_size'][1])
@@ -1162,12 +1202,22 @@ if st.button("🚀 Оптимизировать раскрой"):
                 })
                 report_data.extend([(p[4], layout['sheet_number'], output_file) for p in layout['placed_polygons']])
 
+            # Finalize results processing
+            results_progress.progress(100)
+            results_status.text("✅ Все файлы созданы!")
+            
             # Update sheet inventory in session state
             for layout in placed_layouts:
                 for original_sheet in st.session_state.available_sheets:
                     if layout['sheet_type'] == original_sheet['name']:
                         original_sheet['used'] += 1
                         break
+            
+            # Clear progress indicators
+            import time
+            time.sleep(1)
+            results_progress.empty()
+            results_status.empty()
 
         # Display Results
         st.header("📊 Результаты")
