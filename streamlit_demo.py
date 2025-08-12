@@ -216,7 +216,7 @@ if st.session_state.available_sheets:
         # Add color indicator
         color = sheet.get('color', 'не указан')
         color_emoji = "⚫" if color == "чёрный" else "⚪" if color == "серый" else "🔘"
-        color_display = f"{color_emoji} {color}"
+        color_display = f"{color_emoji}"
         
         sheets_data.append({
             "№": i + 1,
@@ -293,9 +293,7 @@ if excel_file is not None:
             prev_month_ru = month_mapping.get(prev_date.strftime("%B").upper(), "ИЮНЬ") + " " + str(prev_date.year)
         
         target_sheets = [current_month_ru, prev_month_ru]
-        
-        st.info(f"🗓️ Ищем листы для: {', '.join(target_sheets)}")
-        
+
         # Process target sheets
         all_orders = []
         for sheet_name in target_sheets:
@@ -365,128 +363,107 @@ if excel_file is not None:
             # Update all_orders with filtered results for display
             display_orders = filtered_orders
         
-            # Create selection interface
-            selected_indices = []
-            
-            # Show orders in batches of 10 for better UX
-            orders_per_page = 10
-            total_pages = (len(display_orders) + orders_per_page - 1) // orders_per_page
-            
-            if total_pages > 1:
-                page = st.selectbox("Страница", range(1, total_pages + 1), key="orders_page") - 1
-                start_idx = page * orders_per_page
-                end_idx = min(start_idx + orders_per_page, len(display_orders))
-                orders_to_show = display_orders[start_idx:end_idx]
-            else:
-                orders_to_show = display_orders
-                start_idx = 0
+            # Create selection interface with all orders (no pagination)
+            orders_to_show = display_orders
+            start_idx = 0
             
             # Display orders with interactive controls
             if orders_to_show:
-                # Add header row
-                col1, col2, col3, col4, col5, col6, col7, col8, col9, col10 = st.columns([0.7, 0.7, 1.0, 2.0, 0.7, 1.0, 0.7, 0.7, 0.8, 0.9])
-                with col1:
-                    st.markdown("**Выбрать**")
-                with col2:
-                    st.markdown("**Кол-во**")
-                with col3:
-                    st.markdown("**Артикул**")
-                with col4:
-                    st.markdown("**Товар**")
-                with col5:
-                    st.markdown("**Тип**")
-                with col6:
-                    st.markdown("**Цвет**")
-                with col7:
-                    st.markdown("**Клиент**")
-                with col8:
-                    st.markdown("**Дата**")
-                with col9:
-                    st.markdown("**Месяц**")
-                with col10:
-                    st.markdown("**№ заказа**")
-                st.markdown("---")
+                # Interactive table with controls for each row
+                st.markdown("**Выберите заказы для раскроя:**")
                 
-                # Create custom table with interactive elements
+                # Prepare data for DataFrame display
+                orders_data = []
                 for i, order in enumerate(orders_to_show):
                     actual_idx = start_idx + i
                     
-                    # Create columns for each row
-                    col1, col2, col3, col4, col5, col6, col7, col8, col9, col10 = st.columns([0.7, 0.7, 1.0, 2.0, 0.7, 1.0, 0.7, 0.7, 0.8, 0.9])
+                    # Get current selection state and quantity
+                    is_selected = st.session_state.get(f"order_{actual_idx}", False)
+                    current_qty = st.session_state.get(f"quantity_{actual_idx}", 1)
                     
-                    with col1:
-                        # Checkbox for selection
+                    # Color emoji
+                    color = order.get('color', 'серый')
+                    color_emoji = "⚫" if color == "чёрный" else "⚪" if color == "серый" else "🔘"
+                    
+                    orders_data.append({
+                        "№": actual_idx + 1,
+                        "Выбрать": "✓" if is_selected else "",
+                        "Кол-во": current_qty,
+                        "Артикул": order['article'],
+                        "Товар": order['product'][:40] + "..." if len(order['product']) > 40 else order['product'],
+                        "Тип": order.get('product_type', ''),
+                        "Цвет": color_emoji,
+                        "Дата": order.get('date', '')[:10] if order.get('date', '') else ''
+                    })
+                
+                # Display DataFrame (small font like "Available sheets")
+                #orders_df = pd.DataFrame(orders_data)
+                #st.dataframe(orders_df, use_container_width=True, hide_index=True, height=400)
+                
+                # Interactive controls below for editing
+                #st.markdown("**Редактирование заказов:**")
+                
+                # Create columns for interactive controls
+                for i, order in enumerate(orders_to_show):
+                    actual_idx = start_idx + i
+                    
+                    cols = st.columns([1, 2, 10, 6, 3])
+                    
+                    # Selection checkbox
+                    with cols[0]:
                         is_selected = st.checkbox(
-                            "✓",
+                            f"№{actual_idx + 1}",
                             value=st.session_state.get(f"order_{actual_idx}", False),
                             key=f"select_{actual_idx}",
                             label_visibility="collapsed"
                         )
                         st.session_state[f"order_{actual_idx}"] = is_selected
                     
-                    with col2:
-                        # Number input with arrows for quantity
+                    # Quantity number input
+                    with cols[1]:
                         quantity = st.number_input(
-                            "Кол-во",
+                            f"Количество для заказа {actual_idx + 1}",
                             min_value=1,
                             max_value=100,
                             value=st.session_state.get(f"quantity_{actual_idx}", 1),
-                            step=1,
-                            key=f"quantity_input_{actual_idx}",
+                            key=f"qty_{actual_idx}",
                             label_visibility="collapsed"
                         )
                         st.session_state[f"quantity_{actual_idx}"] = quantity
                     
-                    with col3:
-                        st.text(order['article'])
+                    # Display order info for reference
+                    with cols[2]:
+                        st.write(f"**{order['article']}**")
                     
-                    with col4:
-                        product_display = order['product'][:40] + "..." if len(order['product']) > 40 else order['product']
-                        st.text(product_display)
+                    with cols[3]:
+                        product_text = order['product'][:30] + "..." if len(order['product']) > 30 else order['product']
+                        st.write(product_text)
                     
-                    with col5:
-                        # Display product type
-                        product_type = order.get('product_type', '')
-                        st.text(product_type)
-                    
-                    with col6:
+                    with cols[4]:
                         color = order.get('color', 'серый')
                         color_emoji = "⚫" if color == "чёрный" else "⚪" if color == "серый" else "🔘"
-                        st.text(f"{color_emoji} {color}")
-                    
-                    with col7:
-                        client_display = order.get('client', '')[:20] + "..." if len(order.get('client', '')) > 20 else order.get('client', '')
-                        st.text(client_display)
-                    
-                    with col8:
-                        st.text(order.get('date', '')[:10])
-                    
-                    with col9:
-                        st.text(order['sheet'])
-                    
-                    with col10:
-                        st.text(order.get('order_id', ''))
+                        st.write(f"{color_emoji} {order.get('product_type', '')}")
+                
+                # Bulk controls
+                col1, col2 = st.columns([1, 1])
+                with col1:
+                    if st.button("✅ Выбрать все", key="select_all_orders"):
+                        for i in range(len(orders_to_show)):
+                            st.session_state[f"order_{start_idx + i}"] = True
+                        st.rerun()
+                
+                with col2:
+                    if st.button("❌ Снять выбор", key="deselect_all_orders"):
+                        for i in range(len(orders_to_show)):
+                            st.session_state[f"order_{start_idx + i}"] = False
+                        st.rerun()
+
             
-            # Bulk selection controls
-            col1, col2, col3 = st.columns([1, 1, 2])
-            with col1:
-                if st.button("✅ Выбрать все", key=f"select_all_{start_idx}"):
-                    for i in range(len(orders_to_show)):
-                        st.session_state[f"order_{start_idx + i}"] = True
-                    # Mark that we just performed bulk selection to avoid double processing
-                    st.session_state[f"bulk_selected_{start_idx}"] = True
-                    st.rerun()
-            with col2:
-                if st.button("❌ Снять все", key=f"deselect_all_{start_idx}"):
-                    for i in range(len(orders_to_show)):
-                        st.session_state[f"order_{start_idx + i}"] = False
-                    st.rerun()
-            
-            # Collect all selected orders from all pages, multiplying by quantity
+            # Collect all selected orders, multiplying by quantity
             all_selected_orders = []
-            for i in range(len(all_orders)):
+            for i in range(len(display_orders)):
                 if st.session_state.get(f"order_{i}", False):
-                    order = all_orders[i]
+                    order = display_orders[i]
                     quantity = st.session_state.get(f"quantity_{i}", 1)
                     
                     # Add the order multiple times based on quantity
@@ -507,10 +484,10 @@ if excel_file is not None:
                 unique_orders = len(set(order.get('original_index', i) for i, order in enumerate(all_selected_orders)))
                 total_orders = len(all_selected_orders)
 
-                if unique_orders == total_orders:
-                    st.success(f"🎯 Выбрано заказов: {total_orders}")
-                else:
-                    st.success(f"🎯 Выбрано заказов: {unique_orders} уникальных ({total_orders} всего с повторами)")
+                #if unique_orders == total_orders:
+                #    st.success(f"🎯 Выбрано заказов: {total_orders}")
+                #else:
+                #    st.success(f"🎯 Выбрано заказов: {unique_orders} уникальных ({total_orders} всего с повторами)")
 
                 # Show selected orders summary in table format (only for reasonable number of orders)
                 if len(all_selected_orders) <= 20:
@@ -1003,35 +980,37 @@ if st.button("🚀 Оптимизировать раскрой"):
         logger.info(f"Анализ заказов: найдено {len(order_counts)} уникальных заказов")
         for order_id, count in order_counts.items():
             logger.info(f"  • Заказ {order_id}: {count} файлов")
-        
+
         st.info(f"📋 Найдено {len(order_counts)} уникальных заказов:")
-        for order_id, count in order_counts.items():
-            st.write(f"  • Заказ {order_id}: {count} файлов")
+        with st.expander("📋 Список найденных заказов", expanded=False):
+            for order_id, count in order_counts.items():
+                st.write(f"  • Заказ {order_id}: {count} файлов")
         
-        # Show input visualization
-        st.header("🔍 Визуализация входных файлов")
-        input_plots = plot_input_polygons(polygons)
-        if input_plots:
-            # Show color legend
-            with st.expander("🎨 Цветовая схема файлов", expanded=False):
-                legend_cols = st.columns(min(5, len(polygons)))
-                for i, polygon_tuple in enumerate(polygons):
-                    if len(polygon_tuple) >= 3:  # New format with color
-                        _, file_name, _ = polygon_tuple[:3]
-                    else:  # Old format without color
-                        _, file_name = polygon_tuple[:2]
-                    with legend_cols[i % len(legend_cols)]:
-                        from layout_optimizer import get_color_for_file
-                        color = get_color_for_file(file_name)
-                        # Convert RGB to hex for HTML
-                        color_hex = f"#{int(color[0]*255):02x}{int(color[1]*255):02x}{int(color[2]*255):02x}"
-                        st.markdown(f'<div style="background-color: {color_hex}; padding: 10px; border-radius: 5px; text-align: center; margin: 2px;"><b>{file_name}</b></div>', 
-                                  unsafe_allow_html=True)
-            
-            cols = st.columns(min(3, len(input_plots)))
-            for i, (file_name, plot_buf) in enumerate(input_plots.items()):
-                with cols[i % len(cols)]:
-                    st.image(plot_buf, caption=f"{file_name}", use_container_width=True)
+        # Optional input visualization (button-triggered)
+        if st.button("📊 Показать исходные файлы", key="show_input_visualization"):
+            st.subheader("🔍 Визуализация входных файлов")
+            input_plots = plot_input_polygons(polygons)
+            if input_plots:
+                # Show color legend
+                with st.expander("🎨 Цветовая схема файлов", expanded=False):
+                    legend_cols = st.columns(min(5, len(polygons)))
+                    for i, polygon_tuple in enumerate(polygons):
+                        if len(polygon_tuple) >= 3:  # New format with color
+                            _, file_name, _ = polygon_tuple[:3]
+                        else:  # Old format without color
+                            _, file_name = polygon_tuple[:2]
+                        with legend_cols[i % len(legend_cols)]:
+                            from layout_optimizer import get_color_for_file
+                            color = get_color_for_file(file_name)
+                            # Convert RGB to hex for HTML
+                            color_hex = f"#{int(color[0]*255):02x}{int(color[1]*255):02x}{int(color[2]*255):02x}"
+                            st.markdown(f'<div style="background-color: {color_hex}; padding: 10px; border-radius: 5px; text-align: center; margin: 2px;"><b>{file_name}</b></div>',
+                                      unsafe_allow_html=True)
+
+                cols = st.columns(min(3, len(input_plots)))
+                for i, (file_name, plot_buf) in enumerate(input_plots.items()):
+                    with cols[i % len(cols)]:
+                        st.image(plot_buf, caption=f"{file_name}", use_container_width=True)
         
         # Show polygon statistics with real dimensions
         st.subheader("📊 Статистика исходных файлов")
@@ -1080,7 +1059,6 @@ if st.button("🚀 Оптимизировать раскрой"):
                 "Высота (см)": f"{height_cm:.1f}",
                 "Площадь (см²)": f"{area_cm2:.2f}",
                 "Цвет": color_display,
-                "Заказ": order_id if order_id != 'unknown' else '-'
             })
         
         summary_df = pd.DataFrame(summary_data)
@@ -1118,79 +1096,78 @@ if st.button("🚀 Оптимизировать раскрой"):
         
         polygons = scaled_polygons
         
-        st.header("🔄 Процесс оптимизации")
+        with st.expander("🔄 Процесс оптимизации", expanded=False):
+            try:
+                # Debug processing with detailed info
+                with st.expander("🔍 Подробная информация об оптимизации", expanded=False):
+                    debug_layouts, debug_unplaced = bin_packing_with_inventory(polygons, st.session_state.available_sheets, verbose=True, max_sheets_per_order=MAX_SHEETS_PER_ORDER)
 
-        try:
-            # Debug processing with detailed info
-            with st.expander("🔍 Подробная информация об оптимизации", expanded=False):
-                debug_layouts, debug_unplaced = bin_packing_with_inventory(polygons, st.session_state.available_sheets, verbose=True, max_sheets_per_order=MAX_SHEETS_PER_ORDER)
-            
-            # Actual processing (quiet)
-            logger.info(f"Вызываем bin_packing_with_inventory с MAX_SHEETS_PER_ORDER={MAX_SHEETS_PER_ORDER}")
-            logger.info(f"Входные параметры: {len(polygons)} полигонов, {len(st.session_state.available_sheets)} типов листов")
-            
-            # DEBUG: Log what polygons we're sending
-            logger.info("ПОЛИГОНЫ ПЕРЕД ОТПРАВКОЙ В bin_packing_with_inventory:")
-            for i, polygon_tuple in enumerate(polygons):
-                if len(polygon_tuple) >= 4:
-                    logger.info(f"  Полигон {i}: файл={polygon_tuple[1]}, order_id={polygon_tuple[3]}")
+                # Actual processing (quiet)
+                logger.info(f"Вызываем bin_packing_with_inventory с MAX_SHEETS_PER_ORDER={MAX_SHEETS_PER_ORDER}")
+                logger.info(f"Входные параметры: {len(polygons)} полигонов, {len(st.session_state.available_sheets)} типов листов")
+
+                # DEBUG: Log what polygons we're sending
+                logger.info("ПОЛИГОНЫ ПЕРЕД ОТПРАВКОЙ В bin_packing_with_inventory:")
+                for i, polygon_tuple in enumerate(polygons):
+                    if len(polygon_tuple) >= 4:
+                        logger.info(f"  Полигон {i}: файл={polygon_tuple[1]}, order_id={polygon_tuple[3]}")
+                    else:
+                        logger.warning(f"  Полигон {i}: неполный tuple (длина={len(polygon_tuple)})")
+
+                placed_layouts, unplaced_polygons = bin_packing_with_inventory(polygons, st.session_state.available_sheets, verbose=False, max_sheets_per_order=MAX_SHEETS_PER_ORDER)
+                logger.info(f"Результат bin_packing: {len(placed_layouts)} размещенных листов, {len(unplaced_polygons)} неразмещенных полигонов")
+
+            except ValueError as e:
+                # Handle order constraint violations
+                if "Нарушение ограничений заказов" in str(e):
+                    st.error(f"❌ {str(e)}")
+                    st.info(f"💡 **Решение**: Увеличьте константу MAX_SHEETS_PER_ORDER (сейчас: {MAX_SHEETS_PER_ORDER}) или разделите файлы заказа на несколько частей.")
+                    st.stop()
                 else:
-                    logger.warning(f"  Полигон {i}: неполный tuple (длина={len(polygon_tuple)})")
-            
-            placed_layouts, unplaced_polygons = bin_packing_with_inventory(polygons, st.session_state.available_sheets, verbose=False, max_sheets_per_order=MAX_SHEETS_PER_ORDER)
-            logger.info(f"Результат bin_packing: {len(placed_layouts)} размещенных листов, {len(unplaced_polygons)} неразмещенных полигонов")
-        
-        except ValueError as e:
-            # Handle order constraint violations
-            if "Нарушение ограничений заказов" in str(e):
-                st.error(f"❌ {str(e)}")
-                st.info(f"💡 **Решение**: Увеличьте константу MAX_SHEETS_PER_ORDER (сейчас: {MAX_SHEETS_PER_ORDER}) или разделите файлы заказа на несколько частей.")
-                st.stop()
-            else:
-                # Re-raise other ValueError exceptions
-                raise
-        
-        # Convert to old format for compatibility with existing display code
-        all_layouts = []
-        report_data = []
-        
-        for i, layout in enumerate(placed_layouts):
-            # Save and visualize layout with new naming format: length_width_number.dxf
-            sheet_width = int(layout['sheet_size'][0])
-            sheet_height = int(layout['sheet_size'][1]) 
-            sheet_number = layout['sheet_number']
-            output_filename = f"{sheet_height}_{sheet_width}_{sheet_number}.dxf"
-            output_file = os.path.join(OUTPUT_FOLDER, output_filename)
-            save_dxf_layout_complete(layout['placed_polygons'], layout['sheet_size'], output_file, original_dxf_data_map)
-            layout_plot = plot_layout(layout['placed_polygons'], layout['sheet_size'])
+                    # Re-raise other ValueError exceptions
+                    raise
 
-            # Find sheet color from original sheet data
-            sheet_color = "не указан"
-            for sheet in st.session_state.available_sheets:
-                if sheet['name'] == layout['sheet_type']:
-                    sheet_color = sheet.get('color', 'не указан')
-                    break
-            
-            # Store layout info in old format for compatibility
-            all_layouts.append({
-                "Sheet": layout['sheet_number'],
-                "Sheet Type": layout['sheet_type'],
-                "Sheet Color": sheet_color,
-                "Sheet Size": f"{layout['sheet_size'][0]}x{layout['sheet_size'][1]} см",
-                "Output File": output_file,
-                "Plot": layout_plot,
-                "Shapes Placed": len(layout['placed_polygons']),
-                "Material Usage (%)": f"{layout['usage_percent']:.2f}",
-                "Placed Polygons": layout['placed_polygons']
-            })
-            report_data.extend([(p[4], layout['sheet_number'], output_file) for p in layout['placed_polygons']])
-        
-        # Update sheet inventory in session state
-        for layout in placed_layouts:
-            for original_sheet in st.session_state.available_sheets:
-                if layout['sheet_type'] == original_sheet['name']:
-                    original_sheet['used'] += 1
-                    break
+            # Convert to old format for compatibility with existing display code
+            all_layouts = []
+            report_data = []
+
+            for i, layout in enumerate(placed_layouts):
+                # Save and visualize layout with new naming format: length_width_number.dxf
+                sheet_width = int(layout['sheet_size'][0])
+                sheet_height = int(layout['sheet_size'][1])
+                sheet_number = layout['sheet_number']
+                output_filename = f"{sheet_height}_{sheet_width}_{sheet_number}.dxf"
+                output_file = os.path.join(OUTPUT_FOLDER, output_filename)
+                save_dxf_layout_complete(layout['placed_polygons'], layout['sheet_size'], output_file, original_dxf_data_map)
+                layout_plot = plot_layout(layout['placed_polygons'], layout['sheet_size'])
+
+                # Find sheet color from original sheet data
+                sheet_color = "не указан"
+                for sheet in st.session_state.available_sheets:
+                    if sheet['name'] == layout['sheet_type']:
+                        sheet_color = sheet.get('color', 'не указан')
+                        break
+
+                # Store layout info in old format for compatibility
+                all_layouts.append({
+                    "Sheet": layout['sheet_number'],
+                    "Sheet Type": layout['sheet_type'],
+                    "Sheet Color": sheet_color,
+                    "Sheet Size": f"{layout['sheet_size'][0]}x{layout['sheet_size'][1]} см",
+                    "Output File": output_file,
+                    "Plot": layout_plot,
+                    "Shapes Placed": len(layout['placed_polygons']),
+                    "Material Usage (%)": f"{layout['usage_percent']:.2f}",
+                    "Placed Polygons": layout['placed_polygons']
+                })
+                report_data.extend([(p[4], layout['sheet_number'], output_file) for p in layout['placed_polygons']])
+
+            # Update sheet inventory in session state
+            for layout in placed_layouts:
+                for original_sheet in st.session_state.available_sheets:
+                    if layout['sheet_type'] == original_sheet['name']:
+                        original_sheet['used'] += 1
+                        break
 
         # Display Results
         st.header("📊 Результаты")
