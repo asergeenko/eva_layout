@@ -170,8 +170,8 @@ with col1:
     )
     
     if sheet_type_option == "Произвольный":
-        sheet_width = st.number_input("Ширина (см)", min_value=50.0, max_value=300.0, value=140.0, key="custom_width")
-        sheet_height = st.number_input("Высота (см)", min_value=50.0, max_value=300.0, value=200.0, key="custom_height")
+        sheet_width = st.number_input("Ширина (см)", min_value=50.0, max_value=1000.0, value=140.0, key="custom_width")
+        sheet_height = st.number_input("Высота (см)", min_value=50.0, max_value=1000.0, value=200.0, key="custom_height")
         selected_size = (sheet_width, sheet_height)
     else:
         selected_size = tuple(map(float, sheet_type_option.split("x")))
@@ -322,6 +322,9 @@ if excel_file is not None:
                                 else:
                                     color = 'серый'  # Default color if not specified
                                 
+                                # Create unique order_id for each row (Excel row number + sheet name)
+                                unique_order_id = f"{sheet_name}_row_{idx}"
+                                
                                 order = {
                                     'sheet': sheet_name,
                                     'row_index': idx,
@@ -329,8 +332,9 @@ if excel_file is not None:
                                     'article': str(row.iloc[3]),
                                     'product': str(row.iloc[4]) if pd.notna(row.iloc[4]) else '',
                                     'client': str(row.iloc[5]) if pd.notna(row.iloc[5]) else '' if df.shape[1] > 5 else '',
-                                    'order_id': str(row.iloc[14]) if pd.notna(row.iloc[14]) and df.shape[1] > 13 else '',
-                                    'color': color
+                                    'order_id': unique_order_id,  # Use unique ID for each Excel row
+                                    'color': color,
+                                    'product_type': str(row.iloc[7]) if pd.notna(row.iloc[7]) and df.shape[1] > 7 else ''
                                 }
                                 all_orders.append(order)
         
@@ -380,7 +384,7 @@ if excel_file is not None:
             # Display orders with interactive controls
             if orders_to_show:
                 # Add header row
-                col1, col2, col3, col4, col5, col6, col7, col8, col9 = st.columns([0.8, 0.8, 1.2, 2.5, 0.8, 1.5, 0.8, 0.8, 1.0])
+                col1, col2, col3, col4, col5, col6, col7, col8, col9, col10 = st.columns([0.7, 0.7, 1.0, 2.0, 0.7, 1.0, 0.7, 0.7, 0.8, 0.9])
                 with col1:
                     st.markdown("**Выбрать**")
                 with col2:
@@ -390,14 +394,16 @@ if excel_file is not None:
                 with col4:
                     st.markdown("**Товар**")
                 with col5:
-                    st.markdown("**Цвет**")
+                    st.markdown("**Тип**")
                 with col6:
-                    st.markdown("**Клиент**")
+                    st.markdown("**Цвет**")
                 with col7:
-                    st.markdown("**Дата**")
+                    st.markdown("**Клиент**")
                 with col8:
-                    st.markdown("**Месяц**")
+                    st.markdown("**Дата**")
                 with col9:
+                    st.markdown("**Месяц**")
+                with col10:
                     st.markdown("**№ заказа**")
                 st.markdown("---")
                 
@@ -406,7 +412,7 @@ if excel_file is not None:
                     actual_idx = start_idx + i
                     
                     # Create columns for each row
-                    col1, col2, col3, col4, col5, col6, col7, col8, col9 = st.columns([0.8, 0.8, 1.2, 2.5, 0.8, 1.5, 0.8, 0.8, 1.0])
+                    col1, col2, col3, col4, col5, col6, col7, col8, col9, col10 = st.columns([0.7, 0.7, 1.0, 2.0, 0.7, 1.0, 0.7, 0.7, 0.8, 0.9])
                     
                     with col1:
                         # Checkbox for selection
@@ -435,25 +441,30 @@ if excel_file is not None:
                         st.text(order['article'])
                     
                     with col4:
-                        product_display = order['product'][:50] + "..." if len(order['product']) > 50 else order['product']
+                        product_display = order['product'][:40] + "..." if len(order['product']) > 40 else order['product']
                         st.text(product_display)
                     
                     with col5:
+                        # Display product type
+                        product_type = order.get('product_type', '')
+                        st.text(product_type)
+                    
+                    with col6:
                         color = order.get('color', 'серый')
                         color_emoji = "⚫" if color == "чёрный" else "⚪" if color == "серый" else "🔘"
                         st.text(f"{color_emoji} {color}")
                     
-                    with col6:
-                        client_display = order.get('client', '')[:25] + "..." if len(order.get('client', '')) > 25 else order.get('client', '')
+                    with col7:
+                        client_display = order.get('client', '')[:20] + "..." if len(order.get('client', '')) > 20 else order.get('client', '')
                         st.text(client_display)
                     
-                    with col7:
+                    with col8:
                         st.text(order.get('date', '')[:10])
                     
-                    with col8:
+                    with col9:
                         st.text(order['sheet'])
                     
-                    with col9:
+                    with col10:
                         st.text(order.get('order_id', ''))
             
             # Bulk selection controls
@@ -495,12 +506,12 @@ if excel_file is not None:
                 # Count unique orders
                 unique_orders = len(set(order.get('original_index', i) for i, order in enumerate(all_selected_orders)))
                 total_orders = len(all_selected_orders)
-                
+
                 if unique_orders == total_orders:
                     st.success(f"🎯 Выбрано заказов: {total_orders}")
                 else:
                     st.success(f"🎯 Выбрано заказов: {unique_orders} уникальных ({total_orders} всего с повторами)")
-                
+
                 # Show selected orders summary in table format (only for reasonable number of orders)
                 if len(all_selected_orders) <= 20:
                     with st.expander("📋 Выбранные заказы", expanded=False):
@@ -554,11 +565,11 @@ auto_loaded_files = []
 # DXF files will be loaded on demand during optimization
 # This section shows what will be processed when optimization starts
 if st.session_state.selected_orders:
-    st.subheader("📋 Готовые к обработке заказы")
+    #st.subheader("📋 Готовые к обработке заказы")
     
-    st.success(f"✅ Выбрано {len(st.session_state.selected_orders)} заказов")
-    st.info("💡 DXF файлы будут загружены при нажатии кнопки 'Оптимизировать раскрой' для ускорения интерфейса.")
-    
+    #st.success(f"✅ Выбрано {len(st.session_state.selected_orders)} заказов")
+    #st.info("💡 DXF файлы будут загружены при нажатии кнопки 'Оптимизировать раскрой' для ускорения интерфейса.")
+
     # Show preview of what will be loaded
     articles_found = []
     articles_not_found = []
@@ -573,301 +584,252 @@ if st.session_state.selected_orders:
         def seek(self, pos):
             return self.content.seek(pos)
 
-    @st.cache_data(ttl=300)  # Cache for 5 minutes
-    def find_dxf_files_for_article(article, product_name=''):
-        """Find DXF files for a given article by searching in the dxf_samples directory structure."""
+    def get_dxf_files_for_product_type(article, product_name, product_type):
+        """Get DXF files for a specific product type based on the mapping rules."""
         import re
         found_files = []
         
-        logger.info(f"Поиск DXF файлов для артикула: '{article}', товар: '{product_name}'")
+        logger.info(f"Поиск DXF файлов: артикул='{article}', товар='{product_name}', тип='{product_type}'")
         
-        # Strategy 1: Search by product name (e.g., "AUDI A6 (C7) 4")
-        if product_name and not found_files:
-            # Extract brand and model from product name
-            product_upper = product_name.upper()
+        # Find the base folder for this article/product
+        base_folder = find_product_folder(article, product_name)
+        
+        if base_folder and os.path.exists(base_folder):
+            logger.info(f"Найдена базовая папка: {base_folder}")
             
-            # Handle common brand name mappings
-            brand_mapping = {
-                'AUDI': 'AUDI',
-                'BMW': 'BMW',
-                'MERCEDES': 'MERCEDES',
-                'VOLKSWAGEN': 'VOLKSWAGEN',
-                'FORD': 'FORD',
-                'TOYOTA': 'TOYOTA',
-                'NISSAN': 'NISSAN',
-                'HYUNDAI': 'HYUNDAI',
-                'KIA': 'KIA',
-                'CHERY': 'CHERY',
-                'CHANGAN': 'CHANGAN'
-            }
+            # Look for DXF folder first, then try the base folder directly
+            dxf_folder = os.path.join(base_folder, "DXF")
+            if os.path.exists(dxf_folder):
+                search_folder = dxf_folder
+                logger.info(f"Используется подпапка DXF: {search_folder}")
+            else:
+                search_folder = base_folder
+                logger.info(f"DXF файлы ищутся непосредственно в: {search_folder}")
             
-            # Find brand in product name
-            detected_brand = None
-            for brand_key, brand_folder in brand_mapping.items():
-                if brand_key in product_upper:
-                    detected_brand = brand_folder
-                    break
+            # Get all DXF files in the folder
+            all_dxf_files = []
+            try:
+                for file in os.listdir(search_folder):
+                    if file.lower().endswith('.dxf'):
+                        all_dxf_files.append(os.path.join(search_folder, file))
+            except OSError as e:
+                logger.error(f"Ошибка чтения папки {search_folder}: {e}")
+                return []
             
-            if detected_brand:
-                brand_path = f"dxf_samples/{detected_brand}"
-                logger.debug(f"Обнаружен бренд: {detected_brand}, путь: {brand_path}")
-                if os.path.exists(brand_path):
-                    # Create search keywords from product name
-                    product_keywords = []
-                    
-                    # Clean product name and extract model parts
-                    model_part = product_upper.replace(detected_brand, '').strip()
-                    
-                    # Add full product name as keyword
-                    product_keywords.append(product_name.lower())
-                    
-                    # Handle parentheses and extract parts
-                    if '(' in model_part and ')' in model_part:
-                        parentheses_content = re.findall(r'\((.*?)\)', model_part)
-                        base_model = re.sub(r'\s*\([^)]*\)\s*', ' ', model_part).strip()
-                        
-                        product_keywords.extend([
-                            base_model.lower(),
-                            model_part.replace('(', '').replace(')', '').lower(),
-                        ])
-                        
-                        for content in parentheses_content:
-                            product_keywords.extend([
-                                content.lower(),
-                                f"{base_model} {content}".lower(),
-                            ])
-                    
-                    # Extract individual parts
-                    model_parts = re.sub(r'[^\w\s]', ' ', model_part).split()
-                    product_keywords.extend([part.lower() for part in model_parts if len(part) > 1])
-                    
-                    # Remove duplicates
-                    product_keywords = list(set([k.strip() for k in product_keywords if k.strip()]))
-                    
-                    # Search through brand folders
-                    for model_folder in os.listdir(brand_path):
-                        model_folder_path = os.path.join(brand_path, model_folder)
-                        if os.path.isdir(model_folder_path):
-                            folder_name_lower = model_folder.lower()
-                            
-                            # Calculate match score with Cyrillic/Latin normalization
-                            match_score = 0
-                            
-                            # Normalize folder name for better matching (handle Cyrillic/Latin)
-                            normalized_folder = folder_name_lower
-                            # Replace common Cyrillic letters with Latin equivalents
-                            cyrillic_to_latin = {
-                                'а': 'a', 'А': 'A',
-                                'с': 'c', 'С': 'C',
-                                'е': 'e', 'Е': 'E',
-                                'о': 'o', 'О': 'O',
-                                'р': 'p', 'Р': 'P',
-                                'х': 'x', 'Х': 'X'
-                            }
-                            for cyrillic, latin in cyrillic_to_latin.items():
-                                normalized_folder = normalized_folder.replace(cyrillic, latin)
-                            
-                            for keyword in product_keywords:
-                                if keyword and len(keyword) > 2:
-                                    # Direct match in normalized folder name
-                                    if keyword in normalized_folder:
-                                        match_score += len(keyword) * 2
-                                    # Direct match in original folder name
-                                    elif keyword in folder_name_lower:
-                                        match_score += len(keyword) * 2
-                                    else:
-                                        # Check partial matches in normalized folder
-                                        keyword_parts = keyword.split()
-                                        matched_parts = sum(1 for part in keyword_parts 
-                                                          if part in normalized_folder or part in folder_name_lower)
-                                        if matched_parts > 0:
-                                            match_score += matched_parts * 3
-                            
-                            # If we have a good match, look for DXF files
-                            if match_score >= 6:  # Threshold for product name matching
-                                dxf_folder = os.path.join(model_folder_path, "DXF")
-                                if os.path.exists(dxf_folder):
-                                    dxf_files_found = [f for f in os.listdir(dxf_folder) if f.lower().endswith('.dxf')]
-                                    for dxf_file in dxf_files_found:
-                                        found_files.append(os.path.join(dxf_folder, dxf_file))
-                                    if found_files:
-                                        logger.debug(f"Найдены DXF файлы в папке {dxf_folder}: {len(dxf_files_found)} файлов")
-                                        break
-                                else:
-                                    # Check for DXF files directly in model folder
-                                    dxf_files_found = [f for f in os.listdir(model_folder_path) if f.lower().endswith('.dxf')]
-                                    for dxf_file in dxf_files_found:
-                                        found_files.append(os.path.join(model_folder_path, dxf_file))
-                                    if found_files:
-                                        break
+            # Apply product type specific filtering
+            if product_type == "борт":
+                # Files 1.dxf to 9.dxf
+                for i in range(1, 10):
+                    target_file = os.path.join(search_folder, f"{i}.dxf")
+                    if os.path.exists(target_file):
+                        found_files.append(target_file)
+            
+            elif product_type == "водитель":
+                # Only 1.dxf
+                target_file = os.path.join(search_folder, "1.dxf")
+                if os.path.exists(target_file):
+                    found_files.append(target_file)
+            
+            elif product_type == "передние":
+                # 1.dxf and 2.dxf
+                for i in [1, 2]:
+                    target_file = os.path.join(search_folder, f"{i}.dxf")
+                    if os.path.exists(target_file):
+                        found_files.append(target_file)
+            
+            elif product_type == "багажник":
+                # Files 10.dxf to 16.dxf
+                for i in range(10, 17):
+                    target_file = os.path.join(search_folder, f"{i}.dxf")
+                    if os.path.exists(target_file):
+                        found_files.append(target_file)
+            
+            elif product_type in ["самокат", "лодка", "ковер"]:
+                # All available files in the folder
+                found_files = all_dxf_files
+            
+            else:
+                # Unknown product type - take all files as fallback
+                logger.warning(f"Неизвестный тип изделия: {product_type}, берем все файлы")
+                found_files = all_dxf_files
         
-        # Strategy 2: Direct path mapping (if article matches folder structure)
-        if not found_files:
-            direct_path = f"dxf_samples/{article}"
-            if os.path.exists(direct_path):
-                dxf_files = [f for f in os.listdir(direct_path) if f.lower().endswith('.dxf')]
-                for dxf_file in dxf_files:
-                    found_files.append(os.path.join(direct_path, dxf_file))
-        
-        # Strategy 2: Parse article and search in brand folders
-        if not found_files and '+' in article:
-            parts = article.split('+')
-            if len(parts) >= 3:
-                # Extract brand and model (e.g., EVA_BORT+Chery+Tiggo 4 -> Chery, Tiggo 4)
-                brand = parts[1].strip()
-                model_info = parts[2].strip() if len(parts) > 2 else ""
-                
-                # Create search variants for the brand
-                brand_variants = [
-                    brand.upper(),
-                    brand.capitalize(),
-                    brand.lower()
-                ]
-                
-                # Find matching brand folder
-                for brand_variant in brand_variants:
-                    brand_path = f"dxf_samples/{brand_variant}"
-                    if os.path.exists(brand_path):
-                        # Look for model folders that might match
-                        for model_folder in os.listdir(brand_path):
-                            model_folder_path = os.path.join(brand_path, model_folder)
-                            if os.path.isdir(model_folder_path):
-                                # Create search keywords from model info
-                                search_keywords = []
-                                
-                                # Clean model info and create variants
-                                if model_info:
-                                    # Handle specific transformations
-                                    model_variants = [model_info]
-                                    
-                                    # Handle parentheses (e.g., "A6 (C7) 4" -> "A6", "A6 C7", "A6 4", "A6 C7 4")
-                                    if '(' in model_info and ')' in model_info:
-                                        # Extract parts from parentheses
-                                        parentheses_content = re.findall(r'\((.*?)\)', model_info)
-                                        base_model = re.sub(r'\s*\([^)]*\)\s*', ' ', model_info).strip()
-                                        
-                                        # Create variants with and without parentheses content
-                                        model_variants.extend([
-                                            base_model,  # "A6 4"
-                                            model_info.replace('(', '').replace(')', ''),  # "A6 C7 4"
-                                        ])
-                                        
-                                        # Add variants with parentheses content integrated
-                                        for content in parentheses_content:
-                                            model_variants.extend([
-                                                f"{base_model} {content}",  # "A6 4 C7"
-                                                f"{content} {base_model}",  # "C7 A6 4"
-                                                content,  # "C7"
-                                            ])
-                                    
-                                    # Handle "CX35PLUS" -> "CS35", "CS35 PLUS" 
-                                    if 'CX35PLUS' in model_info:
-                                        model_variants.append(model_info.replace('CX35PLUS', 'CS35'))
-                                        model_variants.append(model_info.replace('CX35PLUS', 'CS35 PLUS'))
-                                    
-                                    # Handle "PLUS" variations
-                                    if 'PLUS' in model_info:
-                                        model_variants.append(model_info.replace('PLUS', ' PLUS'))
-                                        model_variants.append(model_info.replace('PLUS', ''))
-                                    
-                                    # Handle "PRO" variations
-                                    if 'PRO' in model_info:
-                                        model_variants.append(model_info.replace('PRO', ' PRO'))
-                                        model_variants.append(model_info.replace('PRO', ''))
-                                    
-                                    # Extract individual model parts (e.g., "A6 (C7) 4" -> ["A6", "C7", "4"])
-                                    model_parts = re.sub(r'[^\w\s]', ' ', model_info).split()
-                                    model_variants.extend(model_parts)
-                                    
-                                    # Create combinations of model parts
-                                    if len(model_parts) >= 2:
-                                        for i in range(len(model_parts)):
-                                            for j in range(i+1, len(model_parts)+1):
-                                                combination = ' '.join(model_parts[i:j])
-                                                if len(combination.strip()) > 1:
-                                                    model_variants.append(combination)
-                                    
-                                    # Create search keywords from all variants
-                                    for variant in model_variants:
-                                        search_keywords.extend([
-                                            variant.lower().strip(),
-                                            variant.replace(' ', '').lower(),
-                                            variant[:10].lower().strip()  # First 10 chars
-                                        ])
-                                    
-                                    # Remove duplicates and empty strings
-                                    search_keywords = list(set([k for k in search_keywords if k.strip()]))
-                                
-                                # Check if this model folder matches our search keywords
-                                folder_name_lower = model_folder.lower()
-                                match_found = False
-                                match_score = 0
-                                
-                                # Calculate match score for better ranking
-                                for keyword in search_keywords:
-                                    if keyword and len(keyword) > 1:  # Check even short keywords
-                                        keyword_parts = keyword.split()
-                                        current_score = 0
-                                        
-                                        if len(keyword_parts) >= 2:
-                                            # Multi-word keyword like "a6 c7" or "a6 4"
-                                            matched_parts = sum(1 for part in keyword_parts if part in folder_name_lower)
-                                            if matched_parts == len(keyword_parts):
-                                                current_score = 10 + len(keyword_parts)  # High score for complete matches
-                                                match_found = True
-                                            elif matched_parts > 0:
-                                                current_score = matched_parts * 2  # Partial match score
-                                        else:
-                                            # Single word keyword
-                                            if keyword in folder_name_lower:
-                                                # Exact substring match
-                                                current_score = 8 + len(keyword)
-                                                match_found = True
-                                            elif len(keyword) >= 3:
-                                                # Check for partial matches in folder name parts
-                                                folder_parts = re.split(r'[\s\-_]', folder_name_lower)
-                                                for folder_part in folder_parts:
-                                                    if keyword in folder_part or folder_part in keyword:
-                                                        current_score = max(current_score, 3)
-                                                        match_found = True
-                                        
-                                        match_score = max(match_score, current_score)
-                                
-                                # Only proceed if we have a reasonable match
-                                if match_found and match_score >= 3:
-                                    # Look for DXF folder first
-                                    dxf_folder = os.path.join(model_folder_path, "DXF")
-                                    if os.path.exists(dxf_folder):
-                                        dxf_files = [f for f in os.listdir(dxf_folder) if f.lower().endswith('.dxf')]
-                                        for dxf_file in dxf_files:
-                                            found_files.append(os.path.join(dxf_folder, dxf_file))
-                                        if found_files:
-                                            break
-                                    else:
-                                        # Look for DXF files directly in model folder
-                                        dxf_files = [f for f in os.listdir(model_folder_path) if f.lower().endswith('.dxf')]
-                                        for dxf_file in dxf_files:
-                                            found_files.append(os.path.join(model_folder_path, dxf_file))
-                                        if found_files:
-                                            break
-                        
-                        if found_files:
-                            break
-        
-        logger.info(f"Результат поиска для '{article}': найдено {len(found_files)} файлов")
+        logger.info(f"Результат поиска для типа '{product_type}': найдено {len(found_files)} файлов")
         if found_files:
             logger.debug(f"Найденные файлы: {[os.path.basename(f) for f in found_files]}")
+        
         return found_files
+    
+    def find_product_folder(article, product_name):
+        """Find the base folder for a product based on article and product name."""
+        import re
+        
+        logger.info(f"Поиск папки для артикула: '{article}', товара: '{product_name}'")
+        
+        # Strategy 1: Direct search in flat dxf_samples folder structure
+        if product_name:
+            product_upper = product_name.upper()
+            
+            # Search directly in dxf_samples folder for matching folder names
+            best_match = None
+            best_score = 0
+            
+            for item in os.listdir("dxf_samples"):
+                item_path = os.path.join("dxf_samples", item)
+                if os.path.isdir(item_path):
+                    score = calculate_folder_match_score(product_name, item)
+                    if score > best_score:
+                        best_score = score
+                        best_match = item_path
+            
+            if best_match and best_score >= 6:
+                logger.info(f"Найдено соответствие по имени товара: {best_match} (счёт: {best_score})")
+                return best_match
+            
+            # Special categories handling
+            special_keywords = {
+                'лодка': ['Лодка', 'ADMIRAL', 'ABAKAN', 'AKVA', 'АГУЛ', 'Азимут'],
+                'ковер': ['Коврик'],
+                'самокат': ['ДЕКА', 'KUGOO']
+            }
+            
+            for category, keywords in special_keywords.items():
+                for keyword in keywords:
+                    if keyword.upper() in product_upper:
+                        # Search for folders containing this keyword
+                        for item in os.listdir("dxf_samples"):
+                            if keyword.lower() in item.lower():
+                                folder_path = os.path.join("dxf_samples", item)
+                                if os.path.isdir(folder_path):
+                                    logger.info(f"Найдено соответствие по ключевому слову '{keyword}': {folder_path}")
+                                    return folder_path
+        
+        # Strategy 2: Parse article format like EVA_BORT+Brand+Model
+        if '+' in article:
+            parts = article.split('+')
+            if len(parts) >= 3:
+                brand = parts[1].strip()
+                model_info = parts[2].strip()
+                
+                logger.info(f"Парсинг артикула: бренд='{brand}', модель='{model_info}'")
+                
+                # Handle special case mappings first
+                special_mappings = {
+                    'Kugoo': ['ДЕКА KUGOO KIRIN M4 PRO', 'ДЕКА KUGOO M4 PRO JILONG'],
+                    'Абакан': ['Лодка ABAKAN 430 JET'],
+                    'Admiral': ['Лодка ADMIRAL 335', 'Лодка ADMIRAL 340', 'Лодка ADMIRAL 410'],
+                    'AKVA': ['Лодка AKVA 2600', 'Лодка AKVA 2800']
+                }
+                
+                if brand in special_mappings:
+                    for folder_name in special_mappings[brand]:
+                        folder_path = os.path.join("dxf_samples", folder_name)
+                        if os.path.exists(folder_path):
+                            logger.info(f"Найдено специальное соответствие: {folder_path}")
+                            return folder_path
+                
+                # For standard automotive brands, search the flat folder structure
+                # Create search term from brand and model
+                search_term = f"{brand} {model_info}".upper()
+                
+                # Handle common brand name variations
+                brand_variations = {
+                    'SSANG YONG': ['Ssang Yong', 'SsangYong'],
+                    'TOYOTA': ['Toyota'],
+                    'SUBARU': ['Subaru'],
+                    'TANK': ['Tank'],
+                    'TESLA': ['Tesla']
+                }
+                
+                # Find best match in flat folder structure
+                best_match = None
+                best_score = 0
+                
+                for item in os.listdir("dxf_samples"):
+                    item_path = os.path.join("dxf_samples", item)
+                    if os.path.isdir(item_path):
+                        score = calculate_folder_match_score(search_term, item)
+                        if score > best_score:
+                            best_score = score
+                            best_match = item_path
+                
+                if best_match and best_score >= 3:
+                    logger.info(f"Найдено соответствие по артикулу: {best_match} (счёт: {best_score})")
+                    return best_match
+        
+        # Strategy 3: Direct path mapping
+        direct_path = f"dxf_samples/{article}"
+        if os.path.exists(direct_path):
+            return direct_path
+        
+        return None
+    
+    def calculate_folder_match_score(search_term, folder_name):
+        """Calculate how well a folder name matches the search term."""
+        import re
+        
+        search_lower = search_term.lower()
+        folder_lower = folder_name.lower()
+        score = 0
+        
+        # Direct substring match
+        if search_lower in folder_lower or folder_lower in search_lower:
+            score += max(len(search_lower), len(folder_lower)) * 2
+        
+        # Word-based matching
+        search_words = re.split(r'[\s\-_()]+', search_lower)
+        folder_words = re.split(r'[\s\-_()]+', folder_lower)
+        
+        # Remove empty words
+        search_words = [w for w in search_words if len(w) > 1]
+        folder_words = [w for w in folder_words if len(w) > 1]
+        
+        for search_word in search_words:
+            for folder_word in folder_words:
+                if search_word == folder_word:
+                    score += len(search_word) * 3
+                elif search_word in folder_word:
+                    score += len(search_word) * 2
+                elif folder_word in search_word:
+                    score += len(folder_word) * 2
+                elif search_word[:3] == folder_word[:3] and len(search_word) > 2:
+                    score += 2  # Partial match for similar words
+        
+        logger.debug(f"Счёт соответствия '{search_term}' <-> '{folder_name}': {score}")
+        
+        return score
+
+    @st.cache_data(ttl=300)  # Cache for 5 minutes
+    def find_dxf_files_for_article(article, product_name='', product_type=''):
+        """Find DXF files for a given article using the new product type mapping."""
+        if product_type:
+            return get_dxf_files_for_product_type(article, product_name, product_type)
+        else:
+            # Fallback to old behavior if product_type not provided
+            base_folder = find_product_folder(article, product_name)
+            if base_folder:
+                found_files = []
+                dxf_folder = os.path.join(base_folder, "DXF")
+                search_folder = dxf_folder if os.path.exists(dxf_folder) else base_folder
+                
+                try:
+                    for file in os.listdir(search_folder):
+                        if file.lower().endswith('.dxf'):
+                            found_files.append(os.path.join(search_folder, file))
+                except OSError:
+                    pass
+                
+                return found_files
+            return []
 
     # Show selected orders without file system search
-    st.info(f"📊 Готово к обработке: **{len(st.session_state.selected_orders)}** заказов")
+    #st.info(f"📊 Готово к обработке: **{len(st.session_state.selected_orders)}** заказов")
     
     # Show selected orders in a compact format
-    with st.expander("📋 Список выбранных заказов", expanded=False):
-        for i, order in enumerate(st.session_state.selected_orders, 1):
-            st.write(f"{i}. **{order['product']}** (заказ: {order.get('order_id', 'N/A')})")
+    #with st.expander("📋 Список выбранных заказов", expanded=False):
+    #    for i, order in enumerate(st.session_state.selected_orders, 1):
+    #        st.write(f"{i}. **{order['product']}** (заказ: {order.get('order_id', 'N/A')})")
     
-    st.success("✅ DXF файлы будут найдены и загружены при запуске оптимизации")
+    #st.success("✅ DXF файлы будут найдены и загружены при запуске оптимизации")
 
 # Additional DXF files section (shown when orders are selected)
 if st.session_state.selected_orders:
@@ -935,9 +897,14 @@ if st.button("🚀 Оптимизировать раскрой"):
             
             article = order['article']
             product = order['product']
-            found_dxf_files = find_dxf_files_for_article(article, product)
+            product_type = order.get('product_type', '')
+            
+            logger.info(f"Обрабатываем заказ: артикул={article}, товар={product}, тип={product_type}")
+            
+            found_dxf_files = find_dxf_files_for_article(article, product, product_type)
             
             if found_dxf_files:
+                logger.info(f"Найдено {len(found_dxf_files)} DXF файлов для типа '{product_type}'")
                 for file_path in found_dxf_files:
                     try:
                         with open(file_path, 'rb') as f:
@@ -952,7 +919,7 @@ if st.button("🚀 Оптимизировать раскрой"):
                     except Exception as e:
                         st.warning(f"⚠️ Ошибка загрузки {file_path}: {e}")
             else:
-                st.warning(f"⚠️ Не найдены DXF файлы для заказа: {product}")
+                st.warning(f"⚠️ Не найдены DXF файлы для заказа: {product} (тип: {product_type})")
         
         # Load manual files if any
         if hasattr(st.session_state, 'manual_files') and st.session_state.manual_files:
