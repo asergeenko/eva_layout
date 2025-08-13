@@ -808,42 +808,47 @@ if st.session_state.selected_orders:
     
     #st.success("✅ DXF файлы будут найдены и загружены при запуске оптимизации")
 
-# Additional DXF files section (shown when orders are selected)
-if st.session_state.selected_orders:
-    st.subheader("📎 Дополнительные DXF файлы (опционально)")
-    manual_files = st.file_uploader("Добавьте дополнительные DXF файлы при необходимости", type=["dxf"], accept_multiple_files=True, key="manual_dxf")
-    
-    # Store manual files in session state for later processing
-    if manual_files:
-        st.write("**Выберите цвет для дополнительных файлов:**")
-        manual_color = st.selectbox(
-            "Цвет листа для дополнительных файлов:",
-            options=["чёрный", "серый"],
-            index=0,
-            key="manual_files_color",
-            help="Выберите цвет листа, на который должны быть размещены дополнительные файлы"
-        )
-        # Store manual files and color in session state
-        st.session_state.manual_files = manual_files
-        st.session_state.manual_color = manual_color
-        st.success(f"✅ Добавлено {len(manual_files)} дополнительных файлов")
-    else:
-        st.session_state.manual_files = []
+# Additional DXF files section (always available)
+st.subheader("📎 Загрузить вручную")
+st.write("Вы можете добавить дополнительные DXF файлы независимо от Excel загрузки или вместе с ней.")
+
+manual_files = st.file_uploader("Добавьте дополнительные DXF файлы при необходимости", type=["dxf"], accept_multiple_files=True, key="manual_dxf")
+
+# Store manual files in session state for later processing
+if manual_files:
+    st.write("**Выберите цвет для дополнительных файлов:**")
+    manual_color = st.selectbox(
+        "Цвет листа для дополнительных файлов:",
+        options=["чёрный", "серый"],
+        index=0,
+        key="manual_files_color",
+        help="Выберите цвет листа, на который должны быть размещены дополнительные файлы"
+    )
+    # Store manual files and color in session state
+    st.session_state.manual_files = manual_files
+    st.session_state.manual_color = manual_color
+    st.success(f"✅ Добавлено {len(manual_files)} дополнительных файлов")
 else:
-    # No orders selected or no files found - show message  
-    if st.session_state.selected_orders:
-        st.warning("⚠️ Для выбранных заказов не найдены DXF файлы. Проверьте наличие файлов в папке dxf_samples.")
-    else:
-        st.info("💡 Выберите заказы из Excel таблицы выше для автоматической загрузки DXF файлов.")
+    st.session_state.manual_files = []
+
+# Show status messages based on what's available
+if st.session_state.selected_orders and manual_files:
+    st.info("💡 Будут обработаны заказы из Excel + дополнительные файлы")
+elif st.session_state.selected_orders:
+    st.info("💡 Будут обработаны только заказы из Excel таблицы")
+elif manual_files:
+    st.info("💡 Будут обработаны только дополнительные файлы")
+else:
+    st.warning("⚠️ Загрузите Excel файл с заказами или добавьте DXF файлы вручную для продолжения")
 
 if st.button("🚀 Оптимизировать раскрой"):
     logger.info("=== НАЧАЛО ОПТИМИЗАЦИИ РАСКРОЯ ===")
     if not st.session_state.available_sheets:
         logger.error("Нет доступных листов для оптимизации")
         st.error("⚠️ Пожалуйста, добавьте хотя бы один тип листа в наличии.")
-    elif not st.session_state.selected_orders:
-        logger.error("Нет выбранных заказов для оптимизации")
-        st.error("⚠️ Пожалуйста, выберите заказы из Excel таблицы.")
+    elif not st.session_state.selected_orders and not st.session_state.manual_files:
+        logger.error("Нет файлов для оптимизации")
+        st.error("⚠️ Пожалуйста, выберите заказы из Excel таблицы или добавьте DXF файлы вручную.")
     else:
         # Now load DXF files on demand  
         st.header("📥 Загрузка DXF файлов")
