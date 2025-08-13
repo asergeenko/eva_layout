@@ -178,18 +178,39 @@ excel_file = st.file_uploader("Загрузите файл заказов Excel"
 
 @st.cache_data(ttl=600)  # Cache for 10 minutes
 def load_excel_file(file_content):
-    """Load and cache Excel file processing"""
-    excel_data = pd.read_excel(BytesIO(file_content), sheet_name=None, header=None, 
-                              date_format=None, parse_dates=False)
-    return excel_data
+    """Load and cache Excel file processing - optimized for speed"""
+    # Only load the ZAKAZ sheet instead of all sheets for faster loading
+    try:
+        excel_data = pd.read_excel(
+            BytesIO(file_content), 
+            sheet_name="ZAKAZ",  # Load only ZAKAZ sheet
+            header=None, 
+            date_format=None, 
+            parse_dates=False,
+            engine='openpyxl'  # Use faster engine
+        )
+        return {"ZAKAZ": excel_data}
+    except ValueError:
+        # If ZAKAZ sheet doesn't exist, load all sheets to show available ones
+        excel_data = pd.read_excel(
+            BytesIO(file_content), 
+            sheet_name=None, 
+            header=None, 
+            date_format=None, 
+            parse_dates=False,
+            engine='openpyxl'
+        )
+        return excel_data
 
 if excel_file is not None:
     try:
         with st.spinner("Загрузка Excel файла..."):
-            # Read Excel file with caching
+            # Read Excel file with caching - use file hash for cache key
             file_content = excel_file.read()
+            file_hash = hash(file_content)
             excel_data = load_excel_file(file_content)
             logger.info(f"Excel файл загружен. Листы: {list(excel_data.keys())}")
+
         
         # Process only the "ZAKAZ" sheet
         all_orders = []
@@ -742,7 +763,7 @@ elif manual_files:
 else:
     st.warning("⚠️ Загрузите Excel файл с заказами или добавьте DXF файлы вручную для продолжения")
 
-if st.button("🚀 Оптимизировать раскрой", type="primary"):
+if st.button("🚀 Оптимизировать раскрой"):
     logger.info("=== НАЧАЛО ОПТИМИЗАЦИИ РАСКРОЯ ===")
     if not st.session_state.available_sheets:
         logger.error("Нет доступных листов для оптимизации")
