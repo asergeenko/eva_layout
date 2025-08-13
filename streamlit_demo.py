@@ -39,97 +39,14 @@ try:
 except:
     pass
 
-try:
-    from layout_optimizer import (
-        parse_dxf_complete, 
-        save_dxf_layout_complete,
-        parse_dxf, 
-        bin_packing, 
-        bin_packing_with_inventory, 
-        save_dxf_layout, 
-        plot_layout, 
-        plot_input_polygons, 
-        scale_polygons_to_fit
-    )
-    st.success("✅ Все функции успешно импортированы")
-except ImportError as e:
-    # Debug information
-    st.error(f"Ошибка прямого импорта: {e}")
-    
-    # Fallback import with debug
-    try:
-        import layout_optimizer as lo
-        st.info(f"Модуль layout_optimizer загружен. Версия: {getattr(lo, '__version__', 'неизвестна')}")
-        
-        # Show available functions
-        available_funcs = [attr for attr in dir(lo) if not attr.startswith('_') and callable(getattr(lo, attr))]
-        st.info(f"Доступные функции: {', '.join(available_funcs)}")
-        
-        # Check specific function
-        if hasattr(lo, 'bin_packing_with_inventory'):
-            st.success("✅ bin_packing_with_inventory найдена!")
-            bin_packing_with_inventory = lo.bin_packing_with_inventory
-        else:
-            st.error("❌ bin_packing_with_inventory НЕ найдена!")
-            
-            # Try alternative approach - define the function inline as a workaround
-            st.warning("🔧 Применяем обходное решение...")
-            
-            def bin_packing_with_inventory_fallback(polygons, available_sheets, verbose=True, max_sheets_per_order=None):
-                """Fallback implementation if import fails."""
-                if verbose:
-                    st.info("Используется резервная реализация bin_packing_with_inventory")
-                
-                placed_layouts = []
-                unplaced = polygons.copy()
-                sheet_counter = 0
-                
-                for sheet in available_sheets:
-                    if not unplaced:
-                        break
-                    
-                    available_count = sheet['count'] - sheet['used']
-                    for _ in range(available_count):
-                        if not unplaced:
-                            break
-                            
-                        sheet_counter += 1
-                        sheet_size = (sheet['width'], sheet['height'])
-                        
-                        placed, remaining = lo.bin_packing(unplaced, sheet_size, verbose=verbose)
-                        
-                        if placed:
-                            usage_percent = lo.calculate_usage_percent(placed, sheet_size)
-                            placed_layouts.append({
-                                'sheet_number': sheet_counter,
-                                'sheet_type': sheet['name'],
-                                'sheet_size': sheet_size,
-                                'placed_polygons': placed,
-                                'usage_percent': usage_percent
-                            })
-                            unplaced = remaining
-                        else:
-                            break
-                
-                return placed_layouts, unplaced
-                
-            bin_packing_with_inventory = bin_packing_with_inventory_fallback
-            st.success("✅ Резервная реализация bin_packing_with_inventory создана!")
-            
-        # Assign other functions
-        parse_dxf_complete = lo.parse_dxf_complete
-        save_dxf_layout_complete = lo.save_dxf_layout_complete
-        parse_dxf = lo.parse_dxf
-        bin_packing = lo.bin_packing
-        save_dxf_layout = lo.save_dxf_layout
-        plot_layout = lo.plot_layout
-        plot_input_polygons = lo.plot_input_polygons
-        scale_polygons_to_fit = lo.scale_polygons_to_fit
-        
-    except Exception as e2:
-        st.error(f"Критическая ошибка импорта: {e2}")
-        st.error("Убедитесь, что файл layout_optimizer.py присутствует и доступен")
-        st.stop()
+from layout_optimizer import (
+    parse_dxf_complete,
+    save_dxf_layout_complete,
+    bin_packing_with_inventory,
+    plot_layout,
+    plot_input_polygons,
+    scale_polygons_to_fit
+)
 
 # Configuration
 DEFAULT_SHEET_TYPES = [
@@ -142,8 +59,14 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 
 # Streamlit App
-st.title("Оптимизатор раскроя EVA ковриков")
-st.write("Загрузите DXF файлы и укажите размер листа для оптимального размещения ковриков.")
+# Display logo at the very top
+try:
+    st.image("logo.png", use_container_width=True)
+except FileNotFoundError:
+    pass  # Skip logo if file not found
+
+#st.subheader("Оптимизатор раскроя ковров")
+#st.write("Загрузите DXF файлы и укажите размер листа для оптимального размещения ковров.")
 
 # Sheet Inventory Section
 st.header("📋 Настройка доступных листов")
@@ -268,73 +191,51 @@ if excel_file is not None:
             excel_data = load_excel_file(file_content)
             logger.info(f"Excel файл загружен. Листы: {list(excel_data.keys())}")
         
-        # Get current month name and previous month
-        from datetime import datetime
-        current_date = datetime.now()
-        current_month = current_date.strftime("%B %Y").upper()
-    
-        # Russian month names mapping
-        month_mapping = {
-            "JANUARY": "ЯНВАРЬ", "FEBRUARY": "ФЕВРАЛЬ", "MARCH": "МАРТ", 
-            "APRIL": "АПРЕЛЬ", "MAY": "МАЙ", "JUNE": "ИЮНЬ",
-            "JULY": "ИЮЛЬ", "AUGUST": "АВГУСТ", "SEPTEMBER": "СЕНТЯБРЬ",
-            "OCTOBER": "ОКТЯБРЬ", "NOVEMBER": "НОЯБРЬ", "DECEMBER": "ДЕКАБРЬ"
-        }
-        
-        current_month_ru = month_mapping.get(current_date.strftime("%B").upper(), "ИЮЛЬ") + " " + str(current_date.year)
-        
-        # Get previous month (handle day overflow correctly)
-        if current_date.month == 1:
-            prev_month_ru = "ДЕКАБРЬ " + str(current_date.year - 1)
-        else:
-            # Use first day of month to avoid day overflow issues
-            first_of_current_month = current_date.replace(day=1)
-            prev_date = first_of_current_month.replace(month=first_of_current_month.month - 1)
-            prev_month_ru = month_mapping.get(prev_date.strftime("%B").upper(), "ИЮНЬ") + " " + str(prev_date.year)
-        
-        target_sheets = [current_month_ru, prev_month_ru]
-
-        # Process target sheets
+        # Process only the "ZAKAZ" sheet
         all_orders = []
-        for sheet_name in target_sheets:
-            if sheet_name in excel_data:
-                df = excel_data[sheet_name]
+        target_sheet = "ZAKAZ"
+        
+        if target_sheet in excel_data:
+            sheet_name = target_sheet
+            df = excel_data[sheet_name]
+            
+            # Skip first 2 rows (headers), start from row 2 (index 2)
+            if df.shape[0] > 2:
+                data_rows = df.iloc[2:].copy()
                 
-                # Skip first 2 rows (headers), start from row 2 (index 2)
-                if df.shape[0] > 2:
-                    data_rows = df.iloc[2:].copy()
+                # Check for empty "Сделано" column (index 2)
+                if df.shape[1] > 3:  # Make sure we have enough columns
+                    pending_orders = data_rows[data_rows.iloc[:, 2].isna() | (data_rows.iloc[:, 2] == '')]
                     
-                    # Check for empty "Сделано" column (index 2)
-                    if df.shape[1] > 3:  # Make sure we have enough columns
-                        pending_orders = data_rows[data_rows.iloc[:, 2].isna() | (data_rows.iloc[:, 2] == '')]
-                        
-                        for idx, row in pending_orders.iterrows():
-                            if pd.notna(row.iloc[3]):  # Check if Артикул (column D) is not empty
-                                # Get color from column I (index 8)
-                                color = str(row.iloc[8]).lower().strip() if pd.notna(row.iloc[8]) and df.shape[1] > 8 else ''
-                                # Normalize color values
-                                if 'черн' in color or 'black' in color:
-                                    color = 'чёрный'
-                                elif 'сер' in color or 'gray' in color or 'grey' in color:
-                                    color = 'серый'
-                                else:
-                                    color = 'серый'  # Default color if not specified
-                                
-                                # Create unique order_id for each row (Excel row number + sheet name)
-                                unique_order_id = f"{sheet_name}_row_{idx}"
-                                
-                                order = {
-                                    'sheet': sheet_name,
-                                    'row_index': idx,
-                                    'date': str(row.iloc[0]) if pd.notna(row.iloc[0]) else '',
-                                    'article': str(row.iloc[3]),
-                                    'product': str(row.iloc[4]) if pd.notna(row.iloc[4]) else '',
-                                    'client': str(row.iloc[5]) if pd.notna(row.iloc[5]) else '' if df.shape[1] > 5 else '',
-                                    'order_id': unique_order_id,  # Use unique ID for each Excel row
-                                    'color': color,
-                                    'product_type': str(row.iloc[7]) if pd.notna(row.iloc[7]) and df.shape[1] > 7 else ''
-                                }
-                                all_orders.append(order)
+                    for idx, row in pending_orders.iterrows():
+                        if pd.notna(row.iloc[3]):  # Check if Артикул (column D) is not empty
+                            # Get color from column I (index 8)
+                            color = str(row.iloc[8]).lower().strip() if pd.notna(row.iloc[8]) and df.shape[1] > 8 else ''
+                            # Normalize color values
+                            if 'черн' in color or 'black' in color:
+                                color = 'чёрный'
+                            elif 'сер' in color or 'gray' in color or 'grey' in color:
+                                color = 'серый'
+                            else:
+                                color = 'серый'  # Default color if not specified
+                            
+                            # Create unique order_id for each row (Excel row number + sheet name)
+                            unique_order_id = f"{sheet_name}_row_{idx}"
+                            
+                            order = {
+                                'sheet': sheet_name,
+                                'row_index': idx,
+                                'date': str(row.iloc[0]) if pd.notna(row.iloc[0]) else '',
+                                'article': str(row.iloc[3]),
+                                'product': str(row.iloc[4]) if pd.notna(row.iloc[4]) else '',
+                                'client': str(row.iloc[5]) if pd.notna(row.iloc[5]) else '' if df.shape[1] > 5 else '',
+                                'order_id': unique_order_id,  # Use unique ID for each Excel row
+                                'color': color,
+                                'product_type': str(row.iloc[7]) if pd.notna(row.iloc[7]) and df.shape[1] > 7 else ''
+                            }
+                            all_orders.append(order)
+        else:
+            st.warning(f"⚠️ Лист '{target_sheet}' не найден в Excel файле. Доступные листы: {list(excel_data.keys())}")
         
         if all_orders:
             st.success(f"✅ Найдено {len(all_orders)} невыполненных заказов")
@@ -841,7 +742,7 @@ elif manual_files:
 else:
     st.warning("⚠️ Загрузите Excel файл с заказами или добавьте DXF файлы вручную для продолжения")
 
-if st.button("🚀 Оптимизировать раскрой"):
+if st.button("🚀 Оптимизировать раскрой", type="primary"):
     logger.info("=== НАЧАЛО ОПТИМИЗАЦИИ РАСКРОЯ ===")
     if not st.session_state.available_sheets:
         logger.error("Нет доступных листов для оптимизации")
