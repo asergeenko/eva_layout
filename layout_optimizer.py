@@ -287,7 +287,7 @@ def save_dxf_layout_complete(placed_elements, sheet_size, output_path, original_
         
         # If we have original DXF data for this file, use it
         if original_dxf_data_map and file_name in original_dxf_data_map:
-            # Reconstruct from original elements
+            # Reconstruct from original elements using improved transformation
             original_data = original_dxf_data_map[file_name]
             
             for entity_data in original_data['original_entities']:
@@ -295,53 +295,40 @@ def save_dxf_layout_complete(placed_elements, sheet_size, output_path, original_
                     # Clone the original entity
                     new_entity = entity_data['entity'].copy()
                     
-                    # Calculate the transformation needed to match the final polygon position
-                    
+                    # IMPROVED: Use direct transformation matrix calculation
                     if original_data['combined_polygon']:
                         original_polygon = original_data['combined_polygon']
                         
-                        # The transformed_polygon represents where the polygon ended up
-                        # We need to calculate what transformation gets us from original to final
+                        # Calculate transformation matrix from original to final position
+                        # 1. Get original position (bottom-left corner)
+                        orig_bounds = original_polygon.bounds
+                        orig_x, orig_y = orig_bounds[0], orig_bounds[1]
                         
-                        # Step 1: Move to origin from original position
-                        original_bounds = original_polygon.bounds
-                        origin_offset_x = -original_bounds[0]
-                        origin_offset_y = -original_bounds[1]
-                        new_entity.transform(ezdxf.math.Matrix44.translate(origin_offset_x, origin_offset_y, 0))
+                        # 2. Get final position from the transformed polygon
+                        final_bounds = transformed_polygon.bounds  
+                        final_x, final_y = final_bounds[0], final_bounds[1]
                         
-                        # Calculate the polygon after moving to origin (needed for both rotation and final translation)
-                        origin_placed_polygon = translate_polygon(original_polygon, origin_offset_x, origin_offset_y)
+                        # 3. Calculate center points for rotation
+                        orig_center_x = orig_x + (orig_bounds[2] - orig_bounds[0]) / 2
+                        orig_center_y = orig_y + (orig_bounds[3] - orig_bounds[1]) / 2
                         
-                        # Step 2: Apply rotation if needed
-                        if rotation_angle != 0:
-                            # Get the centroid after moving to origin
-                            origin_centroid = origin_placed_polygon.centroid
-                            
-                            # Rotate around this centroid
-                            new_entity.transform(ezdxf.math.Matrix44.chain(
-                                ezdxf.math.Matrix44.translate(-origin_centroid.x, -origin_centroid.y, 0),
-                                ezdxf.math.Matrix44.z_rotate(np.radians(rotation_angle)),
-                                ezdxf.math.Matrix44.translate(origin_centroid.x, origin_centroid.y, 0)
-                            ))
+                        final_center_x = final_x + (final_bounds[2] - final_bounds[0]) / 2
+                        final_center_y = final_y + (final_bounds[3] - final_bounds[1]) / 2
                         
-                        # Step 3: Now calculate where we need to move to match the final position
-                        # After rotation, what would be the polygon's position?
-                        if rotation_angle != 0:
-                            intermediate_polygon = rotate_polygon(origin_placed_polygon, rotation_angle)
-                        else:
-                            intermediate_polygon = origin_placed_polygon
+                        # Create single transformation matrix
+                        transformation = ezdxf.math.Matrix44.chain(
+                            # Move to origin
+                            ezdxf.math.Matrix44.translate(-orig_center_x, -orig_center_y, 0),
+                            # Apply rotation
+                            ezdxf.math.Matrix44.z_rotate(np.radians(rotation_angle)),
+                            # Move to final position
+                            ezdxf.math.Matrix44.translate(final_center_x, final_center_y, 0)
+                        )
                         
-                        # Calculate the final translation needed
-                        intermediate_bounds = intermediate_polygon.bounds
-                        final_bounds = transformed_polygon.bounds
-                        
-                        final_translation_x = final_bounds[0] - intermediate_bounds[0]
-                        final_translation_y = final_bounds[1] - intermediate_bounds[1]
-                        
-                        # Apply this final translation
-                        new_entity.transform(ezdxf.math.Matrix44.translate(final_translation_x, final_translation_y, 0))
+                        # Apply single transformation
+                        new_entity.transform(transformation)
                     
-                    # Update layer name to include file name
+                    # Update layer name to include file name for better organization
                     base_layer = entity_data['layer']
                     new_layer = f"{file_name.replace('.dxf', '').replace('..', '_')}_{base_layer}"
                     new_entity.dxf.layer = new_layer
@@ -350,7 +337,7 @@ def save_dxf_layout_complete(placed_elements, sheet_size, output_path, original_
                     msp.add_entity(new_entity)
                     
                 except Exception as e:
-                    st.warning(f"⚠️ Ошибка добавления элемента {entity_data['type']}: {e}")
+                    logger.warning(f"Ошибка добавления элемента {entity_data['type']}: {e}")
                     # Fallback: add as simple polyline
                     if hasattr(transformed_polygon, 'exterior'):
                         points = list(transformed_polygon.exterior.coords)[:-1]
@@ -538,8 +525,152 @@ def check_collision(polygon1: Polygon, polygon2: Polygon) -> bool:
     return polygon1.intersects(polygon2) and not polygon1.touches(polygon2)
 
 
+def bin_packing_multi_pass(polygons: list[tuple], existing_layouts: list[dict], sheet_size: tuple[float, float], max_attempts: int = 1000, verbose: bool = True) -> tuple[list[tuple], list[tuple], list[dict]]:
+    """Multi-pass bin packing that tries to fill existing sheets before creating new ones."""
+    placed = []
+    unplaced = list(polygons)
+    updated_layouts = list(existing_layouts)
+    
+    if verbose:
+        st.info(f"Многопроходный алгоритм: пробуем разместить {len(polygons)} полигонов")
+        if existing_layouts:
+            st.info(f"Сначала пробуем дозаполнить {len(existing_layouts)} существующих листов")
+    
+    # Pass 1: Try to fill existing layouts
+    for layout_idx, layout in enumerate(updated_layouts):
+        if not unplaced:
+            break
+            
+        existing_placed = layout['placed_polygons']
+        if verbose:
+            st.info(f"Пробуем дозаполнить лист #{layout['sheet_number']} (текущее заполнение: {layout['usage_percent']:.1f}%)")
+        
+        # Try to place remaining polygons on this existing sheet
+        # Create a version of bin_packing that considers existing polygons
+        additional_placed, still_unplaced = bin_packing_with_existing(
+            unplaced, existing_placed, sheet_size, max_attempts, verbose=False
+        )
+        
+        if additional_placed:
+            # Update the layout with additional polygons
+            updated_layouts[layout_idx]['placed_polygons'] = existing_placed + additional_placed
+            updated_layouts[layout_idx]['usage_percent'] = calculate_usage_percent(
+                updated_layouts[layout_idx]['placed_polygons'], sheet_size
+            )
+            
+            placed.extend(additional_placed)
+            unplaced = still_unplaced
+            
+            if verbose:
+                st.success(f"✅ Дозаполнен лист #{layout['sheet_number']}: +{len(additional_placed)} деталей (новое заполнение: {updated_layouts[layout_idx]['usage_percent']:.1f}%)")
+        else:
+            if verbose:
+                st.info(f"Лист #{layout['sheet_number']} нельзя дозаполнить")
+    
+    return placed, unplaced, updated_layouts
+
+
+def bin_packing_with_existing(polygons: list[tuple], existing_placed: list[tuple], sheet_size: tuple[float, float], max_attempts: int = 1000, verbose: bool = True) -> tuple[list[tuple], list[tuple]]:
+    """Bin packing that considers already placed polygons on the sheet."""
+    # Convert sheet size from cm to mm to match DXF polygon units
+    sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
+    sheet = Polygon([(0, 0), (sheet_width_mm, 0), (sheet_width_mm, sheet_height_mm), (0, sheet_height_mm)])
+    placed = []
+    unplaced = []
+    
+    # Start with existing placed polygons as obstacles
+    obstacles = [placed_tuple[0] for placed_tuple in existing_placed]
+    
+    if verbose:
+        st.info(f"Дозаполняем лист с {len(obstacles)} существующими деталями, добавляем {len(polygons)} новых")
+    
+    # IMPROVEMENT 1: Sort polygons by area (largest first) for better packing
+    def get_polygon_area(polygon_tuple):
+        return polygon_tuple[0].area
+    
+    sorted_polygons = sorted(polygons, key=get_polygon_area, reverse=True)
+    
+    for i, polygon_tuple in enumerate(sorted_polygons):
+        if len(polygon_tuple) >= 4:  # Extended format with color and order_id
+            polygon, file_name, color, order_id = polygon_tuple[:4]
+        elif len(polygon_tuple) >= 3:  # Format with color
+            polygon, file_name, color = polygon_tuple[:3]
+            order_id = 'unknown'  
+        else:  # Old format without color
+            polygon, file_name = polygon_tuple[:2]
+            color = 'серый'
+            order_id = 'unknown'
+        
+        placed_successfully = False
+        
+        # Check if polygon is too large for the sheet
+        bounds = polygon.bounds
+        poly_width = bounds[2] - bounds[0]
+        poly_height = bounds[3] - bounds[1]
+        
+        if poly_width > sheet_width_mm or poly_height > sheet_height_mm:
+            unplaced.append((polygon, file_name, color, order_id))
+            continue
+        
+        # Try all allowed orientations (0°, 90°, 180°, 270°) with better placement
+        best_placement = None
+        best_waste = float('inf')
+        
+        # Only allowed rotation angles for cutting machines
+        rotation_angles = [0, 90, 180, 270]
+        
+        for angle in rotation_angles:
+            rotated = rotate_polygon(polygon, angle) if angle != 0 else polygon
+            rotated_bounds = rotated.bounds
+            rotated_width = rotated_bounds[2] - rotated_bounds[0]
+            rotated_height = rotated_bounds[3] - rotated_bounds[1]
+            
+            # Skip if doesn't fit
+            if rotated_width > sheet_width_mm or rotated_height > sheet_height_mm:
+                continue
+            
+            # Find position that avoids existing obstacles
+            best_x, best_y = find_bottom_left_position_with_obstacles(
+                rotated, obstacles, sheet_width_mm, sheet_height_mm
+            )
+            
+            if best_x is not None and best_y is not None:
+                # Calculate waste for this placement
+                translated = translate_polygon(rotated, best_x - rotated_bounds[0], best_y - rotated_bounds[1])
+                waste = calculate_placement_waste(translated, [(obs, 0, 0, 0, "obstacle") for obs in obstacles], sheet_width_mm, sheet_height_mm)
+                
+                if waste < best_waste:
+                    best_waste = waste
+                    best_placement = {
+                        'polygon': translated,
+                        'x_offset': best_x - rotated_bounds[0],
+                        'y_offset': best_y - rotated_bounds[1], 
+                        'angle': angle
+                    }
+        
+        # Apply best placement if found
+        if best_placement:
+            placed.append((
+                best_placement['polygon'], 
+                best_placement['x_offset'], 
+                best_placement['y_offset'], 
+                best_placement['angle'], 
+                file_name, 
+                color, 
+                order_id
+            ))
+            # Add this polygon as an obstacle for subsequent placements
+            obstacles.append(best_placement['polygon'])
+            placed_successfully = True
+        
+        if not placed_successfully:
+            unplaced.append((polygon, file_name, color, order_id))
+    
+    return placed, unplaced
+
+
 def bin_packing(polygons: list[tuple], sheet_size: tuple[float, float], max_attempts: int = 1000, verbose: bool = True) -> tuple[list[tuple], list[tuple]]:
-    """Optimize placement of complex polygons on a sheet."""
+    """Optimize placement of complex polygons on a sheet with improved algorithm."""
     # Convert sheet size from cm to mm to match DXF polygon units
     sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
     sheet = Polygon([(0, 0), (sheet_width_mm, 0), (sheet_width_mm, sheet_height_mm), (0, sheet_height_mm)])
@@ -547,9 +678,17 @@ def bin_packing(polygons: list[tuple], sheet_size: tuple[float, float], max_atte
     unplaced = []
     
     if verbose:
-        st.info(f"Начинаем упаковку {len(polygons)} полигонов на листе {sheet_size[0]}x{sheet_size[1]} см")
+        st.info(f"Начинаем улучшенную упаковку {len(polygons)} полигонов на листе {sheet_size[0]}x{sheet_size[1]} см")
     
-    for i, polygon_tuple in enumerate(polygons):
+    # IMPROVEMENT 1: Sort polygons by area (largest first) for better packing
+    def get_polygon_area(polygon_tuple):
+        return polygon_tuple[0].area
+    
+    sorted_polygons = sorted(polygons, key=get_polygon_area, reverse=True)
+    if verbose:
+        st.info("✨ Сортировка полигонов по площади (сначала крупные)")
+    
+    for i, polygon_tuple in enumerate(sorted_polygons):
         logger.debug(f"bin_packing: входящий tuple {i}: длина={len(polygon_tuple)}, элементы={polygon_tuple}")
         
         if len(polygon_tuple) >= 4:  # Extended format with color and order_id
@@ -565,7 +704,7 @@ def bin_packing(polygons: list[tuple], sheet_size: tuple[float, float], max_atte
         logger.debug(f"bin_packing: извлечено file_name='{file_name}' (тип: {type(file_name)}), order_id='{order_id}')")
         placed_successfully = False
         if verbose:
-            st.info(f"Обрабатываем полигон {i+1}/{len(polygons)} из файла {file_name}, площадь: {polygon.area:.2f}")
+            st.info(f"Обрабатываем полигон {i+1}/{len(sorted_polygons)} из файла {file_name}, площадь: {polygon.area:.2f}")
         
         # Check if polygon is too large for the sheet
         bounds = polygon.bounds
@@ -578,113 +717,228 @@ def bin_packing(polygons: list[tuple], sheet_size: tuple[float, float], max_atte
             unplaced.append((polygon, file_name, color, order_id))
             continue
         
-        # First try simple placement without rotation
-        simple_bounds = polygon.bounds
-        simple_width = simple_bounds[2] - simple_bounds[0]
-        simple_height = simple_bounds[3] - simple_bounds[1]
+        # IMPROVEMENT 2: Try all allowed orientations (0°, 90°, 180°, 270°) with better placement
+        best_placement = None
+        best_waste = float('inf')
         
-        if verbose:
-            st.info(f"Размеры полигона: {simple_width/10:.1f}x{simple_height/10:.1f} см, размеры листа: {sheet_size[0]}x{sheet_size[1]} см")
+        # Only allowed rotation angles for cutting machines
+        rotation_angles = [0, 90, 180, 270]
         
-        # First try simple placement at origin
-        if len(placed) == 0:  # First polygon - try to place at origin
-            origin_polygon = place_polygon_at_origin(polygon)
-            origin_bounds = origin_polygon.bounds
+        for angle in rotation_angles:
+            rotated = rotate_polygon(polygon, angle) if angle != 0 else polygon
+            rotated_bounds = rotated.bounds
+            rotated_width = rotated_bounds[2] - rotated_bounds[0]
+            rotated_height = rotated_bounds[3] - rotated_bounds[1]
             
-            if (origin_bounds[2] <= sheet_width_mm and origin_bounds[3] <= sheet_height_mm):
-                placed.append((origin_polygon, 0, 0, 0, file_name, color, order_id))
-                placed_successfully = True
-                if verbose:
-                    st.success(f"Успешно размещен полигон из {file_name} в начале координат")
+            # Skip if doesn't fit
+            if rotated_width > sheet_width_mm or rotated_height > sheet_height_mm:
+                continue
+            
+            # IMPROVEMENT 3: Bottom-Left Fill algorithm for better placement
+            best_x, best_y = find_bottom_left_position(rotated, placed, sheet_width_mm, sheet_height_mm)
+            
+            if best_x is not None and best_y is not None:
+                # Calculate waste for this placement
+                translated = translate_polygon(rotated, best_x - rotated_bounds[0], best_y - rotated_bounds[1])
+                waste = calculate_placement_waste(translated, placed, sheet_width_mm, sheet_height_mm)
+                
+                if waste < best_waste:
+                    best_waste = waste
+                    best_placement = {
+                        'polygon': translated,
+                        'x_offset': best_x - rotated_bounds[0],
+                        'y_offset': best_y - rotated_bounds[1], 
+                        'angle': angle
+                    }
         
-        # If origin placement failed or not first polygon, try systematic grid placement
-        if not placed_successfully:
-            max_grid_attempts = 10
+        # Apply best placement if found
+        if best_placement:
+            placed.append((
+                best_placement['polygon'], 
+                best_placement['x_offset'], 
+                best_placement['y_offset'], 
+                best_placement['angle'], 
+                file_name, 
+                color, 
+                order_id
+            ))
+            placed_successfully = True
+            if verbose:
+                st.success(f"✅ Размещен {file_name} (угол: {best_placement['angle']}°, waste: {best_waste:.1f})")
+        else:
+            # Fallback to original grid method if no bottom-left position found
+            simple_bounds = polygon.bounds
+            simple_width = simple_bounds[2] - simple_bounds[0]
+            simple_height = simple_bounds[3] - simple_bounds[1]
+            
+            # Try basic grid placement as fallback
+            max_grid_attempts = 15  # Increased from 10
             x_positions = np.linspace(0, max(0, sheet_width_mm - simple_width), max_grid_attempts) if sheet_width_mm > simple_width else [0]
             y_positions = np.linspace(0, max(0, sheet_height_mm - simple_height), max_grid_attempts) if sheet_height_mm > simple_height else [0]
             
             for grid_x in x_positions:
                 for grid_y in y_positions:
-                    # Move polygon to grid position
                     translated = translate_polygon(polygon, grid_x - simple_bounds[0], grid_y - simple_bounds[1])
                     
-                    # Check if polygon is within sheet bounds with small tolerance
                     translated_bounds = translated.bounds
                     if (translated_bounds[0] >= -0.01 and translated_bounds[1] >= -0.01 and 
                         translated_bounds[2] <= sheet_width_mm + 0.01 and translated_bounds[3] <= sheet_height_mm + 0.01):
                         
-                        # Check for collisions with already placed polygons
                         collision = any(check_collision(translated, p[0]) for p in placed)
                         if not collision:
                             placed.append((translated, grid_x - simple_bounds[0], grid_y - simple_bounds[1], 0, file_name, color, order_id))
                             placed_successfully = True
                             if verbose:
-                                st.success(f"Успешно размещен полигон из {file_name} (сетчатое размещение в позиции {grid_x:.1f}, {grid_y:.1f})")
+                                st.success(f"✅ Размещен {file_name} (сетчатое размещение)")
                             break
                 
                 if placed_successfully:
                     break
         
-        # If grid placement failed, try random placement with rotations
         if not placed_successfully:
             if verbose:
-                st.info(f"Сетчатое размещение не удалось, пробуем случайное размещение с поворотами")
-            
-            # Try basic 4 orientations first
-            for angle in [0, 90, 180, 270]:
-                if placed_successfully:
-                    break
-                    
-                rotated = rotate_polygon(polygon, angle)
-                rotated_bounds = rotated.bounds
-                rotated_width = rotated_bounds[2] - rotated_bounds[0]
-                rotated_height = rotated_bounds[3] - rotated_bounds[1]
-                
-                if verbose:
-                    st.info(f"Проверяем поворот на {angle}°: размеры {rotated_width/10:.1f}x{rotated_height/10:.1f} см")
-                
-                if rotated_width <= sheet_width_mm and rotated_height <= sheet_height_mm:
-                    # Try placing at origin first
-                    origin_rotated = place_polygon_at_origin(rotated)
-                    origin_bounds = origin_rotated.bounds
-                    
-                    if (origin_bounds[2] <= sheet_width_mm and origin_bounds[3] <= sheet_height_mm):
-                        collision = any(check_collision(origin_rotated, p[0]) for p in placed)
-                        if not collision:
-                            placed.append((origin_rotated, 0, 0, angle, file_name, color, order_id))
-                            placed_successfully = True
-                            if verbose:
-                                st.success(f"Успешно размещен полигон из {file_name} (поворот {angle}°, начало координат)")
-                            break
-                    
-                    # If origin placement failed, try grid positions
-                    if not placed_successfully:
-                        for grid_x in np.linspace(0, sheet_width_mm - rotated_width, 10):
-                            for grid_y in np.linspace(0, sheet_height_mm - rotated_height, 10):
-                                translated = translate_polygon(rotated, grid_x - rotated_bounds[0], grid_y - rotated_bounds[1])
-                                
-                                final_bounds = translated.bounds
-                                if (final_bounds[0] >= -0.01 and final_bounds[1] >= -0.01 and 
-                                    final_bounds[2] <= sheet_width_mm + 0.01 and final_bounds[3] <= sheet_height_mm + 0.01):
-                                    
-                                    collision = any(check_collision(translated, p[0]) for p in placed)
-                                    if not collision:
-                                        placed.append((translated, grid_x - rotated_bounds[0], grid_y - rotated_bounds[1], angle, file_name, color, order_id))
-                                        placed_successfully = True
-                                        if verbose:
-                                            st.success(f"Успешно размещен полигон из {file_name} (поворот {angle}°, позиция {grid_x:.1f}, {grid_y:.1f})")
-                                        break
-                            if placed_successfully:
-                                break
-        
-        if not placed_successfully:
-            if verbose:
-                st.warning(f"Не удалось разместить полигон из {file_name}")
+                st.warning(f"❌ Не удалось разместить полигон из {file_name}")
             unplaced.append((polygon, file_name, color, order_id))
     
     if verbose:
-        st.info(f"Упаковка завершена: {len(placed)} размещено, {len(unplaced)} не размещено")
+        usage_percent = calculate_usage_percent(placed, sheet_size)
+        st.info(f"🏁 Упаковка завершена: {len(placed)} размещено, {len(unplaced)} не размещено, использование: {usage_percent:.1f}%")
     return placed, unplaced
+
+
+def find_bottom_left_position_with_obstacles(polygon, obstacles, sheet_width, sheet_height):
+    """Find the bottom-left position for a polygon using Bottom-Left Fill algorithm with existing obstacles."""
+    bounds = polygon.bounds
+    poly_width = bounds[2] - bounds[0]
+    poly_height = bounds[3] - bounds[1]
+    
+    # Try positions along bottom and left edges first
+    candidate_positions = []
+    
+    # Bottom edge positions
+    for x in np.arange(0, sheet_width - poly_width + 1, 5):  # 5mm steps
+        candidate_positions.append((x, 0))
+    
+    # Left edge positions  
+    for y in np.arange(0, sheet_height - poly_height + 1, 5):  # 5mm steps
+        candidate_positions.append((0, y))
+    
+    # Positions based on existing obstacles (bottom-left principle)
+    for obstacle in obstacles:
+        obstacle_bounds = obstacle.bounds
+        
+        # Try position to the right of existing obstacle
+        x = obstacle_bounds[2] + 1  # 1mm gap
+        if x + poly_width <= sheet_width:
+            candidate_positions.append((x, obstacle_bounds[1]))  # Same Y as existing
+            candidate_positions.append((x, 0))  # Bottom edge
+        
+        # Try position above existing obstacle
+        y = obstacle_bounds[3] + 1  # 1mm gap
+        if y + poly_height <= sheet_height:
+            candidate_positions.append((obstacle_bounds[0], y))  # Same X as existing
+            candidate_positions.append((0, y))  # Left edge
+    
+    # Sort by bottom-left preference (y first, then x)
+    candidate_positions.sort(key=lambda pos: (pos[1], pos[0]))
+    
+    # Test each position
+    for x, y in candidate_positions:
+        if x + poly_width > sheet_width or y + poly_height > sheet_height:
+            continue
+            
+        # Test position by translating polygon
+        test_polygon = translate_polygon(polygon, x - bounds[0], y - bounds[1])
+        
+        # Check for collisions with obstacles
+        collision = any(check_collision(test_polygon, obstacle) for obstacle in obstacles)
+        
+        if not collision:
+            return x, y
+    
+    return None, None
+
+
+def find_bottom_left_position(polygon, placed_polygons, sheet_width, sheet_height):
+    """Find the bottom-left position for a polygon using Bottom-Left Fill algorithm."""
+    bounds = polygon.bounds
+    poly_width = bounds[2] - bounds[0]
+    poly_height = bounds[3] - bounds[1]
+    
+    # Try positions along bottom and left edges first
+    candidate_positions = []
+    
+    # Bottom edge positions
+    for x in np.arange(0, sheet_width - poly_width + 1, 5):  # 5mm steps
+        candidate_positions.append((x, 0))
+    
+    # Left edge positions  
+    for y in np.arange(0, sheet_height - poly_height + 1, 5):  # 5mm steps
+        candidate_positions.append((0, y))
+    
+    # Positions based on existing polygons (bottom-left principle)
+    for placed_tuple in placed_polygons:
+        placed_polygon = placed_tuple[0]
+        placed_bounds = placed_polygon.bounds
+        
+        # Try position to the right of existing polygon
+        x = placed_bounds[2] + 1  # 1mm gap
+        if x + poly_width <= sheet_width:
+            candidate_positions.append((x, placed_bounds[1]))  # Same Y as existing
+            candidate_positions.append((x, 0))  # Bottom edge
+        
+        # Try position above existing polygon
+        y = placed_bounds[3] + 1  # 1mm gap
+        if y + poly_height <= sheet_height:
+            candidate_positions.append((placed_bounds[0], y))  # Same X as existing
+            candidate_positions.append((0, y))  # Left edge
+    
+    # Sort by bottom-left preference (y first, then x)
+    candidate_positions.sort(key=lambda pos: (pos[1], pos[0]))
+    
+    # Test each position
+    for x, y in candidate_positions:
+        if x + poly_width > sheet_width or y + poly_height > sheet_height:
+            continue
+            
+        # Test position by translating polygon
+        test_polygon = translate_polygon(polygon, x - bounds[0], y - bounds[1])
+        
+        # Check for collisions
+        collision = any(check_collision(test_polygon, p[0]) for p in placed_polygons)
+        
+        if not collision:
+            return x, y
+    
+    return None, None
+
+
+def calculate_placement_waste(polygon, placed_polygons, sheet_width, sheet_height):
+    """Calculate waste/inefficiency for a polygon placement."""
+    bounds = polygon.bounds
+    
+    # Calculate compactness - how close polygon is to other polygons and edges
+    edge_distance = min(bounds[0], bounds[1])  # Distance to bottom-left corner
+    
+    # Distance to other polygons
+    min_neighbor_distance = float('inf')
+    for placed_tuple in placed_polygons:
+        placed_polygon = placed_tuple[0]
+        placed_bounds = placed_polygon.bounds
+        
+        # Calculate minimum distance between bounding boxes
+        dx = max(0, max(bounds[0] - placed_bounds[2], placed_bounds[0] - bounds[2]))
+        dy = max(0, max(bounds[1] - placed_bounds[3], placed_bounds[1] - bounds[3]))
+        distance = (dx**2 + dy**2)**0.5
+        
+        min_neighbor_distance = min(min_neighbor_distance, distance)
+    
+    if min_neighbor_distance == float('inf'):
+        min_neighbor_distance = 0  # First polygon
+    
+    # Waste = edge_distance + average neighbor distance (lower is better)
+    waste = edge_distance + min_neighbor_distance * 0.5
+    return waste
 
 
 def bin_packing_with_inventory(polygons: list[tuple], available_sheets: list[dict], verbose: bool = True, max_sheets_per_order: int = None) -> tuple[list[dict], list[tuple]]:
@@ -932,10 +1186,63 @@ def bin_packing_with_inventory(polygons: list[tuple], available_sheets: list[dic
             st.error(error_msg)
         raise ValueError(error_msg)
     
-    # Add any completely unplaced polygons to the unplaced list
+    # IMPROVEMENT: Try to fit remaining polygons into existing sheets before giving up
+    remaining_polygons_list = []
     for order_id, remaining_polygons in remaining_orders.items():
-        all_unplaced.extend(remaining_polygons)
+        remaining_polygons_list.extend(remaining_polygons)
     
+    logger.info(f"Проверка дозаполнения: remaining_orders={len(remaining_orders)}, remaining_polygons_list={len(remaining_polygons_list)}, placed_layouts={len(placed_layouts)}")
+    
+    if remaining_polygons_list and placed_layouts:
+        if verbose:
+            st.info(f"🔄 Пытаемся дозаполнить {len(placed_layouts)} существующих листов {len(remaining_polygons_list)} оставшимися деталями")
+    else:
+        logger.info(f"Дозаполнение не запущено: remaining_polygons_list={len(remaining_polygons_list)}, placed_layouts={len(placed_layouts)}")
+        
+        logger.info(f"Попытка дозаполнения: {len(remaining_polygons_list)} полигонов на {len(placed_layouts)} листах")
+        
+        for layout_idx, layout in enumerate(placed_layouts):
+            if not remaining_polygons_list:
+                break
+                
+            sheet_size = layout['sheet_size']
+            existing_placed = layout['placed_polygons']
+            current_usage = layout['usage_percent']
+            
+            if current_usage >= 95:  # Skip nearly full sheets
+                continue
+                
+            logger.info(f"Пытаемся дозаполнить лист #{layout['sheet_number']} (заполнение: {current_usage:.1f}%)")
+            
+            # Try to place remaining polygons on this existing sheet
+            try:
+                additional_placed, still_remaining = bin_packing_with_existing(
+                    remaining_polygons_list, existing_placed, sheet_size, verbose=False
+                )
+                
+                if additional_placed:
+                    # Update the layout with additional polygons
+                    placed_layouts[layout_idx]['placed_polygons'] = existing_placed + additional_placed
+                    placed_layouts[layout_idx]['usage_percent'] = calculate_usage_percent(
+                        placed_layouts[layout_idx]['placed_polygons'], sheet_size
+                    )
+                    
+                    new_usage = placed_layouts[layout_idx]['usage_percent']
+                    logger.info(f"✅ Дозаполнен лист #{layout['sheet_number']}: +{len(additional_placed)} деталей ({current_usage:.1f}% → {new_usage:.1f}%)")
+                    
+                    if verbose:
+                        st.success(f"✅ Дозаполнен лист #{layout['sheet_number']}: +{len(additional_placed)} деталей ({current_usage:.1f}% → {new_usage:.1f}%)")
+                    
+                    # Update remaining polygons list
+                    remaining_polygons_list = still_remaining
+                    
+                else:
+                    logger.info(f"Лист #{layout['sheet_number']} нельзя дозаполнить")
+            except Exception as e:
+                logger.warning(f"Ошибка при дозаполнении листа #{layout['sheet_number']}: {e}")
+    
+    # Add any remaining unplaced polygons to the unplaced list
+    all_unplaced.extend(remaining_polygons_list)
     
     logger.info(f"=== ОКОНЧАНИЕ bin_packing_with_inventory ===")
     logger.info(f"ИТОГОВЫЙ РЕЗУЛЬТАТ: {len(placed_layouts)} листов использовано, {len(all_unplaced)} объектов не размещено")

@@ -702,22 +702,89 @@ st.write("Вы можете добавить дополнительные DXF ф
 
 manual_files = st.file_uploader("Добавьте дополнительные DXF файлы при необходимости", type=["dxf"], accept_multiple_files=True, key="manual_dxf")
 
+# Initialize session state for manual file settings
+if 'manual_file_settings' not in st.session_state:
+    st.session_state.manual_file_settings = {}
+
 # Store manual files in session state for later processing
 if manual_files:
-    st.write("**Выберите цвет для дополнительных файлов:**")
-    manual_color = st.selectbox(
-        "Цвет листа для дополнительных файлов:",
-        options=["чёрный", "серый"],
-        index=0,
-        key="manual_files_color",
-        help="Выберите цвет листа, на который должны быть размещены дополнительные файлы"
-    )
-    # Store manual files and color in session state
-    st.session_state.manual_files = manual_files
-    st.session_state.manual_color = manual_color
-    st.success(f"✅ Добавлено {len(manual_files)} дополнительных файлов")
+    st.write("**Настройка дополнительных файлов:**")
+    
+    # Create settings for each file
+    manual_files_configured = []
+    
+    for i, file in enumerate(manual_files):
+        with st.expander(f"📄 {file.name}", expanded=True):
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                file_color = st.selectbox(
+                    f"Цвет листа для {file.name}:",
+                    options=["чёрный", "серый"],
+                    index=0,
+                    key=f"manual_file_color_{i}_{file.name}",
+                    help="Выберите цвет листа, на который должен быть размещен этот файл"
+                )
+            
+            with col2:
+                file_quantity = st.number_input(
+                    f"Количество копий {file.name}:",
+                    min_value=1,
+                    max_value=50,
+                    value=1,
+                    key=f"manual_file_qty_{i}_{file.name}",
+                    help="Сколько копий этого файла нужно разместить"
+                )
+            
+            # Store settings for this file
+            st.session_state.manual_file_settings[file.name] = {
+                'color': file_color,
+                'quantity': file_quantity,
+                'file': file
+            }
+            
+            # Create file objects with settings for each quantity
+            for copy_num in range(file_quantity):
+                # Create a new file-like object for each copy to avoid reference issues
+                import io
+                file.seek(0)
+                file_content = file.read()
+                file_copy = io.BytesIO(file_content)
+                file_copy.name = file.name  # Keep original name reference
+                file_copy.color = file_color
+                file_copy.order_id = 'additional'
+                file_copy.copy_number = copy_num + 1
+                file_copy.original_name = file.name
+                
+                # Create unique name for multiple copies
+                if file_quantity > 1:
+                    base_name = file.name.replace('.dxf', '')
+                    file_copy.display_name = f"{base_name}_копия_{copy_num + 1}.dxf"
+                else:
+                    file_copy.display_name = file.name
+                
+                # Also store copy info for debugging
+                file_copy.copy_info = f"copy_{copy_num + 1}_of_{file_quantity}"
+                
+                manual_files_configured.append(file_copy)
+    
+    # Store configured files
+    st.session_state.manual_files = manual_files_configured
+    
+    # Show summary
+    total_files = sum(settings['quantity'] for settings in st.session_state.manual_file_settings.values())
+    color_counts = {}
+    for settings in st.session_state.manual_file_settings.values():
+        color = settings['color']
+        color_counts[color] = color_counts.get(color, 0) + settings['quantity']
+    
+    st.success(f"✅ Настроено {len(manual_files)} файлов, всего {total_files} копий:")
+    for color, count in color_counts.items():
+        color_emoji = "⚫" if color == "чёрный" else "⚪"
+        st.info(f"   {color_emoji} {color}: {count} файлов")
 else:
     st.session_state.manual_files = []
+    st.session_state.manual_file_settings = {}
 
 # Show status messages based on what's available
 if st.session_state.selected_orders and manual_files:
@@ -791,11 +858,10 @@ if st.button("🚀 Оптимизировать раскрой"):
             else:
                 st.warning(f"⚠️ Не найдены DXF файлы для заказа: {product} (тип: {product_type})")
         
-        # Load manual files if any
+        # Load manual files if any (already configured with colors and quantities)
         if hasattr(st.session_state, 'manual_files') and st.session_state.manual_files:
             for file in st.session_state.manual_files:
-                file.color = getattr(st.session_state, 'manual_color', 'серый')
-                file.order_id = 'additional'
+                # Files are already configured with color, order_id, and display_name
                 manual_files_with_color.append(file)
         
         # Combine all files
@@ -821,7 +887,10 @@ if st.button("🚀 Оптимизировать раскрой"):
             # Update progress
             progress = (idx + 1) / len(dxf_files)
             progress_bar.progress(progress)
-            status_text.text(f"Парсим файл {idx + 1}/{len(dxf_files)}: {file.name}")
+            
+            # Use display_name if available (for manual files with copies), otherwise use file.name
+            display_name = getattr(file, 'display_name', file.name)
+            status_text.text(f"Парсим файл {idx + 1}/{len(dxf_files)}: {display_name}")
             
             file.seek(0)
             file_bytes = BytesIO(file.read())
@@ -833,18 +902,18 @@ if st.button("🚀 Оптимизировать раскрой"):
                 
                 # DEBUG: Log all file attributes to understand the issue
                 file_attrs = [attr for attr in dir(file) if not attr.startswith('_')]
-                logger.debug(f"ФАЙЛ {file.name}: атрибуты = {file_attrs}")
-                logger.debug(f"ФАЙЛ {file.name}: color = {file_color}, order_id = {file_order_id}")
+                logger.debug(f"ФАЙЛ {display_name}: атрибуты = {file_attrs}")
+                logger.debug(f"ФАЙЛ {display_name}: color = {file_color}, order_id = {file_order_id}")
                 
-                # Use the combined polygon with extended format: (polygon, filename, color, order_id)
-                polygon_tuple = (parsed_data['combined_polygon'], file.name, file_color, file_order_id)
+                # Use the display_name for polygon identification
+                polygon_tuple = (parsed_data['combined_polygon'], display_name, file_color, file_order_id)
                 polygons.append(polygon_tuple)
                 logger.info(f"ДОБАВЛЕН ПОЛИГОН: tuple длина={len(polygon_tuple)}, order_id={polygon_tuple[3] if len(polygon_tuple) > 3 else 'НЕТ'}")
-                # Store original DXF data for this file
-                original_dxf_data_map[file.name] = parsed_data
-                logger.info(f"СОЗДАН ПОЛИГОН: файл={file.name}, заказ={file_order_id}, цвет={file_color}")
+                # Store original DXF data using display_name as key
+                original_dxf_data_map[display_name] = parsed_data
+                logger.info(f"СОЗДАН ПОЛИГОН: файл={display_name}, заказ={file_order_id}, цвет={file_color}")
             else:
-                logger.warning(f"Не удалось получить полигон из файла {file.name}")
+                logger.warning(f"Не удалось получить полигон из файла {display_name}")
         
         # Clear progress indicators
         progress_bar.empty()
@@ -1035,23 +1104,35 @@ if st.button("🚀 Оптимизировать раскрой"):
             results_progress.progress(progress_value)
             results_status.text(f"Создание файла {i + 1}/{total_layouts}: лист {layout['sheet_number']}")
 
-            # Save and visualize layout with new naming format: length_width_number.dxf
+            # Save and visualize layout with new naming format: length_width_number_color.dxf
             sheet_width = int(layout['sheet_size'][0])
             sheet_height = int(layout['sheet_size'][1])
             sheet_number = layout['sheet_number']
-            output_filename = f"{sheet_height}_{sheet_width}_{sheet_number}.dxf"
+            
+            # Find sheet color from original sheet data
+            sheet_color = "не указан"
+            color_suffix = "unknown"
+            for sheet in st.session_state.available_sheets:
+                if sheet['name'] == layout['sheet_type']:
+                    sheet_color = sheet.get('color', 'не указан')
+                    # Convert color name to English suffix
+                    if sheet_color == "чёрный":
+                        color_suffix = "black"
+                    elif sheet_color == "серый":
+                        color_suffix = "gray"
+                    else:
+                        color_suffix = "unknown"
+                    break
+            
+            output_filename = f"{sheet_height}_{sheet_width}_{sheet_number}_{color_suffix}.dxf"
             output_file = os.path.join(OUTPUT_FOLDER, output_filename)
             save_dxf_layout_complete(layout['placed_polygons'], layout['sheet_size'], output_file, original_dxf_data_map)
             layout_plot = plot_layout(layout['placed_polygons'], layout['sheet_size'])
 
-            # Find sheet color from original sheet data
-            sheet_color = "не указан"
-            for sheet in st.session_state.available_sheets:
-                if sheet['name'] == layout['sheet_type']:
-                    sheet_color = sheet.get('color', 'не указан')
-                    break
-
             # Store layout info in old format for compatibility
+            shapes_count = len(layout['placed_polygons'])
+            logger.info(f"Лист #{layout['sheet_number']}: создаем all_layouts запись с {shapes_count} размещенными полигонами")
+            
             all_layouts.append({
                 "Sheet": layout['sheet_number'],
                 "Sheet Type": layout['sheet_type'],
@@ -1059,7 +1140,7 @@ if st.button("🚀 Оптимизировать раскрой"):
                 "Sheet Size": f"{layout['sheet_size'][0]}x{layout['sheet_size'][1]} см",
                 "Output File": output_file,
                 "Plot": layout_plot,
-                "Shapes Placed": len(layout['placed_polygons']),
+                "Shapes Placed": shapes_count,
                 "Material Usage (%)": f"{layout['usage_percent']:.2f}",
                 "Placed Polygons": layout['placed_polygons']
             })
@@ -1081,190 +1162,217 @@ if st.button("🚀 Оптимизировать раскрой"):
         time.sleep(1)
         results_progress.empty()
         results_status.empty()
-
-        # Display Results
-        st.header("📊 Результаты")
-        if all_layouts:
-            st.success(f"✅ Успешно использовано листов: {len(all_layouts)}")
-            
-            # Summary statistics
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Всего листов", len(all_layouts))
-            with col2:
-                total_placed = sum(layout["Shapes Placed"] for layout in all_layouts)
-                st.metric("Размещено объектов", f"{total_placed}/{len(polygons)}")
-            with col3:
-                avg_usage = sum(float(layout["Material Usage (%)"].replace('%', '')) for layout in all_layouts) / len(all_layouts)
-                st.metric("Средний расход материала", f"{avg_usage:.1f}%")
-            with col4:
-                if unplaced_polygons:
-                    st.metric("Не размещено", len(unplaced_polygons), delta=f"-{len(unplaced_polygons)}", delta_color="inverse")
-                else:
-                    st.metric("Не размещено", 0, delta="Все размещено ✅")
-            
-            # Show updated inventory
-            st.subheader("📦 Обновленный инвентарь листов")
-            updated_sheets_data = []
-            for sheet in st.session_state.available_sheets:
-                # Add color indicator
-                color = sheet.get('color', 'не указан')
-                color_emoji = "⚫" if color == "чёрный" else "⚪" if color == "серый" else "🔘"
-                color_display = f"{color_emoji} {color}"
-                
-                updated_sheets_data.append({
-                    "Тип листа": sheet['name'],
-                    "Размер (см)": f"{sheet['width']}x{sheet['height']}",
-                    "Цвет": color_display,
-                    "Было": sheet['count'],
-                    "Использовано": sheet['used'],
-                    "Осталось": sheet['count'] - sheet['used']
-                })
-            updated_df = pd.DataFrame(updated_sheets_data)
-            st.dataframe(updated_df, use_container_width=True)
-            
-            # Detailed results table with sizes
-            st.subheader("📋 Подробные результаты")
-            
-            # Create enhanced report with sizes
-            enhanced_report_data = []
-            for layout in all_layouts:
-                for placed_tuple in layout["Placed Polygons"]:
-                    if len(placed_tuple) >= 6:  # New format with color
-                        polygon, _, _, angle, file_name, color = placed_tuple[:6]
-                    else:  # Old format without color
-                        polygon, _, _, angle, file_name = placed_tuple[:5]
-                        color = 'серый'
-                    bounds = polygon.bounds
-                    width_cm = (bounds[2] - bounds[0]) / 10
-                    height_cm = (bounds[3] - bounds[1]) / 10
-                    area_cm2 = polygon.area / 100
-                    
-                    # Compare with original dimensions
-                    original = original_dimensions.get(file_name, {})
-                    original_width = original.get("width_cm", 0)
-                    original_height = original.get("height_cm", 0)
-                    original_area = original.get("area_cm2", 0)
-                    
-                    scale_factor = (width_cm / original_width) if original_width > 0 else 1.0
-                    
-                    size_comparison = f"{width_cm:.1f}×{height_cm:.1f}"
-                    if abs(scale_factor - 1.0) > 0.01:  # If scaled
-                        size_comparison += f" (было {original_width:.1f}×{original_height:.1f})"
-                    
-                    enhanced_report_data.append({
-                        "DXF файл": file_name,
-                        "Номер листа": layout["Sheet"],
-                        "Размер (см)": size_comparison,
-                        "Площадь (см²)": f"{area_cm2:.2f}",
-                        "Поворот (°)": f"{angle:.0f}",
-                        "Выходной файл": layout["Output File"]
-                    })
-            
-            if enhanced_report_data:
-                enhanced_df = pd.DataFrame(enhanced_report_data)
-                st.dataframe(enhanced_df, use_container_width=True)
-                # Also create simple report_df for export
-                report_df = pd.DataFrame(report_data, columns=["DXF файл", "Номер листа", "Выходной файл"])
-            else:
-                report_df = pd.DataFrame(report_data, columns=["DXF файл", "Номер листа", "Выходной файл"])
-                st.dataframe(report_df, use_container_width=True)
-
-            # Sheet visualizations
-            st.subheader("📐 Схемы раскроя листов")
-            for layout in all_layouts:
-                # Add color indicator emoji
-                color_emoji = "⚫" if layout['Sheet Color'] == "чёрный" else "⚪" if layout['Sheet Color'] == "серый" else "🔘"
-                
-                st.write(f"**Лист №{layout['Sheet']}: {color_emoji} {layout['Sheet Type']} ({layout['Sheet Size']}) - {layout['Shapes Placed']} объектов - {layout['Material Usage (%)']}% расход**")
-                col1, col2 = st.columns([2, 1])
-                with col1:
-                    st.image(layout["Plot"], caption=f"Раскрой листа №{layout['Sheet']} ({layout['Sheet Type']})", use_container_width=True)
-                with col2:
-                    st.write(f"**Тип листа:** {layout['Sheet Type']}")
-                    st.write(f"**Цвет листа:** {color_emoji} {layout['Sheet Color']}")
-                    st.write(f"**Размер листа:** {layout['Sheet Size']}")
-                    st.write(f"**Размещено объектов:** {layout['Shapes Placed']}")
-                    st.write(f"**Расход материала:** {layout['Material Usage (%)']}%")
-                    with open(layout["Output File"], "rb") as f:
-                        st.download_button(
-                            label=f"📥 Скачать DXF",
-                            data=f,
-                            file_name=os.path.basename(layout["Output File"]),
-                            mime="application/dxf",
-                            key=f"download_{layout['Sheet']}"
-                        )
-                st.divider()  # Add visual separator between sheets
-        else:
-            st.error("❌ Не было создано ни одного листа. Проверьте отладочную информацию выше.")
         
-        # Show unplaced polygons if any
-        if unplaced_polygons:
-            st.warning(f"⚠️ {len(unplaced_polygons)} объектов не удалось разместить.")
-            st.subheader("🚫 Неразмещенные объекты")
-            unplaced_data = []
-            for polygon_tuple in unplaced_polygons:
-                if len(polygon_tuple) >= 3:  # New format with color
-                    poly, name, color = polygon_tuple[:3]
-                else:  # Old format without color
-                    poly, name = polygon_tuple[:2]
-                    color = 'серый'
-                unplaced_data.append((name, f"{poly.area/100:.2f}", color))
-            
-            unplaced_df = pd.DataFrame(unplaced_data, columns=["Файл", "Площадь (см²)", "Цвет"])
-            st.dataframe(unplaced_df, use_container_width=True)
+        # Save results to session state to prevent loss on rerun
+        st.session_state.optimization_results = {
+            'all_layouts': all_layouts,
+            'report_data': report_data,
+            'unplaced_polygons': unplaced_polygons,
+            'polygons_count': len(polygons),
+            'original_dxf_data_map': original_dxf_data_map,
+            'original_dimensions': original_dimensions
+        }
 
-        # Save report
-        if all_layouts:
-            report_file = os.path.join(OUTPUT_FOLDER, f"layout_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
-            
-            # Use enhanced report if available, otherwise simple report
-            if enhanced_report_data:
-                enhanced_df.to_excel(report_file, index=False)
-            elif 'report_df' in locals():
-                report_df.to_excel(report_file, index=False)
+# Display Results (moved outside the optimization block)
+if 'optimization_results' in st.session_state and st.session_state.optimization_results:
+    # Add button to clear results
+    if st.button("🗑️ Очистить результаты", help="Очистить результаты оптимизации для нового расчета"):
+        st.session_state.optimization_results = None
+        st.rerun()
+        
+if 'optimization_results' in st.session_state and st.session_state.optimization_results:
+    results = st.session_state.optimization_results
+    all_layouts = results['all_layouts']
+    report_data = results['report_data']
+    unplaced_polygons = results['unplaced_polygons']
+    polygons_count = results['polygons_count']
+    original_dxf_data_map = results['original_dxf_data_map']
+    original_dimensions = results.get('original_dimensions', {})
+    
+    st.header("📊 Результаты")
+    if all_layouts:
+        st.success(f"✅ Успешно использовано листов: {len(all_layouts)}")
+        
+        # Summary statistics
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Всего листов", len(all_layouts))
+        with col2:
+            total_placed = sum(layout["Shapes Placed"] for layout in all_layouts)
+            logger.info(f"UI подсчет: total_placed={total_placed}, polygons_count={polygons_count}")
+            logger.info(f"Подробности по листам: {[(layout['Sheet'], layout['Shapes Placed']) for layout in all_layouts]}")
+            st.metric("Размещено объектов", f"{total_placed}/{polygons_count}")
+        with col3:
+            avg_usage = sum(float(layout["Material Usage (%)"].replace('%', '')) for layout in all_layouts) / len(all_layouts)
+            st.metric("Средний расход материала", f"{avg_usage:.1f}%")
+        with col4:
+            if unplaced_polygons:
+                st.metric("Не размещено", len(unplaced_polygons), delta=f"-{len(unplaced_polygons)}", delta_color="inverse")
             else:
-                # Fallback: create simple report from report_data
-                fallback_df = pd.DataFrame(report_data, columns=["DXF файл", "Номер листа", "Выходной файл"])
-                fallback_df.to_excel(report_file, index=False)
+                st.metric("Не размещено", 0, delta="Все размещено ✅")
+        
+        # Show updated inventory
+        st.subheader("📦 Обновленный инвентарь листов")
+        updated_sheets_data = []
+        for sheet in st.session_state.available_sheets:
+            # Add color indicator
+            color = sheet.get('color', 'не указан')
+            color_emoji = "⚫" if color == "чёрный" else "⚪" if color == "серый" else "🔘"
+            color_display = f"{color_emoji} {color}"
             
-            # Create ZIP archive with all DXF files
-            zip_filename = f"layout_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
-            zip_path = os.path.join(OUTPUT_FOLDER, zip_filename)
-            
-            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                # Add all DXF layout files
-                for layout in all_layouts:
-                    dxf_file_path = layout["Output File"]
-                    if os.path.exists(dxf_file_path):
-                        # Use the new naming format for files in zip
-                        arcname = os.path.basename(dxf_file_path)
-                        zipf.write(dxf_file_path, arcname)
+            updated_sheets_data.append({
+                "Тип листа": sheet['name'],
+                "Размер (см)": f"{sheet['width']}x{sheet['height']}",
+                "Цвет": color_display,
+                "Было": sheet['count'],
+                "Использовано": sheet['used'],
+                "Осталось": sheet['count'] - sheet['used']
+            })
+        updated_df = pd.DataFrame(updated_sheets_data)
+        st.dataframe(updated_df, use_container_width=True)
+        
+        # Detailed results table with sizes
+        st.subheader("📋 Подробные результаты")
+        
+        # Create enhanced report with sizes  
+        enhanced_report_data = []
+        for layout in all_layouts:
+            for placed_tuple in layout["Placed Polygons"]:
+                if len(placed_tuple) >= 6:  # New format with color
+                    polygon, _, _, angle, file_name, color = placed_tuple[:6]
+                else:  # Old format without color
+                    polygon, _, _, angle, file_name = placed_tuple[:5]
+                    color = 'серый'
+                bounds = polygon.bounds
+                width_cm = (bounds[2] - bounds[0]) / 10
+                height_cm = (bounds[3] - bounds[1]) / 10
+                area_cm2 = polygon.area / 100
                 
-                # Add report file
-                if os.path.exists(report_file):
-                    zipf.write(report_file, os.path.basename(report_file))
+                # Compare with original dimensions
+                original = original_dimensions.get(file_name, {})
+                original_width = original.get("width_cm", 0)
+                original_height = original.get("height_cm", 0)
+                original_area = original.get("area_cm2", 0)
+                
+                scale_factor = (width_cm / original_width) if original_width > 0 else 1.0
+                
+                size_comparison = f"{width_cm:.1f}×{height_cm:.1f}"
+                if abs(scale_factor - 1.0) > 0.01:  # If scaled
+                    size_comparison += f" (было {original_width:.1f}×{original_height:.1f})"
+                
+                enhanced_report_data.append({
+                    "DXF файл": file_name,
+                    "Номер листа": layout["Sheet"],
+                    "Размер (см)": size_comparison,
+                    "Площадь (см²)": f"{area_cm2:.2f}",
+                    "Поворот (°)": f"{angle:.0f}",
+                    "Выходной файл": layout["Output File"]
+                })
+        
+        if enhanced_report_data:
+            enhanced_df = pd.DataFrame(enhanced_report_data)
+            st.dataframe(enhanced_df, use_container_width=True)
+            # Also create simple report_df for export
+            report_df = pd.DataFrame(report_data, columns=["DXF файл", "Номер листа", "Выходной файл"])
+        else:
+            report_df = pd.DataFrame(report_data, columns=["DXF файл", "Номер листа", "Выходной файл"])
+            st.dataframe(report_df, use_container_width=True)
+
+        # Sheet visualizations
+        st.subheader("📐 Схемы раскроя листов")
+        for layout in all_layouts:
+            # Add color indicator emoji
+            color_emoji = "⚫" if layout['Sheet Color'] == "чёрный" else "⚪" if layout['Sheet Color'] == "серый" else "🔘"
             
-            # Download buttons
-            col1, col2 = st.columns([1, 1])
-            
+            st.write(f"**Лист №{layout['Sheet']}: {color_emoji} {layout['Sheet Type']} ({layout['Sheet Size']}) - {layout['Shapes Placed']} объектов - {layout['Material Usage (%)']}% расход**")
+            col1, col2 = st.columns([2, 1])
             with col1:
-                with open(report_file, "rb") as f:
-                    st.download_button(
-                        label="📊 Скачать отчет Excel",
-                        data=f,
-                        file_name=os.path.basename(report_file),
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-            
+                st.image(layout["Plot"], caption=f"Раскрой листа №{layout['Sheet']} ({layout['Sheet Type']})", use_container_width=True)
             with col2:
-                with open(zip_path, "rb") as f:
+                st.write(f"**Тип листа:** {layout['Sheet Type']}")
+                st.write(f"**Цвет листа:** {color_emoji} {layout['Sheet Color']}")
+                st.write(f"**Размер листа:** {layout['Sheet Size']}")
+                st.write(f"**Размещено объектов:** {layout['Shapes Placed']}")
+                st.write(f"**Расход материала:** {layout['Material Usage (%)']}%")
+                with open(layout["Output File"], "rb") as f:
                     st.download_button(
-                        label="📦 Скачать все файлы (ZIP)",
+                        label=f"📥 Скачать DXF",
                         data=f,
-                        file_name=zip_filename,
-                        mime="application/zip"
+                        file_name=os.path.basename(layout["Output File"]),
+                        mime="application/dxf",
+                        key=f"download_{layout['Sheet']}"
                     )
+            st.divider()  # Add visual separator between sheets
+    else:
+        st.error("❌ Не было создано ни одного листа. Проверьте отладочную информацию выше.")
+    
+    # Show unplaced polygons if any
+    if unplaced_polygons:
+        st.warning(f"⚠️ {len(unplaced_polygons)} объектов не удалось разместить.")
+        st.subheader("🚫 Неразмещенные объекты")
+        unplaced_data = []
+        for polygon_tuple in unplaced_polygons:
+            if len(polygon_tuple) >= 3:  # New format with color
+                poly, name, color = polygon_tuple[:3]
+            else:  # Old format without color
+                poly, name = polygon_tuple[:2]
+                color = 'серый'
+            unplaced_data.append((name, f"{poly.area/100:.2f}", color))
+        
+        unplaced_df = pd.DataFrame(unplaced_data, columns=["Файл", "Площадь (см²)", "Цвет"])
+        st.dataframe(unplaced_df, use_container_width=True)
+
+    # Save report
+    if all_layouts:
+        report_file = os.path.join(OUTPUT_FOLDER, f"layout_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
+        
+        # Use enhanced report if available, otherwise simple report
+        if enhanced_report_data:
+            enhanced_df.to_excel(report_file, index=False)
+        elif 'report_df' in locals():
+            report_df.to_excel(report_file, index=False)
+        else:
+            # Fallback: create simple report from report_data
+            fallback_df = pd.DataFrame(report_data, columns=["DXF файл", "Номер листа", "Выходной файл"])
+            fallback_df.to_excel(report_file, index=False)
+        
+        # Create ZIP archive with all DXF files
+        zip_filename = f"layout_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+        zip_path = os.path.join(OUTPUT_FOLDER, zip_filename)
+        
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            # Add all DXF layout files
+            for layout in all_layouts:
+                dxf_file_path = layout["Output File"]
+                if os.path.exists(dxf_file_path):
+                    # Use the new naming format for files in zip
+                    arcname = os.path.basename(dxf_file_path)
+                    zipf.write(dxf_file_path, arcname)
+            
+            # Add report file
+            if os.path.exists(report_file):
+                zipf.write(report_file, os.path.basename(report_file))
+        
+        # Download buttons
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            with open(report_file, "rb") as f:
+                st.download_button(
+                    label="📊 Скачать отчет Excel",
+                    data=f,
+                    file_name=os.path.basename(report_file),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+        
+        with col2:
+            with open(zip_path, "rb") as f:
+                st.download_button(
+                    label="📦 Скачать все файлы (ZIP)",
+                    data=f,
+                    file_name=zip_filename,
+                    mime="application/zip"
+                )
 
 # Footer
 #st.write("Примечание: Приложение использует простой алгоритм упаковки. Для лучшей оптимизации рассмотрите продвинутые методы, такие как BL-NFP.")
