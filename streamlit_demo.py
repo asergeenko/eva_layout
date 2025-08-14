@@ -252,7 +252,8 @@ if excel_file is not None:
                                 'client': str(row.iloc[5]) if pd.notna(row.iloc[5]) else '' if df.shape[1] > 5 else '',
                                 'order_id': unique_order_id,  # Use unique ID for each Excel row
                                 'color': color,
-                                'product_type': str(row.iloc[7]) if pd.notna(row.iloc[7]) and df.shape[1] > 7 else ''
+                                'product_type': str(row.iloc[7]) if pd.notna(row.iloc[7]) and df.shape[1] > 7 else '',
+                                'border_color': row.iloc[10],
                             }
                             all_orders.append(order)
         else:
@@ -315,21 +316,16 @@ if excel_file is not None:
                         "Товар": order['product'][:40] + "..." if len(order['product']) > 40 else order['product'],
                         "Тип": order.get('product_type', ''),
                         "Цвет": color_emoji,
-                        "Дата": order.get('date', '')[:10] if order.get('date', '') else ''
+                        "Дата": order.get('date', '')[:10] if order.get('date', '') else '',
+                        "Кант цвет": order.get('border_color',''),
                     })
                 
-                # Display DataFrame (small font like "Available sheets")
-                #orders_df = pd.DataFrame(orders_data)
-                #st.dataframe(orders_df, use_container_width=True, hide_index=True, height=400)
-                
-                # Interactive controls below for editing
-                #st.markdown("**Редактирование заказов:**")
-                
+
                 # Create columns for interactive controls
                 for i, order in enumerate(orders_to_show):
                     actual_idx = start_idx + i
                     
-                    cols = st.columns([1, 2, 10, 6, 3])
+                    cols = st.columns([1, 2, 10, 6, 3,3])
                     
                     # Selection checkbox
                     with cols[0]:
@@ -365,6 +361,9 @@ if excel_file is not None:
                         color = order.get('color', 'серый')
                         color_emoji = "⚫" if color == "чёрный" else "⚪" if color == "серый" else "🔘"
                         st.write(f"{color_emoji} {order.get('product_type', '')}")
+
+                    with cols[5]:
+                        st.write(order.get('border_color', ''))
                 
                 # Bulk controls
                 col1, col2 = st.columns([1, 1])
@@ -406,30 +405,7 @@ if excel_file is not None:
                 unique_orders = len(set(order.get('original_index', i) for i, order in enumerate(all_selected_orders)))
                 total_orders = len(all_selected_orders)
 
-                #if unique_orders == total_orders:
-                #    st.success(f"🎯 Выбрано заказов: {total_orders}")
-                #else:
-                #    st.success(f"🎯 Выбрано заказов: {unique_orders} уникальных ({total_orders} всего с повторами)")
-
-                # Show selected orders summary in table format (only for reasonable number of orders)
-                if len(all_selected_orders) <= 20:
-                    with st.expander("📋 Выбранные заказы", expanded=False):
-                        selected_summary = []
-                        for order in all_selected_orders:
-                            order_display = order['product'][:40] + "..." if len(order['product']) > 40 else order['product']
-                            if 'repeat_index' in order:
-                                order_display += f" (повтор {order['repeat_index']})"
-                            
-                            selected_summary.append({
-                                "Артикул": order['article'],
-                                "Товар": order_display,
-                                "Месяц": order['sheet']
-                                })
-                        
-                        selected_df = pd.DataFrame(selected_summary)
-                        st.dataframe(selected_df, use_container_width=True, hide_index=True)
-                else:
-                    st.info(f"📋 Выбрано {len(all_selected_orders)} заказов (список слишком большой для отображения)")
+                st.info(f"📋 Выбрано {len(all_selected_orders)} заказов")
                     
                 # Store selected orders in session state
                 st.session_state.selected_orders = all_selected_orders
@@ -720,16 +696,6 @@ if st.session_state.selected_orders:
                 return found_files
             return []
 
-    # Show selected orders without file system search
-    #st.info(f"📊 Готово к обработке: **{len(st.session_state.selected_orders)}** заказов")
-    
-    # Show selected orders in a compact format
-    #with st.expander("📋 Список выбранных заказов", expanded=False):
-    #    for i, order in enumerate(st.session_state.selected_orders, 1):
-    #        st.write(f"{i}. **{order['product']}** (заказ: {order.get('order_id', 'N/A')})")
-    
-    #st.success("✅ DXF файлы будут найдены и загружены при запуске оптимизации")
-
 # Additional DXF files section (always available)
 st.subheader("📎 Загрузить вручную")
 st.write("Вы можете добавить дополнительные DXF файлы независимо от Excel загрузки или вместе с ней.")
@@ -882,19 +848,11 @@ if st.button("🚀 Оптимизировать раскрой"):
         
         # Clear progress indicators
         progress_bar.empty()
-        status_text.text(f"✅ Обработка завершена! Загружено {len(polygons)} полигонов из {len(dxf_files)} файлов")
+        status_text.text(f"✅ Обработка завершена. Загружено {len(polygons)} полигонов из {len(dxf_files)} файлов")
         
-        # Show detailed parsing info in expander
-        #with st.expander("🔍 Подробная информация о парсинге файлов", expanded=False):
-        #    st.write("Подробная информация об улучшенном парсинге файлов:")
-        #    for file in dxf_files:
-        #        st.write(f"**Анализ файла: {file.name}**")
-        #        file.seek(0)
-        #        file_bytes = BytesIO(file.read())
-        #        parse_dxf_complete(file_bytes, verbose=True)
-        
+
         if not polygons:
-            st.error("В загруженных DXF файлах не найдено валидных полигонов!")
+            st.error("В загруженных DXF файлах не найдено валидных полигонов")
             st.stop()
         
         # Show order distribution before optimization
@@ -908,11 +866,7 @@ if st.button("🚀 Оптимизировать раскрой"):
         for order_id, count in order_counts.items():
             logger.info(f"  • Заказ {order_id}: {count} файлов")
 
-        st.info(f"📋 Найдено {len(order_counts)} уникальных заказов:")
-        with st.expander("📋 Список найденных заказов", expanded=False):
-            for order_id, count in order_counts.items():
-                st.write(f"  • Заказ {order_id}: {count} файлов")
-        
+
         # Optional input visualization (button-triggered)
         if st.button("📊 Показать исходные файлы", key="show_input_visualization"):
             st.subheader("🔍 Визуализация входных файлов")
@@ -938,72 +892,59 @@ if st.button("🚀 Оптимизировать раскрой"):
                 for i, (file_name, plot_buf) in enumerate(input_plots.items()):
                     with cols[i % len(cols)]:
                         st.image(plot_buf, caption=f"{file_name}", use_container_width=True)
-        
-        # Show polygon statistics with real dimensions
-        with st.expander("📊 Статистика исходных файлов", expanded=False):
-        
-            # Store original dimensions for comparison later
-            original_dimensions = {}
 
-            # Create a summary table with proper unit conversion
-            summary_data = []
-            total_area_cm2 = 0
-            for polygon_tuple in polygons:
-                if len(polygon_tuple) >= 4:  # Extended format with color and order_id
-                    poly, filename, color, order_id = polygon_tuple[:4]
-                elif len(polygon_tuple) >= 3:  # Format with color
-                    poly, filename, color = polygon_tuple[:3]
-                    order_id = 'unknown'
-                else:  # Old format without color
-                    poly, filename = polygon_tuple[:2]
-                    color = 'серый'
-                    order_id = 'unknown'
-                bounds = poly.bounds
-                width_mm = bounds[2] - bounds[0]
-                height_mm = bounds[3] - bounds[1]
-                area_mm2 = poly.area
 
-                # Convert from mm to cm
-                width_cm = width_mm / 10.0
-                height_cm = height_mm / 10.0
-                area_cm2 = area_mm2 / 100.0
+        # Store original dimensions for comparison later
+        original_dimensions = {}
 
-                # Store original dimensions
-                original_dimensions[filename] = {
-                    "width_cm": width_cm,
-                    "height_cm": height_cm,
-                    "area_cm2": area_cm2
-                }
+        # Create a summary table with proper unit conversion
+        summary_data = []
+        total_area_cm2 = 0
+        for polygon_tuple in polygons:
+            if len(polygon_tuple) >= 4:  # Extended format with color and order_id
+                poly, filename, color, order_id = polygon_tuple[:4]
+            elif len(polygon_tuple) >= 3:  # Format with color
+                poly, filename, color = polygon_tuple[:3]
+                order_id = 'unknown'
+            else:  # Old format without color
+                poly, filename = polygon_tuple[:2]
+                color = 'серый'
+                order_id = 'unknown'
+            bounds = poly.bounds
+            width_mm = bounds[2] - bounds[0]
+            height_mm = bounds[3] - bounds[1]
+            area_mm2 = poly.area
 
-                total_area_cm2 += area_cm2
-                # Add color emoji for display
-                color_emoji = "⚫" if color == "чёрный" else "⚪" if color == "серый" else "🔘"
-                color_display = f"{color_emoji} {color}"
+            # Convert from mm to cm
+            width_cm = width_mm / 10.0
+            height_cm = height_mm / 10.0
+            area_cm2 = area_mm2 / 100.0
 
-                summary_data.append({
-                    "Файл": filename,
-                    "Ширина (см)": f"{width_cm:.1f}",
-                    "Высота (см)": f"{height_cm:.1f}",
-                    "Площадь (см²)": f"{area_cm2:.2f}",
-                    "Цвет": color_display,
-                })
+            # Store original dimensions
+            original_dimensions[filename] = {
+                "width_cm": width_cm,
+                "height_cm": height_cm,
+                "area_cm2": area_cm2
+            }
 
-            summary_df = pd.DataFrame(summary_data)
-            st.dataframe(summary_df, use_container_width=True)
-        
+            total_area_cm2 += area_cm2
+            # Add color emoji for display
+            color_emoji = "⚫" if color == "чёрный" else "⚪" if color == "серый" else "🔘"
+            color_display = f"{color_emoji} {color}"
+
+            summary_data.append({
+                "Файл": filename,
+                "Ширина (см)": f"{width_cm:.1f}",
+                "Высота (см)": f"{height_cm:.1f}",
+                "Площадь (см²)": f"{area_cm2:.2f}",
+                "Цвет": color_display,
+            })
+
+
         # Calculate theoretical minimum using largest available sheet
         largest_sheet_area = max(sheet['width'] * sheet['height'] for sheet in st.session_state.available_sheets)
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Всего объектов", len(polygons))
-        with col2:
-            st.metric("Общая площадь", f"{total_area_cm2:.2f} см²")
-        with col3:
-            st.metric("Теоретический минимум листов", max(1, int(np.ceil(total_area_cm2 / largest_sheet_area))))
-        
-        # Auto-scale polygons if needed (use largest available sheet for scaling reference)
-        #st.header("📐 Масштабирование полигонов")
-        
+
+
         # Find largest sheet for scaling reference
         max_sheet_area = 0
         reference_sheet_size = (140, 200)  # default fallback
@@ -1015,12 +956,7 @@ if st.button("🚀 Оптимизировать раскрой"):
         
         # Scale quietly first
         scaled_polygons = scale_polygons_to_fit(polygons, reference_sheet_size, verbose=False)
-        
-        # Show scaling details in expander
-        #with st.expander("🔍 Подробная информация о масштабировании", expanded=False):
-        #    st.info(f"Используем самый большой лист ({reference_sheet_size[0]}x{reference_sheet_size[1]} см) как эталон для масштабирования")
-        #    scale_polygons_to_fit(polygons, reference_sheet_size, verbose=True)
-        
+
         polygons = scaled_polygons
         
         st.header("🔄 Процесс оптимизации")
@@ -1066,7 +1002,7 @@ if st.button("🚀 Оптимизировать раскрой"):
 
             # Finalize
             optimization_progress.progress(100)
-            optimization_status.text("✅ Оптимизация завершена!")
+            optimization_status.text("✅ Оптимизация завершена.")
 
             # Clear progress indicators after a moment
             import time
@@ -1131,7 +1067,7 @@ if st.button("🚀 Оптимизировать раскрой"):
 
         # Finalize results processing
         results_progress.progress(100)
-        results_status.text("✅ Все файлы созданы!")
+        results_status.text("✅ Все файлы созданы.")
 
         # Update sheet inventory in session state
         for layout in placed_layouts:
