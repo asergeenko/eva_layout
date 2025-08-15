@@ -1,7 +1,7 @@
 """Helper functions for EVA mat nesting optimization."""
 
 # Version for cache busting
-__version__ = "1.2.0"
+__version__ = "1.5.0"
 
 # Force module reload for Streamlit Cloud
 import importlib
@@ -290,59 +290,59 @@ def save_dxf_layout_complete(placed_elements, sheet_size, output_path, original_
             # Reconstruct from original elements using improved transformation
             original_data = original_dxf_data_map[file_name]
             
-            for entity_data in original_data['original_entities']:
-                try:
-                    # Clone the original entity
-                    new_entity = entity_data['entity'].copy()
+            # Check if we have original entities to work with
+            if original_data['original_entities']:
+                # FIXED: Use the exact same transformation that was applied to the polygon
+                if original_data['combined_polygon']:
+                    original_polygon = original_data['combined_polygon']
+                    orig_bounds = original_polygon.bounds
+                    orig_min_x, orig_min_y = orig_bounds[0], orig_bounds[1]
                     
-                    # IMPROVED: Use direct transformation matrix calculation
-                    if original_data['combined_polygon']:
-                        original_polygon = original_data['combined_polygon']
-                        
-                        # Calculate transformation matrix from original to final position
-                        # 1. Get original position (bottom-left corner)
-                        orig_bounds = original_polygon.bounds
-                        orig_x, orig_y = orig_bounds[0], orig_bounds[1]
-                        
-                        # 2. Get final position from the transformed polygon
-                        final_bounds = transformed_polygon.bounds  
-                        final_x, final_y = final_bounds[0], final_bounds[1]
-                        
-                        # 3. Calculate center points for rotation
-                        orig_center_x = orig_x + (orig_bounds[2] - orig_bounds[0]) / 2
-                        orig_center_y = orig_y + (orig_bounds[3] - orig_bounds[1]) / 2
-                        
-                        final_center_x = final_x + (final_bounds[2] - final_bounds[0]) / 2
-                        final_center_y = final_y + (final_bounds[3] - final_bounds[1]) / 2
-                        
-                        # Create single transformation matrix
-                        transformation = ezdxf.math.Matrix44.chain(
-                            # Move to origin
-                            ezdxf.math.Matrix44.translate(-orig_center_x, -orig_center_y, 0),
-                            # Apply rotation
-                            ezdxf.math.Matrix44.z_rotate(np.radians(rotation_angle)),
-                            # Move to final position
-                            ezdxf.math.Matrix44.translate(final_center_x, final_center_y, 0)
-                        )
-                        
-                        # Apply single transformation
-                        new_entity.transform(transformation)
+                    # The key insight: x_offset and y_offset are the displacements that were applied
+                    # to move the polygon from its original position to its final position
+                    # rotation_angle is the rotation that was applied
                     
-                    # Update layer name to include file name for better organization
-                    base_layer = entity_data['layer']
-                    new_layer = f"{file_name.replace('.dxf', '').replace('..', '_')}_{base_layer}"
-                    new_entity.dxf.layer = new_layer
-                    
-                    # Add to modelspace
-                    msp.add_entity(new_entity)
-                    
-                except Exception as e:
-                    logger.warning(f"Ошибка добавления элемента {entity_data['type']}: {e}")
-                    # Fallback: add as simple polyline
-                    if hasattr(transformed_polygon, 'exterior'):
-                        points = list(transformed_polygon.exterior.coords)[:-1]
-                        layer_name = file_name.replace('.dxf', '').replace('..', '_')
-                        msp.add_lwpolyline(points, dxfattribs={"layer": layer_name})
+                    # Final position is: transformed_polygon.bounds
+                    final_bounds = transformed_polygon.bounds
+                    final_min_x, final_min_y = final_bounds[0], final_bounds[1]
+                
+                for entity_data in original_data['original_entities']:
+                    try:
+                        # Clone the original entity
+                        new_entity = entity_data['entity'].copy()
+                        
+                        # Apply the SAME transformation that was applied to the polygon:
+                        # Step 1: Move to origin (normalize to 0,0 based on combined polygon bounds)
+                        new_entity.translate(-orig_min_x, -orig_min_y, 0)
+                        
+                        # Step 2: Apply rotation around origin if needed
+                        if rotation_angle != 0:
+                            new_entity.rotate_z(np.radians(rotation_angle))
+                        
+                        # Step 3: Move to final position
+                        new_entity.translate(final_min_x, final_min_y, 0)
+                        
+                        # Update layer name to include file name for better organization
+                        base_layer = entity_data['layer']
+                        new_layer = f"{file_name.replace('.dxf', '').replace('..', '_')}_{base_layer}"
+                        new_entity.dxf.layer = new_layer
+                        
+                        # Add to modelspace
+                        msp.add_entity(new_entity)
+                        
+                    except Exception as e:
+                        logger.warning(f"Ошибка добавления элемента {entity_data['type']}: {e}")
+                        # Fallback: add as simple polyline
+                        if hasattr(transformed_polygon, 'exterior'):
+                            points = list(transformed_polygon.exterior.coords)[:-1]
+                            layer_name = file_name.replace('.dxf', '').replace('..', '_')
+                            msp.add_lwpolyline(points, dxfattribs={"layer": layer_name})
+            else:
+                # No original entities - use fallback method
+                if hasattr(transformed_polygon, 'exterior'):
+                    points = list(transformed_polygon.exterior.coords)[:-1]
+                    layer_name = file_name.replace('.dxf', '').replace('..', '_')
+                    msp.add_lwpolyline(points, dxfattribs={"layer": layer_name})
         else:
             # Fallback: save as simple polyline (current method)
             if hasattr(transformed_polygon, 'exterior'):
@@ -505,8 +505,19 @@ def parse_dxf(file, verbose=True) -> Polygon:
 
 
 def rotate_polygon(polygon: Polygon, angle: float) -> Polygon:
-    """Rotate a polygon by a given angle (in degrees)."""
-    return affinity.rotate(polygon, angle, origin="centroid")
+    """Rotate a polygon by a given angle (in degrees) around its bottom-left corner.
+    
+    This ensures consistency with DXF transformation applied during file saving.
+    """
+    if angle == 0:
+        return polygon
+    
+    # Get bottom-left corner as rotation origin
+    bounds = polygon.bounds
+    bottom_left = (bounds[0], bounds[1])
+    
+    # Rotate around bottom-left corner instead of centroid
+    return affinity.rotate(polygon, angle, origin=bottom_left)
 
 
 def translate_polygon(polygon: Polygon, x: float, y: float) -> Polygon:
@@ -520,9 +531,48 @@ def place_polygon_at_origin(polygon: Polygon) -> Polygon:
     return translate_polygon(polygon, -bounds[0], -bounds[1])
 
 
-def check_collision(polygon1: Polygon, polygon2: Polygon) -> bool:
-    """Check if two polygons collide."""
-    return polygon1.intersects(polygon2) and not polygon1.touches(polygon2)
+def check_collision(polygon1: Polygon, polygon2: Polygon, min_gap: float = 2.0) -> bool:
+    """Check if two polygons collide with minimum gap requirement.
+    
+    Optimized version with fast bounding box pre-check.
+    
+    Args:
+        polygon1: First polygon
+        polygon2: Second polygon  
+        min_gap: Minimum gap required between polygons in mm (default 2mm)
+    
+    Returns:
+        True if polygons are too close (collision), False if they have sufficient gap
+    """
+    # Fast validity check (most polygons should be valid)
+    if not (polygon1.is_valid and polygon2.is_valid):
+        return True  # Treat invalid polygons as collision
+    
+    # OPTIMIZATION 1: Fast bounding box distance check first
+    bounds1 = polygon1.bounds
+    bounds2 = polygon2.bounds
+    
+    # Calculate minimum distance between bounding boxes
+    dx = max(0, max(bounds1[0] - bounds2[2], bounds2[0] - bounds1[2]))
+    dy = max(0, max(bounds1[1] - bounds2[3], bounds2[1] - bounds1[3]))
+    bbox_distance = (dx * dx + dy * dy) ** 0.5
+    
+    # If bounding boxes are far enough apart, no collision possible
+    if bbox_distance >= min_gap:
+        return False
+    
+    # OPTIMIZATION 2: Quick intersection check (faster than distance calculation)
+    if polygon1.intersects(polygon2):
+        return True
+    
+    # OPTIMIZATION 3: Only calculate precise distance if bounding boxes are close
+    # This is the most expensive operation, so we do it last
+    try:
+        distance = polygon1.distance(polygon2)
+        return distance < min_gap
+    except Exception:
+        # If distance calculation fails, be conservative
+        return True
 
 
 def bin_packing_multi_pass(polygons: list[tuple], existing_layouts: list[dict], sheet_size: tuple[float, float], max_attempts: int = 1000, verbose: bool = True) -> tuple[list[tuple], list[tuple], list[dict]]:
@@ -778,15 +828,29 @@ def bin_packing(polygons: list[tuple], sheet_size: tuple[float, float], max_atte
             
             for grid_x in x_positions:
                 for grid_y in y_positions:
-                    translated = translate_polygon(polygon, grid_x - simple_bounds[0], grid_y - simple_bounds[1])
+                    # OPTIMIZATION: Pre-calculate translation offsets
+                    x_offset = grid_x - simple_bounds[0]
+                    y_offset = grid_y - simple_bounds[1]
                     
-                    translated_bounds = translated.bounds
-                    if (translated_bounds[0] >= -0.01 and translated_bounds[1] >= -0.01 and 
-                        translated_bounds[2] <= sheet_width_mm + 0.01 and translated_bounds[3] <= sheet_height_mm + 0.01):
+                    # OPTIMIZATION: Check bounds before expensive polygon translation
+                    test_bounds = (simple_bounds[0] + x_offset, simple_bounds[1] + y_offset, 
+                                 simple_bounds[2] + x_offset, simple_bounds[3] + y_offset)
+                    
+                    if (test_bounds[0] >= -0.1 and test_bounds[1] >= -0.1 and 
+                        test_bounds[2] <= sheet_width_mm + 0.1 and test_bounds[3] <= sheet_height_mm + 0.1):
                         
-                        collision = any(check_collision(translated, p[0]) for p in placed)
+                        # Only create translated polygon if bounds check passes
+                        translated = translate_polygon(polygon, x_offset, y_offset)
+                        
+                        # OPTIMIZATION: Early exit on first collision found
+                        collision = False
+                        for placed_poly, *_ in placed:
+                            if check_collision(translated, placed_poly):
+                                collision = True
+                                break
+                        
                         if not collision:
-                            placed.append((translated, grid_x - simple_bounds[0], grid_y - simple_bounds[1], 0, file_name, color, order_id))
+                            placed.append((translated, x_offset, y_offset, 0, file_name, color, order_id))
                             placed_successfully = True
                             if verbose:
                                 st.success(f"✅ Размещен {file_name} (сетчатое размещение)")
@@ -828,13 +892,13 @@ def find_bottom_left_position_with_obstacles(polygon, obstacles, sheet_width, sh
         obstacle_bounds = obstacle.bounds
         
         # Try position to the right of existing obstacle
-        x = obstacle_bounds[2] + 1  # 1mm gap
+        x = obstacle_bounds[2] + 3  # 3mm gap for safety
         if x + poly_width <= sheet_width:
             candidate_positions.append((x, obstacle_bounds[1]))  # Same Y as existing
             candidate_positions.append((x, 0))  # Bottom edge
         
         # Try position above existing obstacle
-        y = obstacle_bounds[3] + 1  # 1mm gap
+        y = obstacle_bounds[3] + 3  # 3mm gap for safety
         if y + poly_height <= sheet_height:
             candidate_positions.append((obstacle_bounds[0], y))  # Same X as existing
             candidate_positions.append((0, y))  # Left edge
@@ -844,14 +908,32 @@ def find_bottom_left_position_with_obstacles(polygon, obstacles, sheet_width, sh
     
     # Test each position
     for x, y in candidate_positions:
-        if x + poly_width > sheet_width or y + poly_height > sheet_height:
+        # OPTIMIZATION: Fast boundary pre-check without polygon creation
+        if x + poly_width > sheet_width + 0.1 or y + poly_height > sheet_height + 0.1:
+            continue
+        if x < -0.1 or y < -0.1:
             continue
             
-        # Test position by translating polygon
-        test_polygon = translate_polygon(polygon, x - bounds[0], y - bounds[1])
+        # OPTIMIZATION: Pre-calculate translation offset
+        x_offset = x - bounds[0] 
+        y_offset = y - bounds[1]
         
-        # Check for collisions with obstacles
-        collision = any(check_collision(test_polygon, obstacle) for obstacle in obstacles)
+        # OPTIMIZATION: Check if bounds would be valid after translation
+        test_bounds = (bounds[0] + x_offset, bounds[1] + y_offset,
+                      bounds[2] + x_offset, bounds[3] + y_offset)
+        if (test_bounds[0] < -0.1 or test_bounds[1] < -0.1 or 
+            test_bounds[2] > sheet_width + 0.1 or test_bounds[3] > sheet_height + 0.1):
+            continue
+        
+        # Only create translated polygon if all checks pass
+        test_polygon = translate_polygon(polygon, x_offset, y_offset)
+        
+        # OPTIMIZATION: Early exit on first collision
+        collision = False
+        for obstacle in obstacles:
+            if check_collision(test_polygon, obstacle):
+                collision = True
+                break
         
         if not collision:
             return x, y
@@ -882,13 +964,13 @@ def find_bottom_left_position(polygon, placed_polygons, sheet_width, sheet_heigh
         placed_bounds = placed_polygon.bounds
         
         # Try position to the right of existing polygon
-        x = placed_bounds[2] + 1  # 1mm gap
+        x = placed_bounds[2] + 3  # 3mm gap for safety
         if x + poly_width <= sheet_width:
             candidate_positions.append((x, placed_bounds[1]))  # Same Y as existing
             candidate_positions.append((x, 0))  # Bottom edge
         
         # Try position above existing polygon
-        y = placed_bounds[3] + 1  # 1mm gap
+        y = placed_bounds[3] + 3  # 3mm gap for safety
         if y + poly_height <= sheet_height:
             candidate_positions.append((placed_bounds[0], y))  # Same X as existing
             candidate_positions.append((0, y))  # Left edge
@@ -898,14 +980,32 @@ def find_bottom_left_position(polygon, placed_polygons, sheet_width, sheet_heigh
     
     # Test each position
     for x, y in candidate_positions:
-        if x + poly_width > sheet_width or y + poly_height > sheet_height:
+        # OPTIMIZATION: Fast boundary pre-check
+        if x + poly_width > sheet_width + 0.1 or y + poly_height > sheet_height + 0.1:
+            continue
+        if x < -0.1 or y < -0.1:
             continue
             
-        # Test position by translating polygon
-        test_polygon = translate_polygon(polygon, x - bounds[0], y - bounds[1])
+        # OPTIMIZATION: Pre-calculate offsets
+        x_offset = x - bounds[0] 
+        y_offset = y - bounds[1]
         
-        # Check for collisions
-        collision = any(check_collision(test_polygon, p[0]) for p in placed_polygons)
+        # OPTIMIZATION: Check bounds before polygon creation
+        test_bounds = (bounds[0] + x_offset, bounds[1] + y_offset,
+                      bounds[2] + x_offset, bounds[3] + y_offset)
+        if (test_bounds[0] < -0.1 or test_bounds[1] < -0.1 or 
+            test_bounds[2] > sheet_width + 0.1 or test_bounds[3] > sheet_height + 0.1):
+            continue
+        
+        # Only create polygon after all fast checks pass
+        test_polygon = translate_polygon(polygon, x_offset, y_offset)
+        
+        # OPTIMIZATION: Early exit collision check
+        collision = False
+        for p, *_ in placed_polygons:
+            if check_collision(test_polygon, p):
+                collision = True
+                break
         
         if not collision:
             return x, y

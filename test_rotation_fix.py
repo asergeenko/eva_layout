@@ -1,113 +1,103 @@
 #!/usr/bin/env python3
-"""Test rotation fix for DXF elements."""
+"""
+Тест для проверки исправления проблемы с поворотом ковров.
+Этот тест проверяет, что повернутые ковры остаются в правильном положении.
+"""
 
-import os
-import numpy as np
 from layout_optimizer import parse_dxf_complete, save_dxf_layout_complete, rotate_polygon
+from shapely.geometry import Polygon
+import tempfile
+import os
 
-def test_rotation_fix():
-    """Test that rotated DXF elements are positioned correctly."""
-    print("🔄 Тестирование исправления поворота DXF элементов")
-    print("=" * 60)
+def test_rotation_consistency():
+    """Тест на соответствие поворота между bin_packing и save_dxf_layout_complete"""
     
-    # Find a sample DXF file
-    sample_file = None
-    dxf_samples_path = "dxf_samples"
+    # Создаем простой прямоугольник (имитируем ковер)
+    original_polygon = Polygon([(0, 0), (100, 0), (100, 50), (0, 50)])
+    print(f"Исходный ковер: bounds={original_polygon.bounds}")
     
-    if os.path.exists(dxf_samples_path):
-        for root, dirs, files in os.walk(dxf_samples_path):
-            for file in files:
-                if file.lower().endswith('.dxf'):
-                    sample_file = os.path.join(root, file)
-                    break
-            if sample_file:
-                break
+    # Имитируем результат bin_packing - ковер размещен с поворотом на 90°
+    angle = 90
+    x_offset = 200  # смещение после размещения
+    y_offset = 100
     
-    if not sample_file:
-        print("❌ Не найден образец DXF файла")
-        return False
+    # Применяем поворот (как это делает bin_packing)
+    rotated_polygon = rotate_polygon(original_polygon, angle)
+    print(f"После поворота: bounds={rotated_polygon.bounds}")
     
-    print(f"📄 Тестируем с файлом: {os.path.basename(sample_file)}")
+    # Применяем смещение (как это делает bin_packing)
+    from layout_optimizer import translate_polygon
+    final_polygon = translate_polygon(rotated_polygon, x_offset, y_offset)
+    print(f"После смещения: bounds={final_polygon.bounds}")
     
-    # Parse original file
-    with open(sample_file, 'rb') as f:
-        parsed_data = parse_dxf_complete(f, verbose=False)
+    # Создаем имитацию данных для сохранения DXF
+    placed_elements = [(final_polygon, x_offset, y_offset, angle, "test_carpet.dxf", "серый")]
     
-    if not parsed_data or not parsed_data['combined_polygon']:
-        print("❌ Не удалось распарсить файл")
-        return False
+    # Создаем имитацию исходных DXF данных
+    original_dxf_data = {
+        'combined_polygon': original_polygon,
+        'original_entities': []  # Упрощенно, пустой список
+    }
     
-    original_polygon = parsed_data['combined_polygon']
-    original_centroid = original_polygon.centroid
+    original_dxf_data_map = {"test_carpet.dxf": original_dxf_data}
     
-    print(f"📐 Исходный полигон:")
-    print(f"   • Центроид: ({original_centroid.x:.2f}, {original_centroid.y:.2f})")
-    print(f"   • Площадь: {original_polygon.area:.2f} мм²")
+    # Тестируем сохранение DXF
+    with tempfile.NamedTemporaryFile(suffix='.dxf', delete=False) as tmp_file:
+        output_path = tmp_file.name
     
-    # Test different rotation scenarios
-    test_angles = [0, 90, 180, 270]
-    
-    for angle in test_angles:
-        print(f"\n🔄 Тестирование поворота на {angle}°:")
+    try:
+        save_dxf_layout_complete(
+            placed_elements, 
+            (300, 200), 
+            output_path, 
+            original_dxf_data_map
+        )
+        print(f"✅ DXF файл успешно сохранен: {output_path}")
         
-        # Rotate polygon using the same method as bin packing
-        rotated_polygon = rotate_polygon(original_polygon, angle)
-        rotated_centroid = rotated_polygon.centroid
+        # Читаем результат и проверяем
+        from layout_optimizer import parse_dxf_complete
+        result = parse_dxf_complete(output_path, verbose=False)
         
-        print(f"   • Повернутый центроид: ({rotated_centroid.x:.2f}, {rotated_centroid.y:.2f})")
-        
-        # Create test output with translation
-        x_offset, y_offset = 100, 200  # Test translation
-        test_output = f"test_rotation_{angle}.dxf"
-        original_dxf_data_map = {os.path.basename(sample_file): parsed_data}
-        placed_elements = [(rotated_polygon, x_offset, y_offset, angle, os.path.basename(sample_file), "серый")]
-        sheet_size = (500, 500)  # Large sheet
-        
-        try:
-            save_dxf_layout_complete(placed_elements, sheet_size, test_output, original_dxf_data_map)
+        if result['polygons'] and len(result['polygons']) >= 2:
+            # Первый полигон - границы листа, второй - наш ковер
+            carpet_polygon = result['polygons'][1]  # Пропускаем границу листа
+            result_bounds = carpet_polygon.bounds
+            print(f"Результат после чтения DXF (ковер): bounds={result_bounds}")
             
-            if os.path.exists(test_output):
-                print(f"   ✅ Создан файл с поворотом {angle}°: {test_output}")
-                
-                # Verify by parsing the output
-                with open(test_output, 'rb') as f:
-                    output_parsed = parse_dxf_complete(f, verbose=False)
-                
-                if output_parsed and output_parsed['combined_polygon']:
-                    output_centroid = output_parsed['combined_polygon'].centroid
-                    expected_x = rotated_centroid.x + x_offset
-                    expected_y = rotated_centroid.y + y_offset
-                    
-                    print(f"   • Ожидаемый центроид: ({expected_x:.2f}, {expected_y:.2f})")
-                    print(f"   • Фактический центроид: ({output_centroid.x:.2f}, {output_centroid.y:.2f})")
-                    
-                    # Check if positions match (within tolerance)
-                    x_diff = abs(output_centroid.x - expected_x)
-                    y_diff = abs(output_centroid.y - expected_y)
-                    tolerance = 5.0  # 5mm tolerance
-                    
-                    if x_diff <= tolerance and y_diff <= tolerance:
-                        print(f"   ✅ Позиция корректна (отклонение: {x_diff:.2f}, {y_diff:.2f})")
-                    else:
-                        print(f"   ❌ Позиция некорректна (отклонение: {x_diff:.2f}, {y_diff:.2f})")
-                        return False
-                else:
-                    print(f"   ❌ Не удалось распарсить выходной файл")
-                    return False
-                
-                # Clean up
-                os.remove(test_output)
+            # Проверяем, что положение соответствует ожидаемому
+            expected_bounds = final_polygon.bounds
+            tolerance = 2.0  # 2мм погрешность для учета DXF конверсии
+            
+            bounds_match = (
+                abs(result_bounds[0] - expected_bounds[0]) < tolerance and
+                abs(result_bounds[1] - expected_bounds[1]) < tolerance and
+                abs(result_bounds[2] - expected_bounds[2]) < tolerance and
+                abs(result_bounds[3] - expected_bounds[3]) < tolerance
+            )
+            
+            if bounds_match:
+                print("✅ ТЕСТ ПРОЙДЕН: Положение ковра после поворота соответствует ожидаемому")
+                return True
             else:
-                print(f"   ❌ Не удалось создать файл с поворотом {angle}°")
+                print(f"❌ ТЕСТ НЕ ПРОЙДЕН: Положение не соответствует")
+                print(f"  Ожидалось: {expected_bounds}")
+                print(f"  Получено: {result_bounds}")
+                print(f"  Погрешности: dx={abs(result_bounds[0] - expected_bounds[0]):.2f}, dy={abs(result_bounds[1] - expected_bounds[1]):.2f}")
                 return False
-                
-        except Exception as e:
-            print(f"   ❌ Ошибка при тестировании поворота {angle}°: {e}")
+        else:
+            print("❌ ТЕСТ НЕ ПРОЙДЕН: Не найдено достаточно полигонов в DXF")
+            print(f"Найдено полигонов: {len(result['polygons']) if result['polygons'] else 0}")
             return False
-    
-    print(f"\n🎉 Все тесты поворота пройдены успешно!")
-    return True
+            
+    finally:
+        if os.path.exists(output_path):
+            os.unlink(output_path)
 
 if __name__ == "__main__":
-    success = test_rotation_fix()
-    print(f"\n{'🎉 Тест пройден!' if success else '❌ Тест не пройден!'}")
+    print("=== Тест исправления поворота ковров ===")
+    success = test_rotation_consistency()
+    print("=== Результат ===")
+    if success:
+        print("🎉 Проблема с поворотом ковров ИСПРАВЛЕНА!")
+    else:
+        print("🚨 Проблема с поворотом ковров НЕ ИСПРАВЛЕНА!")

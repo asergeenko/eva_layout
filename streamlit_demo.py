@@ -31,13 +31,16 @@ import sys
 if 'layout_optimizer' in sys.modules:
     del sys.modules['layout_optimizer']
 
-# Force cache clear
+# Force cache clear and reload module
 import importlib
+import sys
 try:
+    if 'layout_optimizer' in sys.modules:
+        del sys.modules['layout_optimizer']
     import layout_optimizer
     importlib.reload(layout_optimizer)
 except:
-    pass
+    import layout_optimizer
 
 from layout_optimizer import (
     parse_dxf_complete,
@@ -64,6 +67,12 @@ try:
     st.image("logo.png", use_container_width=True)
 except FileNotFoundError:
     pass  # Skip logo if file not found
+
+# Display version info for debugging
+try:
+    st.info(f"🔧 Layout optimizer version: {layout_optimizer.__version__}")
+except:
+    st.warning("⚠️ Не удалось определить версию модуля")
 
 #st.subheader("Оптимизатор раскроя ковров")
 #st.write("Загрузите DXF файлы и укажите размер листа для оптимального размещения ковров.")
