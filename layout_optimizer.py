@@ -10,6 +10,7 @@ import numpy as np
 from shapely.geometry import Polygon, MultiPolygon
 from shapely import affinity
 from shapely.ops import unary_union
+from shapely.affinity import translate, rotate
 import ezdxf
 import matplotlib.pyplot as plt
 from io import BytesIO
@@ -91,7 +92,8 @@ def parse_dxf_complete(file, verbose=True):
         'original_entities': [],  # All original entities for reconstruction
         'bounds': None,          # Overall bounds
         'layers': set(),         # All layers
-        'doc_header': {}  # Skip header for now to avoid issues
+        'doc_header': {},        # Skip header for now to avoid issues
+        'real_spline_bounds': None  # Real bounds of SPLINE elements for accurate transformation
     }
     
     total_entities = 0
@@ -157,6 +159,37 @@ def parse_dxf_complete(file, verbose=True):
         if verbose:
             st.warning("⚠️ Не найдено полигонов для оптимизации")
         result['combined_polygon'] = None
+    
+    # Calculate real bounds of SPLINE elements for accurate transformation
+    spline_entities = [entity_data for entity_data in result['original_entities'] if entity_data['type'] == 'SPLINE']
+    if spline_entities:
+        all_spline_xs = []
+        all_spline_ys = []
+        
+        for entity_data in spline_entities:
+            entity = entity_data['entity']
+            try:
+                control_points = entity.control_points
+                if control_points:
+                    for cp in control_points:
+                        if hasattr(cp, 'x') and hasattr(cp, 'y'):
+                            all_spline_xs.append(cp.x)
+                            all_spline_ys.append(cp.y)
+                        elif len(cp) >= 2:
+                            all_spline_xs.append(float(cp[0]))
+                            all_spline_ys.append(float(cp[1]))
+            except:
+                continue
+        
+        if all_spline_xs and all_spline_ys:
+            result['real_spline_bounds'] = (
+                min(all_spline_xs), 
+                min(all_spline_ys), 
+                max(all_spline_xs), 
+                max(all_spline_ys)
+            )
+            if verbose:
+                st.info(f"✅ Сохранены реальные bounds SPLINE элементов: {result['real_spline_bounds']}")
     
     # Store original data separately since Shapely polygons don't allow attribute assignment
     # We'll pass this data through function parameters instead
@@ -256,11 +289,31 @@ def save_dxf_layout_complete(placed_elements, sheet_size, output_path, original_
     """Save layout preserving all original elements from source DXF files.
     
     Args:
-        placed_elements: List of placed polygon tuples
+        placed_elements: List of placed polygon tuples (polygon, x_offset, y_offset, rotation_angle, file_name, ...)
         sheet_size: Sheet dimensions
         output_path: Output file path
         original_dxf_data_map: Dictionary mapping filenames to original DXF data
     """
+    
+    # Отладочный вывод в файл для анализа
+    with open("save_dxf_debug.log", "a", encoding="utf-8") as debug_file:
+        debug_file.write("🔍 DEBUG: save_dxf_layout_complete called\n")
+        debug_file.write(f"🔍 DEBUG: placed_elements count: {len(placed_elements)}\n")
+        debug_file.write(f"🔍 DEBUG: sheet_size: {sheet_size}\n")
+        debug_file.write(f"🔍 DEBUG: output_path: {output_path}\n")
+        if original_dxf_data_map:
+            debug_file.write(f"🔍 DEBUG: original_dxf_data_map keys: {list(original_dxf_data_map.keys())}\n")
+        else:
+            debug_file.write("🔍 DEBUG: original_dxf_data_map is None\n")
+    
+    print("🔍 DEBUG: save_dxf_layout_complete called")
+    print(f"🔍 DEBUG: placed_elements count: {len(placed_elements)}")
+    print(f"🔍 DEBUG: sheet_size: {sheet_size}")
+    print(f"🔍 DEBUG: output_path: {output_path}")
+    if original_dxf_data_map:
+        print(f"🔍 DEBUG: original_dxf_data_map keys: {list(original_dxf_data_map.keys())}")
+    else:
+        print("🔍 DEBUG: original_dxf_data_map is None")
     
     # Create new DXF document
     doc = ezdxf.new('R2010')  # Use R2010 for better compatibility
@@ -277,54 +330,201 @@ def save_dxf_layout_complete(placed_elements, sheet_size, output_path, original_
     sheet_corners = [(0, 0), (sheet_width_mm, 0), (sheet_width_mm, sheet_height_mm), (0, sheet_height_mm), (0, 0)]
     msp.add_lwpolyline(sheet_corners, dxfattribs={"layer": "SHEET_BOUNDARY", "color": 1})
     
-    # Process each placed element
-    for placed_element in placed_elements:
+    # Process each placed element  
+    spline_count = 0
+    transformation_count = 0
+    
+    for i, placed_element in enumerate(placed_elements):
+        print(f"🔍 DEBUG: Processing placed_element {i+1}/{len(placed_elements)}")
+        
         if len(placed_element) >= 6:  # New format with color
             transformed_polygon, x_offset, y_offset, rotation_angle, file_name, color = placed_element[:6]
         else:  # Old format without color
             transformed_polygon, x_offset, y_offset, rotation_angle, file_name = placed_element[:5]
             color = 'серый'
         
-        # If we have original DXF data for this file, use it
-        if original_dxf_data_map and file_name in original_dxf_data_map:
-            # Reconstruct from original elements using improved transformation
-            original_data = original_dxf_data_map[file_name]
+        print(f"🔍 DEBUG: file_name: {file_name}")
+        print(f"🔍 DEBUG: transformed_polygon bounds: {transformed_polygon.bounds if hasattr(transformed_polygon, 'bounds') else 'no bounds'}")
+        print(f"🔍 DEBUG: x_offset: {x_offset}, y_offset: {y_offset}, rotation_angle: {rotation_angle}")
+        
+        # STEP 1: ALWAYS add the main polygon boundary first (this is what visualization shows)
+        if hasattr(transformed_polygon, 'exterior'):
+            main_points = list(transformed_polygon.exterior.coords)[:-1]  # Remove duplicate last point
+            layer_name = f"POLYGON_{file_name.replace('.dxf', '').replace('/', '_').replace(' ', '_')}"
+            print(f"🔍 DEBUG: Adding MAIN polygon boundary with {len(main_points)} points to layer {layer_name}")
+            msp.add_lwpolyline(main_points, dxfattribs={"layer": layer_name})
+            
+            # Add interior holes if any
+            for hole_idx, interior in enumerate(transformed_polygon.interiors):
+                hole_points = list(interior.coords)[:-1]
+                hole_layer = f"{layer_name}_HOLE_{hole_idx}"
+                msp.add_lwpolyline(hole_points, dxfattribs={"layer": hole_layer})
+                print(f"🔍 DEBUG: Added hole {hole_idx} with {len(hole_points)} points to layer {hole_layer}")
+        
+        # STEP 2: Add all internal details (SPLINE, IMAGE, etc.) from original DXF
+        # Normalize file_name to match keys in original_dxf_data_map
+        file_basename = os.path.basename(file_name) if file_name else file_name
+        
+        # Try exact match first, then basename match
+        original_data_key = None
+        if original_dxf_data_map:
+            if file_name in original_dxf_data_map:
+                original_data_key = file_name
+            elif file_basename in original_dxf_data_map:
+                original_data_key = file_basename
+            else:
+                # Try to find by basename matching
+                for key in original_dxf_data_map.keys():
+                    if os.path.basename(key) == file_basename:
+                        original_data_key = key
+                        break
+        
+        if original_data_key:
+            print(f"🔍 DEBUG: Found original_data_key: {original_data_key}")
+            # Reconstruct from original elements using the EXACT same transformation
+            original_data = original_dxf_data_map[original_data_key]
+            
+            print(f"🔍 DEBUG: original_data keys: {list(original_data.keys())}")
+            print(f"🔍 DEBUG: original_entities count: {len(original_data.get('original_entities', []))}")
             
             # Check if we have original entities to work with
             if original_data['original_entities']:
-                # FIXED: Use the exact same transformation that was applied to the polygon
+                # Use the original combined polygon to derive transformation
                 if original_data['combined_polygon']:
                     original_polygon = original_data['combined_polygon']
+                    
+                    # The transformed_polygon is ALREADY in its final position
+                    # We need to transform DXF entities from original_polygon to transformed_polygon
+                    print(f"🔍 DEBUG: Original polygon bounds: {original_polygon.bounds}")
+                    print(f"🔍 DEBUG: Final transformed polygon bounds: {transformed_polygon.bounds}")
+                    
+                    # Calculate direct transformation from original to final position
                     orig_bounds = original_polygon.bounds
-                    orig_min_x, orig_min_y = orig_bounds[0], orig_bounds[1]
-                    
-                    # The key insight: x_offset and y_offset are the displacements that were applied
-                    # to move the polygon from its original position to its final position
-                    # rotation_angle is the rotation that was applied
-                    
-                    # Final position is: transformed_polygon.bounds
                     final_bounds = transformed_polygon.bounds
-                    final_min_x, final_min_y = final_bounds[0], final_bounds[1]
-                
-                for entity_data in original_data['original_entities']:
+                    
+                for j, entity_data in enumerate(original_data['original_entities']):
+                    print(f"🔍 DEBUG: Processing entity {j+1}/{len(original_data['original_entities'])}, type: {entity_data['type']}")
                     try:
                         # Clone the original entity
                         new_entity = entity_data['entity'].copy()
                         
-                        # Apply the SAME transformation that was applied to the polygon:
-                        # Step 1: Move to origin (normalize to 0,0 based on combined polygon bounds)
-                        new_entity.translate(-orig_min_x, -orig_min_y, 0)
+                        # DIRECT TRANSFORMATION FROM ORIGINAL TO FINAL POSITION
+                        # We calculate transformation matrices to map from original_polygon to transformed_polygon
                         
-                        # Step 2: Apply rotation around origin if needed
-                        if rotation_angle != 0:
-                            new_entity.rotate_z(np.radians(rotation_angle))
-                        
-                        # Step 3: Move to final position
-                        new_entity.translate(final_min_x, final_min_y, 0)
+                        # SPECIAL HANDLING FOR SPLINE ELEMENTS
+                        if entity_data['type'] == 'SPLINE':
+                            spline_count += 1
+                            print(f"🔍 DEBUG: SPLINE #{spline_count} - applying direct transformation to final position")
+                            
+                            # Calculate transformation: scale and offset to map from orig_bounds to final_bounds
+                            orig_width = orig_bounds[2] - orig_bounds[0]
+                            orig_height = orig_bounds[3] - orig_bounds[1]
+                            final_width = final_bounds[2] - final_bounds[0]
+                            final_height = final_bounds[3] - final_bounds[1]
+                            
+                            # Calculate scale factors
+                            scale_x = final_width / orig_width if orig_width > 0 else 1.0
+                            scale_y = final_height / orig_height if orig_height > 0 else 1.0
+                            
+                            # Calculate offset to map origin of orig_bounds to origin of final_bounds
+                            offset_x = final_bounds[0] - orig_bounds[0] * scale_x
+                            offset_y = final_bounds[1] - orig_bounds[1] * scale_y
+                            
+                            print(f"🔍 DEBUG: Transformation - scale: ({scale_x:.3f}, {scale_y:.3f}), offset: ({offset_x:.1f}, {offset_y:.1f})")
+                            
+                            # Use manual control point transformation for SPLINE
+                            control_points = new_entity.control_points
+                            if control_points is not None and len(control_points) > 0:
+                                # Transform each control point directly
+                                transformed_points = []
+                                for cp in control_points:
+                                    if hasattr(cp, 'x') and hasattr(cp, 'y'):
+                                        x, y = cp.x, cp.y
+                                        z = getattr(cp, 'z', 0.0)
+                                    elif len(cp) >= 2:
+                                        x, y = float(cp[0]), float(cp[1])
+                                        z = float(cp[2]) if len(cp) > 2 else 0.0
+                                    else:
+                                        continue
+                                    
+                                    # Apply direct linear transformation
+                                    final_x = x * scale_x + offset_x
+                                    final_y = y * scale_y + offset_y
+                                    
+                                    transformed_points.append((final_x, final_y, z))
+                                
+                                # Update SPLINE control points
+                                if transformed_points:
+                                    from ezdxf.math import Vec3
+                                    new_control_points = [Vec3(x, y, z) for x, y, z in transformed_points]
+                                    new_entity.control_points = new_control_points
+                                    
+                                    print(f"🔍 DEBUG: SPLINE transformed - new bounds: X[{min(p[0] for p in transformed_points):.1f}, {max(p[0] for p in transformed_points):.1f}] Y[{min(p[1] for p in transformed_points):.1f}, {max(p[1] for p in transformed_points):.1f}]")
+                        elif entity_data['type'] == 'IMAGE':
+                            # SPECIAL HANDLING FOR IMAGE ELEMENTS (text/labels)
+                            # Apply the same direct transformation as SPLINE
+                            print(f"🔍 DEBUG: IMAGE - applying direct transformation to final position")
+                            
+                            if hasattr(new_entity.dxf, 'insert'):
+                                orig_image_pos = new_entity.dxf.insert
+                                print(f"🔍 DEBUG: Original IMAGE position: ({orig_image_pos[0]:.1f}, {orig_image_pos[1]:.1f})")
+                                
+                                # Use the same transformation calculated for SPLINE elements
+                                orig_width = orig_bounds[2] - orig_bounds[0]
+                                orig_height = orig_bounds[3] - orig_bounds[1]
+                                final_width = final_bounds[2] - final_bounds[0]
+                                final_height = final_bounds[3] - final_bounds[1]
+                                
+                                scale_x = final_width / orig_width if orig_width > 0 else 1.0
+                                scale_y = final_height / orig_height if orig_height > 0 else 1.0
+                                offset_x = final_bounds[0] - orig_bounds[0] * scale_x
+                                offset_y = final_bounds[1] - orig_bounds[1] * scale_y
+                                
+                                # Apply direct linear transformation
+                                final_x = orig_image_pos[0] * scale_x + offset_x
+                                final_y = orig_image_pos[1] * scale_y + offset_y
+                                
+                                print(f"🔍 DEBUG: Final IMAGE position: ({final_x:.1f}, {final_y:.1f})")
+                                
+                                # Update image position
+                                from ezdxf.math import Vec3
+                                new_entity.dxf.insert = Vec3(final_x, final_y, 0)
+                        else:
+                            # For other entities, apply scale and translate transformation
+                            print(f"🔍 DEBUG: {entity_data['type']} - applying direct scale+translate transformation")
+                            
+                            # Calculate the same transformation matrices as for SPLINE/IMAGE
+                            orig_width = orig_bounds[2] - orig_bounds[0]
+                            orig_height = orig_bounds[3] - orig_bounds[1]
+                            final_width = final_bounds[2] - final_bounds[0]
+                            final_height = final_bounds[3] - final_bounds[1]
+                            
+                            scale_x = final_width / orig_width if orig_width > 0 else 1.0
+                            scale_y = final_height / orig_height if orig_height > 0 else 1.0
+                            
+                            # First move to origin, then scale, then move to final position
+                            new_entity.translate(-orig_bounds[0], -orig_bounds[1], 0)
+                            
+                            # Apply scaling if needed
+                            if scale_x != 1.0 or scale_y != 1.0:
+                                # Note: ezdxf scale method applies uniform scaling, but we need separate X/Y scaling
+                                # We'll use matrix transformation for proper scaling
+                                import ezdxf.math as math
+                                matrix = math.Matrix44.scale(scale_x, scale_y, 1.0)
+                                new_entity.transform(matrix)
+                            
+                            # Move to final position
+                            new_entity.translate(final_bounds[0], final_bounds[1], 0)
                         
                         # Update layer name to include file name for better organization
                         base_layer = entity_data['layer']
-                        new_layer = f"{file_name.replace('.dxf', '').replace('..', '_')}_{base_layer}"
+                        
+                        # Clean file name from invalid DXF layer characters
+                        clean_file_name = file_name.replace('.dxf', '').replace('..', '_')
+                        clean_file_name = clean_file_name.replace('/', '_').replace('\\', '_').replace(' ', '_')
+                        clean_file_name = ''.join(c for c in clean_file_name if c.isalnum() or c in '_-')
+                        
+                        new_layer = f"{clean_file_name}_{base_layer}"
                         new_entity.dxf.layer = new_layer
                         
                         # Add to modelspace
@@ -332,23 +532,16 @@ def save_dxf_layout_complete(placed_elements, sheet_size, output_path, original_
                         
                     except Exception as e:
                         logger.warning(f"Ошибка добавления элемента {entity_data['type']}: {e}")
-                        # Fallback: add as simple polyline
+                        # Fallback: add as simple polyline using the transformed polygon
                         if hasattr(transformed_polygon, 'exterior'):
                             points = list(transformed_polygon.exterior.coords)[:-1]
                             layer_name = file_name.replace('.dxf', '').replace('..', '_')
+                            layer_name = layer_name.replace('/', '_').replace('\\', '_').replace(' ', '_')
+                            layer_name = ''.join(c for c in layer_name if c.isalnum() or c in '_-')
                             msp.add_lwpolyline(points, dxfattribs={"layer": layer_name})
             else:
-                # No original entities - use fallback method
-                if hasattr(transformed_polygon, 'exterior'):
-                    points = list(transformed_polygon.exterior.coords)[:-1]
-                    layer_name = file_name.replace('.dxf', '').replace('..', '_')
-                    msp.add_lwpolyline(points, dxfattribs={"layer": layer_name})
-        else:
-            # Fallback: save as simple polyline (current method)
-            if hasattr(transformed_polygon, 'exterior'):
-                points = list(transformed_polygon.exterior.coords)[:-1]
-                layer_name = file_name.replace('.dxf', '').replace('..', '_')
-                msp.add_lwpolyline(points, dxfattribs={"layer": layer_name})
+                # No original entities - main polygon boundary already added in STEP 1
+                print(f"🔍 DEBUG: No original entities found for {file_name}, but main boundary already added")
                 
                 # Add interior holes if any
                 for interior in transformed_polygon.interiors:
@@ -357,6 +550,9 @@ def save_dxf_layout_complete(placed_elements, sheet_size, output_path, original_
     
     # Save the document
     doc.saveas(output_path)
+    
+    print(f"🔍 DEBUG: SUMMARY - Processed {spline_count} SPLINEs, applied {transformation_count} transformations")
+    print(f"🔍 DEBUG: Saved file: {output_path}")
     #st.success(f"💾 Сохранен улучшенный выходной DXF файл: {output_path}")
 
 
@@ -505,19 +701,30 @@ def parse_dxf(file, verbose=True) -> Polygon:
 
 
 def rotate_polygon(polygon: Polygon, angle: float) -> Polygon:
-    """Rotate a polygon by a given angle (in degrees) around its bottom-left corner.
+    """Rotate a polygon by a given angle (in degrees) around its centroid.
     
-    This ensures consistency with DXF transformation applied during file saving.
+    Using centroid rotation for better stability and predictable results.
     """
     if angle == 0:
         return polygon
     
-    # Get bottom-left corner as rotation origin
-    bounds = polygon.bounds
-    bottom_left = (bounds[0], bounds[1])
+    # Use centroid as rotation origin for better stability
+    centroid = polygon.centroid
+    rotation_origin = (centroid.x, centroid.y)
     
-    # Rotate around bottom-left corner instead of centroid
-    return affinity.rotate(polygon, angle, origin=bottom_left)
+    # Rotate around centroid instead of corner to avoid positioning issues
+    rotated = affinity.rotate(polygon, angle, origin=rotation_origin)
+    
+    # Ensure the rotated polygon is valid
+    if not rotated.is_valid:
+        try:
+            # Try to fix invalid geometry
+            rotated = rotated.buffer(0)
+        except Exception:
+            # If fixing fails, return original polygon
+            return polygon
+    
+    return rotated
 
 
 def translate_polygon(polygon: Polygon, x: float, y: float) -> Polygon:
@@ -531,10 +738,41 @@ def place_polygon_at_origin(polygon: Polygon) -> Polygon:
     return translate_polygon(polygon, -bounds[0], -bounds[1])
 
 
+def apply_placement_transform(polygon: Polygon, x_offset: float, y_offset: float, rotation_angle: float) -> Polygon:
+    """Apply the same transformation sequence used in bin_packing.
+    
+    This ensures consistency between visualization and DXF output.
+    
+    Args:
+        polygon: Original polygon
+        x_offset: X translation offset
+        y_offset: Y translation offset 
+        rotation_angle: Rotation angle in degrees
+        
+    Returns:
+        Transformed polygon
+    """
+    # Step 1: Move to origin
+    bounds = polygon.bounds
+    normalized = translate_polygon(polygon, -bounds[0], -bounds[1])
+    
+    # Step 2: Rotate around centroid if needed
+    if rotation_angle != 0:
+        rotated = rotate_polygon(normalized, rotation_angle)
+    else:
+        rotated = normalized
+    
+    # Step 3: Apply final translation
+    # Note: x_offset and y_offset already account for the original bounds
+    final_polygon = translate_polygon(rotated, x_offset + bounds[0], y_offset + bounds[1])
+    
+    return final_polygon
+
+
 def check_collision(polygon1: Polygon, polygon2: Polygon, min_gap: float = 2.0) -> bool:
     """Check if two polygons collide with minimum gap requirement.
     
-    Optimized version with fast bounding box pre-check.
+    Enhanced version with improved collision detection.
     
     Args:
         polygon1: First polygon
@@ -544,35 +782,44 @@ def check_collision(polygon1: Polygon, polygon2: Polygon, min_gap: float = 2.0) 
     Returns:
         True if polygons are too close (collision), False if they have sufficient gap
     """
-    # Fast validity check (most polygons should be valid)
+    # Fast validity check
     if not (polygon1.is_valid and polygon2.is_valid):
         return True  # Treat invalid polygons as collision
     
-    # OPTIMIZATION 1: Fast bounding box distance check first
+    # OPTIMIZATION 1: Enhanced bounding box distance check
     bounds1 = polygon1.bounds
     bounds2 = polygon2.bounds
     
-    # Calculate minimum distance between bounding boxes
+    # Calculate minimum distance between bounding boxes with safety margin
     dx = max(0, max(bounds1[0] - bounds2[2], bounds2[0] - bounds1[2]))
     dy = max(0, max(bounds1[1] - bounds2[3], bounds2[1] - bounds1[3]))
     bbox_distance = (dx * dx + dy * dy) ** 0.5
     
     # If bounding boxes are far enough apart, no collision possible
-    if bbox_distance >= min_gap:
+    if bbox_distance >= min_gap + 1.0:  # Extra safety margin
         return False
     
-    # OPTIMIZATION 2: Quick intersection check (faster than distance calculation)
+    # OPTIMIZATION 2: Quick intersection check - if they overlap, it's definitely a collision
     if polygon1.intersects(polygon2):
         return True
     
-    # OPTIMIZATION 3: Only calculate precise distance if bounding boxes are close
-    # This is the most expensive operation, so we do it last
+    # OPTIMIZATION 3: More accurate distance calculation for close polygons
     try:
+        # Use buffered polygon for more conservative collision detection
+        buffered_polygon1 = polygon1.buffer(min_gap / 2.0)
+        if buffered_polygon1.intersects(polygon2):
+            return True
+            
+        # Final precise distance check
         distance = polygon1.distance(polygon2)
         return distance < min_gap
     except Exception:
-        # If distance calculation fails, be conservative
-        return True
+        # If calculation fails, use conservative buffer check
+        try:
+            buffer1 = polygon1.buffer(min_gap)
+            return buffer1.intersects(polygon2)
+        except Exception:
+            return True  # Be conservative if all methods fail
 
 
 def bin_packing_multi_pass(polygons: list[tuple], existing_layouts: list[dict], sheet_size: tuple[float, float], max_attempts: int = 1000, verbose: bool = True) -> tuple[list[tuple], list[tuple], list[dict]]:
@@ -634,11 +881,16 @@ def bin_packing_with_existing(polygons: list[tuple], existing_placed: list[tuple
     if verbose:
         st.info(f"Дозаполняем лист с {len(obstacles)} существующими деталями, добавляем {len(polygons)} новых")
     
-    # IMPROVEMENT 1: Sort polygons by area (largest first) for better packing
-    def get_polygon_area(polygon_tuple):
-        return polygon_tuple[0].area
+    # IMPROVEMENT 1: Sort polygons by area and perimeter for better packing
+    def get_polygon_priority(polygon_tuple):
+        polygon = polygon_tuple[0]
+        # Combine area and perimeter for better sorting (larger, more complex shapes first)
+        area = polygon.area
+        bounds = polygon.bounds
+        perimeter_approx = 2 * ((bounds[2] - bounds[0]) + (bounds[3] - bounds[1]))
+        return area + perimeter_approx * 0.1
     
-    sorted_polygons = sorted(polygons, key=get_polygon_area, reverse=True)
+    sorted_polygons = sorted(polygons, key=get_polygon_priority, reverse=True)
     
     for i, polygon_tuple in enumerate(sorted_polygons):
         if len(polygon_tuple) >= 4:  # Extended format with color and order_id
@@ -730,11 +982,16 @@ def bin_packing(polygons: list[tuple], sheet_size: tuple[float, float], max_atte
     if verbose:
         st.info(f"Начинаем улучшенную упаковку {len(polygons)} полигонов на листе {sheet_size[0]}x{sheet_size[1]} см")
     
-    # IMPROVEMENT 1: Sort polygons by area (largest first) for better packing
-    def get_polygon_area(polygon_tuple):
-        return polygon_tuple[0].area
+    # IMPROVEMENT 1: Sort polygons by area and perimeter for better packing
+    def get_polygon_priority(polygon_tuple):
+        polygon = polygon_tuple[0]
+        # Combine area and perimeter for better sorting (larger, more complex shapes first)
+        area = polygon.area
+        bounds = polygon.bounds
+        perimeter_approx = 2 * ((bounds[2] - bounds[0]) + (bounds[3] - bounds[1]))
+        return area + perimeter_approx * 0.1
     
-    sorted_polygons = sorted(polygons, key=get_polygon_area, reverse=True)
+    sorted_polygons = sorted(polygons, key=get_polygon_priority, reverse=True)
     if verbose:
         st.info("✨ Сортировка полигонов по площади (сначала крупные)")
     
@@ -821,40 +1078,63 @@ def bin_packing(polygons: list[tuple], sheet_size: tuple[float, float], max_atte
             simple_width = simple_bounds[2] - simple_bounds[0]
             simple_height = simple_bounds[3] - simple_bounds[1]
             
-            # Try basic grid placement as fallback
-            max_grid_attempts = 15  # Increased from 10
-            x_positions = np.linspace(0, max(0, sheet_width_mm - simple_width), max_grid_attempts) if sheet_width_mm > simple_width else [0]
-            y_positions = np.linspace(0, max(0, sheet_height_mm - simple_height), max_grid_attempts) if sheet_height_mm > simple_height else [0]
+            # Optimized grid placement as fallback
+            max_grid_attempts = 10  # Reduced for better performance
+            if sheet_width_mm > simple_width:
+                x_positions = np.linspace(0, sheet_width_mm - simple_width, max_grid_attempts)
+            else:
+                x_positions = [0]
+                
+            if sheet_height_mm > simple_height:
+                y_positions = np.linspace(0, sheet_height_mm - simple_height, max_grid_attempts)
+            else:
+                y_positions = [0]
+            
+            # PERFORMANCE: Pre-compute placed polygon bounds for faster collision checking
+            placed_bounds_cache = [placed_poly.bounds for placed_poly, *_ in placed]
             
             for grid_x in x_positions:
                 for grid_y in y_positions:
-                    # OPTIMIZATION: Pre-calculate translation offsets
                     x_offset = grid_x - simple_bounds[0]
                     y_offset = grid_y - simple_bounds[1]
                     
-                    # OPTIMIZATION: Check bounds before expensive polygon translation
+                    # Fast bounds check
                     test_bounds = (simple_bounds[0] + x_offset, simple_bounds[1] + y_offset, 
                                  simple_bounds[2] + x_offset, simple_bounds[3] + y_offset)
                     
-                    if (test_bounds[0] >= -0.1 and test_bounds[1] >= -0.1 and 
-                        test_bounds[2] <= sheet_width_mm + 0.1 and test_bounds[3] <= sheet_height_mm + 0.1):
-                        
-                        # Only create translated polygon if bounds check passes
-                        translated = translate_polygon(polygon, x_offset, y_offset)
-                        
-                        # OPTIMIZATION: Early exit on first collision found
-                        collision = False
-                        for placed_poly, *_ in placed:
-                            if check_collision(translated, placed_poly):
-                                collision = True
-                                break
-                        
-                        if not collision:
-                            placed.append((translated, x_offset, y_offset, 0, file_name, color, order_id))
-                            placed_successfully = True
-                            if verbose:
-                                st.success(f"✅ Размещен {file_name} (сетчатое размещение)")
+                    if not (test_bounds[0] >= -0.1 and test_bounds[1] >= -0.1 and 
+                           test_bounds[2] <= sheet_width_mm + 0.1 and test_bounds[3] <= sheet_height_mm + 0.1):
+                        continue
+                    
+                    # OPTIMIZATION: Fast bounding box collision check first
+                    bbox_collision = False
+                    for placed_bounds in placed_bounds_cache:
+                        if not (test_bounds[2] + 2.0 <= placed_bounds[0] or 
+                               test_bounds[0] >= placed_bounds[2] + 2.0 or 
+                               test_bounds[3] + 2.0 <= placed_bounds[1] or 
+                               test_bounds[1] >= placed_bounds[3] + 2.0):
+                            bbox_collision = True
                             break
+                    
+                    if bbox_collision:
+                        continue
+                        
+                    # Only create polygon if bounding box check passes
+                    translated = translate_polygon(polygon, x_offset, y_offset)
+                    
+                    # Final precise collision check
+                    collision = False
+                    for placed_poly, *_ in placed:
+                        if check_collision(translated, placed_poly):
+                            collision = True
+                            break
+                    
+                    if not collision:
+                        placed.append((translated, x_offset, y_offset, 0, file_name, color, order_id))
+                        placed_successfully = True
+                        if verbose:
+                            st.success(f"✅ Размещен {file_name} (сетчатое размещение)")
+                        break
                 
                 if placed_successfully:
                     break
@@ -942,65 +1222,84 @@ def find_bottom_left_position_with_obstacles(polygon, obstacles, sheet_width, sh
 
 
 def find_bottom_left_position(polygon, placed_polygons, sheet_width, sheet_height):
-    """Find the bottom-left position for a polygon using Bottom-Left Fill algorithm."""
+    """Find the bottom-left position for a polygon using optimized Bottom-Left Fill algorithm."""
     bounds = polygon.bounds
     poly_width = bounds[2] - bounds[0]
     poly_height = bounds[3] - bounds[1]
     
-    # Try positions along bottom and left edges first
-    candidate_positions = []
-    
-    # Bottom edge positions
-    for x in np.arange(0, sheet_width - poly_width + 1, 5):  # 5mm steps
-        candidate_positions.append((x, 0))
-    
-    # Left edge positions  
-    for y in np.arange(0, sheet_height - poly_height + 1, 5):  # 5mm steps
-        candidate_positions.append((0, y))
-    
-    # Positions based on existing polygons (bottom-left principle)
+    # PERFORMANCE OPTIMIZATION: Pre-compute placed polygon bounds
+    placed_bounds_list = []
     for placed_tuple in placed_polygons:
         placed_polygon = placed_tuple[0]
-        placed_bounds = placed_polygon.bounds
-        
+        placed_bounds_list.append(placed_polygon.bounds)
+    
+    # Generate candidate positions more efficiently
+    candidate_positions = set()  # Use set to avoid duplicates
+    
+    # Bottom and left edge positions with larger steps for faster processing
+    step_size = max(5, min(poly_width, poly_height) / 4)  # Adaptive step size
+    
+    # Bottom edge positions
+    for x in np.arange(0, sheet_width - poly_width + 1, step_size):
+        candidate_positions.add((x, 0))
+    
+    # Left edge positions  
+    for y in np.arange(0, sheet_height - poly_height + 1, step_size):
+        candidate_positions.add((0, y))
+    
+    # OPTIMIZATION: Generate positions based on existing polygons more efficiently
+    min_gap = 3.0
+    for placed_bounds in placed_bounds_list:
         # Try position to the right of existing polygon
-        x = placed_bounds[2] + 3  # 3mm gap for safety
+        x = placed_bounds[2] + min_gap
         if x + poly_width <= sheet_width:
-            candidate_positions.append((x, placed_bounds[1]))  # Same Y as existing
-            candidate_positions.append((x, 0))  # Bottom edge
+            candidate_positions.add((x, placed_bounds[1]))  # Same Y as existing
+            candidate_positions.add((x, 0))  # Bottom edge
         
         # Try position above existing polygon
-        y = placed_bounds[3] + 3  # 3mm gap for safety
+        y = placed_bounds[3] + min_gap
         if y + poly_height <= sheet_height:
-            candidate_positions.append((placed_bounds[0], y))  # Same X as existing
-            candidate_positions.append((0, y))  # Left edge
+            candidate_positions.add((placed_bounds[0], y))  # Same X as existing
+            candidate_positions.add((0, y))  # Left edge
     
-    # Sort by bottom-left preference (y first, then x)
-    candidate_positions.sort(key=lambda pos: (pos[1], pos[0]))
+    # Convert to sorted list (bottom-left preference)
+    candidate_positions = sorted(candidate_positions, key=lambda pos: (pos[1], pos[0]))
     
-    # Test each position
+    # PERFORMANCE: Pre-calculate translation offset and test bounds for all candidates
     for x, y in candidate_positions:
-        # OPTIMIZATION: Fast boundary pre-check
-        if x + poly_width > sheet_width + 0.1 or y + poly_height > sheet_height + 0.1:
-            continue
-        if x < -0.1 or y < -0.1:
+        # Fast boundary pre-check
+        if (x + poly_width > sheet_width + 0.1 or y + poly_height > sheet_height + 0.1 or
+            x < -0.1 or y < -0.1):
             continue
             
-        # OPTIMIZATION: Pre-calculate offsets
         x_offset = x - bounds[0] 
         y_offset = y - bounds[1]
         
-        # OPTIMIZATION: Check bounds before polygon creation
+        # Check bounds before expensive polygon creation
         test_bounds = (bounds[0] + x_offset, bounds[1] + y_offset,
                       bounds[2] + x_offset, bounds[3] + y_offset)
         if (test_bounds[0] < -0.1 or test_bounds[1] < -0.1 or 
             test_bounds[2] > sheet_width + 0.1 or test_bounds[3] > sheet_height + 0.1):
             continue
         
-        # Only create polygon after all fast checks pass
+        # OPTIMIZATION: Fast bounding box collision check before creating polygon
+        bbox_collision = False
+        for placed_bounds in placed_bounds_list:
+            # Check if bounding boxes intersect with minimum gap
+            if not (test_bounds[2] + 2.0 <= placed_bounds[0] or  # test is left of placed
+                   test_bounds[0] >= placed_bounds[2] + 2.0 or  # test is right of placed
+                   test_bounds[3] + 2.0 <= placed_bounds[1] or  # test is below placed
+                   test_bounds[1] >= placed_bounds[3] + 2.0):   # test is above placed
+                bbox_collision = True
+                break
+        
+        if bbox_collision:
+            continue
+            
+        # Only create polygon and do full collision check if bounding box test passes
         test_polygon = translate_polygon(polygon, x_offset, y_offset)
         
-        # OPTIMIZATION: Early exit collision check
+        # Final collision check with actual polygons
         collision = False
         for p, *_ in placed_polygons:
             if check_collision(test_polygon, p):
