@@ -707,100 +707,159 @@ if st.session_state.selected_orders:
 
 # Additional DXF files section (always available)
 st.subheader("📎 Загрузить вручную")
-st.write("Вы можете добавить дополнительные DXF файлы независимо от Excel загрузки или вместе с ней.")
+st.write("Добавьте DXF файлы группами. Каждая группа будет иметь свои настройки цвета и количества.")
 
-manual_files = st.file_uploader("Добавьте дополнительные DXF файлы при необходимости", type=["dxf"], accept_multiple_files=True, key="manual_dxf")
+# Initialize session state for file groups
+if 'file_groups' not in st.session_state:
+    st.session_state.file_groups = []
+if 'group_counter' not in st.session_state:
+    st.session_state.group_counter = 1
 
-# Initialize session state for manual file settings
-if 'manual_file_settings' not in st.session_state:
-    st.session_state.manual_file_settings = {}
+# File uploader for new files - each selection creates a new group
+# Use group_counter in key to reset uploader after each group creation
+uploader_key = f"manual_dxf_{len(st.session_state.file_groups)}"
+manual_files = st.file_uploader("Выберите DXF файлы (будет создана новая группа)", type=["dxf"], accept_multiple_files=True, key=uploader_key)
 
-# Store manual files in session state for later processing
+# Process newly uploaded files - show settings and create group when ready
 if manual_files:
-    st.write("**Настройка дополнительных файлов:**")
+    # Store current files for this group configuration
+    current_group_key = f"current_group_{len(st.session_state.file_groups)}"
     
-    # Create settings for each file
-    manual_files_configured = []
+    st.write(f"**Новая группа #{st.session_state.group_counter}:**")
+
     
-    for i, file in enumerate(manual_files):
-        with st.expander(f"📄 {file.name}", expanded=True):
-            col1, col2 = st.columns([1, 1])
+    # Settings for this group
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        group_color = st.selectbox(
+            "Цвет листа:",
+            options=["чёрный", "серый"],
+            index=0,
+            key=f"color_{current_group_key}",
+            help="Цвет листа для всех файлов группы"
+        )
+    
+    with col2:
+        group_quantity = st.number_input(
+            "Количество копий:",
+            min_value=1,
+            max_value=50,
+            value=1,
+            key=f"qty_{current_group_key}",
+            help="Копий каждого файла"
+        )
+    
+    # Button to create group with current settings
+    if st.button(f"➕ Создать группу #{st.session_state.group_counter}", key=f"create_group_{current_group_key}"):
+        # Create group with selected settings
+        group_files = []
+        group_name = f"Группа #{st.session_state.group_counter}"
+        
+        for file in manual_files:
+            # Store file content to avoid issues with file handles
+            file.seek(0)
+            file_content = file.read()
             
-            with col1:
-                file_color = st.selectbox(
-                    f"Цвет листа для {file.name}:",
-                    options=["чёрный", "серый"],
-                    index=0,
-                    key=f"manual_file_color_{i}_{file.name}",
-                    help="Выберите цвет листа, на который должен быть размещен этот файл"
-                )
-            
-            with col2:
-                file_quantity = st.number_input(
-                    f"Количество копий {file.name}:",
-                    min_value=1,
-                    max_value=50,
-                    value=1,
-                    key=f"manual_file_qty_{i}_{file.name}",
-                    help="Сколько копий этого файла нужно разместить"
-                )
-            
-            # Store settings for this file
-            st.session_state.manual_file_settings[file.name] = {
-                'color': file_color,
-                'quantity': file_quantity,
-                'file': file
-            }
-            
-            # Create file objects with settings for each quantity
-            for copy_num in range(file_quantity):
-                # Create a new file-like object for each copy to avoid reference issues
+            for copy_num in range(group_quantity):
                 import io
-                file.seek(0)
-                file_content = file.read()
                 file_copy = io.BytesIO(file_content)
-                file_copy.name = file.name  # Keep original name reference
-                file_copy.color = file_color
-                file_copy.order_id = 'additional'
+                file_copy.name = file.name
+                file_copy.color = group_color
+                file_copy.order_id = f'group_{st.session_state.group_counter}'
                 file_copy.copy_number = copy_num + 1
                 file_copy.original_name = file.name
+                file_copy.group_id = st.session_state.group_counter
                 
                 # Create unique name for multiple copies
-                if file_quantity > 1:
+                if group_quantity > 1:
                     base_name = file.name.replace('.dxf', '')
                     file_copy.display_name = f"{base_name}_копия_{copy_num + 1}.dxf"
                 else:
                     file_copy.display_name = file.name
                 
-                # Also store copy info for debugging
-                file_copy.copy_info = f"copy_{copy_num + 1}_of_{file_quantity}"
-                
-                manual_files_configured.append(file_copy)
+                file_copy.copy_info = f"copy_{copy_num + 1}_of_{group_quantity}"
+                group_files.append(file_copy)
+        
+        # Add group to session state
+        new_group = {
+            'id': st.session_state.group_counter,
+            'name': group_name,
+            'files': [f.name for f in manual_files],
+            'color': group_color,
+            'quantity': group_quantity,
+            'total_objects': len(manual_files) * group_quantity,
+            'file_objects': group_files
+        }
+        
+        st.session_state.file_groups.append(new_group)
+        st.session_state.group_counter += 1
+        
+        st.success(f"✅ Группа создана: {len(manual_files)} файлов × {group_quantity} копий = {len(group_files)} объектов")
+        
+        # Force rerun to reset uploader
+        st.rerun()
     
-    # Store configured files
-    st.session_state.manual_files = manual_files_configured
+    # Show preview of what will be created
+    total_objects = len(manual_files) * group_quantity
+    color_emoji = "⚫" if group_color == "чёрный" else "⚪"
+
+
+# Display existing groups table
+if st.session_state.file_groups:
+    st.subheader("📋 Загруженные группы файлов")
     
-    # Show summary
-    total_files = sum(settings['quantity'] for settings in st.session_state.manual_file_settings.values())
-    color_counts = {}
-    for settings in st.session_state.manual_file_settings.values():
-        color = settings['color']
-        color_counts[color] = color_counts.get(color, 0) + settings['quantity']
+    groups_data = []
+    total_objects = 0
     
-    st.success(f"✅ Настроено {len(manual_files)} файлов, всего {total_files} копий:")
-    for color, count in color_counts.items():
-        color_emoji = "⚫" if color == "чёрный" else "⚪"
-        st.info(f"   {color_emoji} {color}: {count} файлов")
+    for group in st.session_state.file_groups:
+        color_emoji = "⚫" if group['color'] == "чёрный" else "⚪"
+        files_list = ", ".join(group['files'][:3])  # Show first 3 files
+        if len(group['files']) > 3:
+            files_list += f" и ещё {len(group['files']) - 3}..."
+        
+        groups_data.append({
+            "Группа": group['name'],
+            "Файлы": files_list,
+            "Цвет": f"{color_emoji} {group['color']}",
+            "Копий на файл": group['quantity'],
+            "Всего объектов": group['total_objects']
+        })
+        total_objects += group['total_objects']
+    
+    groups_df = pd.DataFrame(groups_data)
+    st.dataframe(groups_df, use_container_width=True)
+    
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.metric("Всего объектов во всех группах", total_objects)
+    with col2:
+        if st.button("🗑️ Очистить все группы", key="clear_all_groups"):
+            st.session_state.file_groups = []
+            st.session_state.group_counter = 1
+            st.rerun()
+    
+    # Prepare all files for processing (flatten all groups)
+    all_manual_files = []
+    for group in st.session_state.file_groups:
+        all_manual_files.extend(group['file_objects'])
+    
+    st.session_state.manual_files = all_manual_files
 else:
     st.session_state.manual_files = []
+
+
+# Legacy compatibility - no longer needed but kept for backward compatibility
+if 'manual_file_settings' not in st.session_state:
     st.session_state.manual_file_settings = {}
 
 # Show status messages based on what's available
-if st.session_state.selected_orders and manual_files:
+has_manual_files = len(st.session_state.file_groups) > 0
+if st.session_state.selected_orders and has_manual_files:
     st.info("💡 Будут обработаны заказы из Excel + дополнительные файлы")
 elif st.session_state.selected_orders:
     st.info("💡 Будут обработаны только заказы из Excel таблицы")
-elif manual_files:
+elif has_manual_files:
     st.info("💡 Будут обработаны только дополнительные файлы")
 else:
     st.warning("⚠️ Загрузите Excel файл с заказами или добавьте DXF файлы вручную для продолжения")
