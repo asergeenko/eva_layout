@@ -1366,7 +1366,7 @@ def bin_packing_with_inventory(
 
     # Process orders one by one, but allow filling sheets with multiple orders
     remaining_orders = dict(order_groups)  # Copy to modify
-    max_iterations = len(remaining_orders) * 10  # Safety limit
+    max_iterations = max(100, len(remaining_orders) * 50)  # Safety limit with higher multiplier
     iteration_count = 0
 
     while remaining_orders and any(
@@ -1403,6 +1403,8 @@ def bin_packing_with_inventory(
                 if (
                     max_sheets_per_order is None
                     or order_id == "additional"
+                    or order_id == "unknown"  # Manual uploads are not limited
+                    or order_id.startswith("group_")  # Group uploads are not limited
                     or order_sheet_usage[order_id] < max_sheets_per_order
                 ):
                     # Filter polygons by color
@@ -1421,6 +1423,7 @@ def bin_packing_with_inventory(
                         orders_to_try.append(order_id)
 
             if not compatible_polygons:
+                logger.debug(f"Нет совместимых полигонов для листа {sheet_type['name']} цвета {sheet_color}")
                 continue  # No compatible polygons for this sheet color
 
             sheet_counter += 1
@@ -1576,11 +1579,26 @@ def bin_packing_with_inventory(
                 break  # Move to next iteration with remaining orders
 
         if not placed_on_current_sheet:
-            # No sheet type could accommodate any remaining polygons
-            logger.warning(
-                f"Не удалось разместить оставшиеся заказы: {list(remaining_orders.keys())}"
+            # No sheet type could accommodate any remaining polygons in this iteration
+            # Check if we still have available sheets of any type
+            sheets_still_available = any(
+                sheet["count"] - sheet["used"] > 0 for sheet in sheet_inventory
             )
-            break
+            
+            if not sheets_still_available:
+                logger.warning(
+                    f"Все листы закончились. Не удалось разместить оставшиеся заказы: {list(remaining_orders.keys())}"
+                )
+                break
+            else:
+                # Continue to next iteration - might be color/size mismatch this round
+                available_sheets_count = sum(
+                    max(0, sheet["count"] - sheet["used"]) for sheet in sheet_inventory
+                )
+                logger.info(
+                    f"Не удалось разместить в этой итерации. Доступно листов: {available_sheets_count}. Продолжаем..."
+                )
+                continue
 
     # Check order constraints after placement
     violated_orders = []
@@ -1588,6 +1606,8 @@ def bin_packing_with_inventory(
         if (
             max_sheets_per_order
             and order_id != "additional"
+            and order_id != "unknown"  # Manual uploads are not limited
+            and not order_id.startswith("group_")  # Group uploads are not limited
             and sheets_used > max_sheets_per_order
         ):
             violated_orders.append((order_id, sheets_used))
