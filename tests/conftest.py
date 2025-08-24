@@ -14,7 +14,7 @@ def project_root():
     return Path(__file__).parent.parent
 
 
-@pytest.fixture(scope="session") 
+@pytest.fixture(scope="session")
 def dxf_samples_dir(project_root):
     """Return the DXF samples directory."""
     return project_root / "dxf_samples"
