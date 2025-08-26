@@ -142,9 +142,19 @@ def parse_dxf_complete(file, verbose=True):
         # Try to convert to polygon for layout purposes
         try:
             polygon = convert_entity_to_polygon_improved(entity)
-            if (
-                polygon and polygon.is_valid and polygon.area > 0.1
-            ):  # Minimum area threshold
+            # Enhanced polygon validation and filtering
+            if polygon:# and polygon.area > 0.1:
+                # Try to fix invalid polygons using buffer(0)
+                if not polygon.is_valid:
+                    fixed_polygon = polygon.buffer(0)
+                    if fixed_polygon.is_valid:# and fixed_polygon.area > 0.1:
+                        polygon = fixed_polygon
+                        if verbose:
+                            st.info(f"   🔧 Исправлен невалидный полигон с помощью buffer(0)")
+                    else:
+                        if verbose:
+                            st.warning(f"   ❌ Не удалось исправить невалидный полигон")
+                        continue
                 result["polygons"].append(polygon)
         except Exception as e:
             if verbose:
@@ -659,7 +669,7 @@ def save_dxf_layout_complete(placed_elements, sheet_size, output_path, original_
                     original_color = entity_data.get("color", 256)
                     
                     # Check if color is in red range: 1, 10-19, 240-255
-                    is_blue = original_color < 200
+                    is_blue = 99 < original_color < 200
                     
                     if is_blue:
                         new_entity.dxf.color = 250               # Make everything else black
