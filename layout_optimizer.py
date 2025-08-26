@@ -654,6 +654,18 @@ def save_dxf_layout_complete(placed_elements, sheet_size, output_path, original_
                     
                     # Set layer and add to modelspace
                     new_entity.dxf.layer = entity_data["layer"]
+                    
+                    # Set color: keep red range as is, make everything else black (7)
+                    original_color = entity_data.get("color", 256)
+                    
+                    # Check if color is in red range: 1, 10-19, 240-255
+                    is_blue = original_color < 200
+                    
+                    if is_blue:
+                        new_entity.dxf.color = 250               # Make everything else black
+                    else:
+                        new_entity.dxf.color = original_color  # Keep red colors as is
+
                     msp.add_entity(new_entity)
     
     # Save the document
