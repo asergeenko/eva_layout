@@ -669,12 +669,12 @@ def save_dxf_layout_complete(placed_elements, sheet_size, output_path, original_
                     original_color = entity_data.get("color", 256)
                     
                     # Check if color is in red range: 1, 10-19, 240-255
-                    is_blue = 99 < original_color < 200
+                    is_red = original_color in [1,6] or 10 <= original_color <= 26 or 190 <= original_color < 250
                     
-                    if is_blue:
-                        new_entity.dxf.color = 250               # Make everything else black
+                    if is_red:
+                        new_entity.dxf.color = 1  # Set the one and only red color
                     else:
-                        new_entity.dxf.color = original_color  # Keep red colors as is
+                        new_entity.dxf.color = 0  # Make everything else black
 
                     msp.add_entity(new_entity)
     
