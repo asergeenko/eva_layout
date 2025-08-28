@@ -107,21 +107,23 @@ with col1:
     if sheet_type_option == "Произвольный":
         sheet_width = st.number_input(
             "Ширина (см)",
-            min_value=50.0,
-            max_value=1000.0,
-            value=140.0,
+            min_value=50,
+            max_value=1000,
+            step=1,
+            value=140,
             key="custom_width",
         )
         sheet_height = st.number_input(
             "Высота (см)",
-            min_value=50.0,
-            max_value=1000.0,
-            value=200.0,
+            min_value=50,
+            max_value=1000,
+            step=1,
+            value=200,
             key="custom_height",
         )
         selected_size = (sheet_width, sheet_height)
     else:
-        selected_size = tuple(map(float, sheet_type_option.split("x")))
+        selected_size = tuple(map(int, sheet_type_option.split("x")))
 
     # Color selection
     sheet_color = st.selectbox("Цвет листа", ["чёрный", "серый"], key="sheet_color")
