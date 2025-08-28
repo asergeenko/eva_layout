@@ -112,7 +112,7 @@ def parse_dxf_complete(file, verbose=True):
             artifact in layer_name
             for artifact in [
                 "POLYGON_",
-                "SHEET_BOUNDARY", 
+                "SHEET_BOUNDARY",
                 "_black",
                 "_gray",
                 "_white",
@@ -120,7 +120,7 @@ def parse_dxf_complete(file, verbose=True):
             ]
         ):
             continue  # Skip this entity - it's an artifact
-            
+
         # Skip IMAGE entities - they are artifacts from previous processing
         if entity_type == "IMAGE":
             continue
@@ -323,33 +323,48 @@ def convert_entity_to_polygon_improved(entity):
     return None
 
 
-def save_dxf_layout_complete(placed_elements, sheet_size, output_path, original_dxf_data_map=None):
+def save_dxf_layout_complete(
+    placed_elements, sheet_size, output_path, original_dxf_data_map=None
+):
     """Save DXF layout using coordinate mapping between original and transformed polygons"""
-    
+
     print(f"🔧 save_dxf_layout_complete called with {len(placed_elements)} elements")
     print(f"🔧 Output path: {output_path}")
     print(f"🔧 Sheet size: {sheet_size}")
-    
+
     # Create new DXF document
     doc = ezdxf.new("R2010")
     doc.header["$INSUNITS"] = 4  # millimeters
-    doc.header["$LUNITS"] = 2    # decimal units
+    doc.header["$LUNITS"] = 2  # decimal units
     msp = doc.modelspace()
-    
+
     for placed_element in placed_elements:
         if len(placed_element) >= 6:
-            (transformed_polygon, x_offset, y_offset, rotation_angle, file_name, color) = placed_element[:6]
+            (
+                transformed_polygon,
+                x_offset,
+                y_offset,
+                rotation_angle,
+                file_name,
+                color,
+            ) = placed_element[:6]
         else:
-            transformed_polygon, x_offset, y_offset, rotation_angle, file_name = placed_element[:5]
-        
-        print(f"🔧 Processing {file_name}: final position bounds = {transformed_polygon.bounds}")
-        print(f"🔧 Applied transformations: offset=({x_offset}, {y_offset}), rotation={rotation_angle}°")
-        
+            transformed_polygon, x_offset, y_offset, rotation_angle, file_name = (
+                placed_element[:5]
+            )
+
+        print(
+            f"🔧 Processing {file_name}: final position bounds = {transformed_polygon.bounds}"
+        )
+        print(
+            f"🔧 Applied transformations: offset=({x_offset}, {y_offset}), rotation={rotation_angle}°"
+        )
+
         # Get original DXF data with improved key matching
         # CRITICAL FIX: Handle duplicate filenames properly
         file_basename = os.path.basename(file_name) if file_name else file_name
         original_data_key = None
-        
+
         if original_dxf_data_map:
             # First try exact match
             if file_name in original_dxf_data_map:
@@ -359,434 +374,535 @@ def save_dxf_layout_complete(placed_elements, sheet_size, output_path, original_
             else:
                 # For duplicate filenames, try to match by content
                 # This is a fallback for when multiple files have same basename
-                matching_keys = [key for key in original_dxf_data_map.keys() 
-                               if os.path.basename(key) == file_basename]
-                
+                matching_keys = [
+                    key
+                    for key in original_dxf_data_map.keys()
+                    if os.path.basename(key) == file_basename
+                ]
+
                 if len(matching_keys) == 1:
                     original_data_key = matching_keys[0]
                 elif len(matching_keys) > 1:
-                    # Multiple matches - this is the problem! 
+                    # Multiple matches - this is the problem!
                     # For now, issue a warning and use the first match
-                    print(f"⚠️  WARNING: Multiple files with name '{file_basename}' found in original_dxf_data_map")
+                    print(
+                        f"⚠️  WARNING: Multiple files with name '{file_basename}' found in original_dxf_data_map"
+                    )
                     print(f"   Available keys: {list(original_dxf_data_map.keys())}")
                     print(f"   Using first match: {matching_keys[0]}")
                     original_data_key = matching_keys[0]
-        
+
         if not original_data_key:
             print(f"⚠️  No original_data found for {file_name}")
             continue  # Skip this element if no original data found
-            
+
         original_data = original_dxf_data_map[original_data_key]
         print(f"🔧 Using original_data_key: {original_data_key}")
-        
-        if not (original_data["original_entities"] and original_data["combined_polygon"]):
-            print(f"⚠️  No original_entities or combined_polygon found for {original_data_key}")
+
+        if not (
+            original_data["original_entities"] and original_data["combined_polygon"]
+        ):
+            print(
+                f"⚠️  No original_entities or combined_polygon found for {original_data_key}"
+            )
             continue
-            
-        print(f"🔧 Found {len(original_data['original_entities'])} original entities for {original_data_key}")
-        
+
+        print(
+            f"🔧 Found {len(original_data['original_entities'])} original entities for {original_data_key}"
+        )
+
         original_polygon = original_data["combined_polygon"]
-        
+
         # CRITICAL FIX: Use direct coordinate mapping between original and final polygons
         # The transformed_polygon is already correctly positioned - use it as ground truth!
         orig_bounds = original_polygon.bounds
         final_bounds = transformed_polygon.bounds
-        
-        print(f"🔧 Coordinate mapping from original to final position:")
+
+        print("🔧 Coordinate mapping from original to final position:")
         print(f"    Original bounds: {orig_bounds}")
         print(f"    Final bounds: {final_bounds}")
-                
-                # CRITICAL: Use exact affine transformation from original bounds to final bounds
-                # This reproduces the exact same transformation applied to the polygon
-                
-                # Calculate scale factors (should be 1.0 if no scaling, could be different if rotated)
-                orig_width = orig_bounds[2] - orig_bounds[0]
-                orig_height = orig_bounds[3] - orig_bounds[1]
-                final_width = final_bounds[2] - final_bounds[0]
-                final_height = final_bounds[3] - final_bounds[1]
-                
-                # For rotation, width and height might be swapped
-                if rotation_angle == 90 or rotation_angle == 270:
-                    # Width and height are swapped for 90/270 degree rotations
-                    expected_final_width = orig_height
-                    expected_final_height = orig_width
+
+        # CRITICAL: Use exact affine transformation from original bounds to final bounds
+        # This reproduces the exact same transformation applied to the polygon
+
+        # Calculate scale factors (should be 1.0 if no scaling, could be different if rotated)
+        orig_width = orig_bounds[2] - orig_bounds[0]
+        orig_height = orig_bounds[3] - orig_bounds[1]
+        final_width = final_bounds[2] - final_bounds[0]
+        final_height = final_bounds[3] - final_bounds[1]
+
+        print(f"    Rotation: {rotation_angle}°")
+        print(f"    Original size: {orig_width:.1f} x {orig_height:.1f}")
+        print(f"    Final size: {final_width:.1f} x {final_height:.1f}")
+
+        # Process entities in original order to maintain structure
+        print(
+            f"🔧 Starting to process {len(original_data['original_entities'])} entities..."
+        )
+        for i, entity_data in enumerate(original_data["original_entities"]):
+            entity_type = entity_data["type"]
+            print(
+                f"🔧 Processing entity {i+1}/{len(original_data['original_entities'])}: {entity_type}"
+            )
+
+            sin_angle = 0
+            cos_angle = 1
+
+            # Direct coordinate mapping using the same transformation as the polygon
+            def transform_point(x, y):
+                # Apply the exact same transformation sequence as apply_placement_transform:
+                # 1. Normalize to (0,0) origin
+                x_norm = x - orig_bounds[0]
+                y_norm = y - orig_bounds[1]
+
+                # 2. Apply rotation around center of normalized space
+                if rotation_angle != 0:
+                    center_x = orig_width / 2
+                    center_y = orig_height / 2
+
+                    # Move to center
+                    x_centered = x_norm - center_x
+                    y_centered = y_norm - center_y
+
+                    # Rotate
+                    rotation_rad = math.radians(rotation_angle)
+                    cos_angle = math.cos(rotation_rad)
+                    sin_angle = math.sin(rotation_rad)
+
+                    x_rotated = x_centered * cos_angle - y_centered * sin_angle
+                    y_rotated = x_centered * sin_angle + y_centered * cos_angle
+
+                    # Move back from center (now in rotated space)
+                    if rotation_angle == 90 or rotation_angle == 270:
+                        # For 90/270 rotation, center changes
+                        x_norm = x_rotated + orig_height / 2
+                        y_norm = y_rotated + orig_width / 2
+                    else:
+                        x_norm = x_rotated + center_x
+                        y_norm = y_rotated + center_y
+
+                # 3. Map to final bounds
+                final_x = x_norm + final_bounds[0]
+                final_y = y_norm + final_bounds[1]
+
+                return final_x, final_y
+
+            if entity_type == "SPLINE":
+                new_entity = entity_data["entity"].copy()
+
+                if hasattr(new_entity, "control_points") and new_entity.control_points:
+                    transformed_points = []
+
+                    for cp in new_entity.control_points:
+                        if hasattr(cp, "x") and hasattr(cp, "y"):
+                            x, y = cp.x, cp.y
+                            z = getattr(cp, "z", 0.0)
+                        elif len(cp) >= 2:
+                            x, y = float(cp[0]), float(cp[1])
+                            z = float(cp[2]) if len(cp) > 2 else 0.0
+                        else:
+                            continue
+
+                        final_x, final_y = transform_point(x, y)
+                        transformed_points.append((final_x, final_y, z))
+
+                    if transformed_points:
+                        from ezdxf.math import Vec3
+
+                        new_control_points = [
+                            Vec3(x, y, z) for x, y, z in transformed_points
+                        ]
+                        new_entity.control_points = new_control_points
+                        new_entity.dxf.layer = entity_data["layer"]
+                        msp.add_entity(new_entity)
+
+            elif entity_type in ["TEXT", "MTEXT"]:
+                # Handle text entities
+                new_entity = entity_data["entity"].copy()
+
+                # Get text insertion point
+                if hasattr(new_entity.dxf, "insert"):
+                    insert = new_entity.dxf.insert
+                    if hasattr(insert, "x") and hasattr(insert, "y"):
+                        x, y = insert.x, insert.y
+                        final_x, final_y = transform_point(x, y)
+                        from ezdxf.math import Vec3
+
+                        new_entity.dxf.insert = Vec3(final_x, final_y, insert.z)
+                    else:
+                        x, y = insert[:2]
+                        final_x, final_y = transform_point(x, y)
+                        new_entity.dxf.insert = (
+                            final_x,
+                            final_y,
+                            insert[2] if len(insert) > 2 else 0,
+                        )
+
+                # Apply rotation to text
+                if rotation_angle != 0 and hasattr(new_entity.dxf, "rotation"):
+                    new_entity.dxf.rotation = (
+                        new_entity.dxf.rotation + rotation_angle
+                    ) % 360
+
+                new_entity.dxf.layer = entity_data["layer"]
+                msp.add_entity(new_entity)
+
+            elif entity_type == "CIRCLE":
+                # Handle circle entities
+                new_entity = entity_data["entity"].copy()
+
+                # Transform center (handle Vec3 objects)
+                center = new_entity.dxf.center
+                center_x, center_y = center.x, center.y
+                final_x, final_y = transform_point(center_x, center_y)
+                from ezdxf.math import Vec3
+
+                new_entity.dxf.center = Vec3(final_x, final_y, center.z)
+
+                new_entity.dxf.layer = entity_data["layer"]
+                msp.add_entity(new_entity)
+
+            elif entity_type == "ARC":
+                # Handle arc entities
+                new_entity = entity_data["entity"].copy()
+
+                # Transform center (handle Vec3 objects)
+                center = new_entity.dxf.center
+                center_x, center_y = center.x, center.y
+                final_x, final_y = transform_point(center_x, center_y)
+                from ezdxf.math import Vec3
+
+                new_entity.dxf.center = Vec3(final_x, final_y, center.z)
+
+                # Adjust angles for rotation
+                if rotation_angle != 0:
+                    new_entity.dxf.start_angle = (
+                        new_entity.dxf.start_angle + rotation_angle
+                    ) % 360
+                    new_entity.dxf.end_angle = (
+                        new_entity.dxf.end_angle + rotation_angle
+                    ) % 360
+
+                new_entity.dxf.layer = entity_data["layer"]
+                msp.add_entity(new_entity)
+
+            elif entity_type == "LWPOLYLINE":
+                # Handle lightweight polylines
+                new_entity = entity_data["entity"].copy()
+
+                # Transform all vertices
+                if hasattr(new_entity, "vertices"):
+                    new_vertices = []
+                    for vertex in new_entity.vertices:
+                        if len(vertex) >= 2:
+                            x, y = vertex[:2]
+                            final_x, final_y = transform_point(x, y)
+                            new_vertex = (
+                                (final_x, final_y) + tuple(vertex[2:])
+                                if len(vertex) > 2
+                                else (final_x, final_y)
+                            )
+                            new_vertices.append(new_vertex)
+                    new_entity.vertices = new_vertices
+
+                new_entity.dxf.layer = entity_data["layer"]
+                msp.add_entity(new_entity)
+
+            elif entity_type == "LINE":
+                # Handle line entities
+                new_entity = entity_data["entity"].copy()
+
+                # Transform start and end points (handle Vec3 objects)
+                start = new_entity.dxf.start
+                end = new_entity.dxf.end
+
+                if hasattr(start, "x") and hasattr(start, "y"):
+                    start_x, start_y = start.x, start.y
+                    final_start_x, final_start_y = transform_point(start_x, start_y)
+                    from ezdxf.math import Vec3
+
+                    new_entity.dxf.start = Vec3(final_start_x, final_start_y, start.z)
                 else:
-                    expected_final_width = orig_width
-                    expected_final_height = orig_height
-                
-                print(f"    Rotation: {rotation_angle}°")
-                print(f"    Original size: {orig_width:.1f} x {orig_height:.1f}")
-                print(f"    Final size: {final_width:.1f} x {final_height:.1f}")
-                
-                # Process entities in original order to maintain structure
-                print(f"🔧 Starting to process {len(original_data['original_entities'])} entities...")
-                for i, entity_data in enumerate(original_data["original_entities"]):
-                    entity_type = entity_data["type"]
-                    print(f"🔧 Processing entity {i+1}/{len(original_data['original_entities'])}: {entity_type}")
-                    
-                    # Direct coordinate mapping using the same transformation as the polygon
-                    def transform_point(x, y):
-                        # Apply the exact same transformation sequence as apply_placement_transform:
-                        # 1. Normalize to (0,0) origin
-                        x_norm = x - orig_bounds[0]
-                        y_norm = y - orig_bounds[1]
-                        
-                        # 2. Apply rotation around center of normalized space
-                        if rotation_angle != 0:
-                            center_x = orig_width / 2
-                            center_y = orig_height / 2
-                            
-                            # Move to center
-                            x_centered = x_norm - center_x
-                            y_centered = y_norm - center_y
-                            
-                            # Rotate
-                            rotation_rad = math.radians(rotation_angle)
-                            cos_angle = math.cos(rotation_rad)
-                            sin_angle = math.sin(rotation_rad)
-                            
-                            x_rotated = x_centered * cos_angle - y_centered * sin_angle
-                            y_rotated = x_centered * sin_angle + y_centered * cos_angle
-                            
-                            # Move back from center (now in rotated space)
-                            if rotation_angle == 90 or rotation_angle == 270:
-                                # For 90/270 rotation, center changes
-                                x_norm = x_rotated + orig_height / 2
-                                y_norm = y_rotated + orig_width / 2
-                            else:
-                                x_norm = x_rotated + center_x
-                                y_norm = y_rotated + center_y
-                        
-                        # 3. Map to final bounds
-                        final_x = x_norm + final_bounds[0]
-                        final_y = y_norm + final_bounds[1]
-                        
-                        return final_x, final_y
-                    
-                    if entity_type == "SPLINE":
-                        new_entity = entity_data["entity"].copy()
-                        
-                        if hasattr(new_entity, 'control_points') and new_entity.control_points:
-                            transformed_points = []
-                            
-                            for cp in new_entity.control_points:
-                                if hasattr(cp, "x") and hasattr(cp, "y"):
-                                    x, y = cp.x, cp.y
-                                    z = getattr(cp, "z", 0.0)
-                                elif len(cp) >= 2:
-                                    x, y = float(cp[0]), float(cp[1])
-                                    z = float(cp[2]) if len(cp) > 2 else 0.0
-                                else:
-                                    continue
-                                
-                                final_x, final_y = transform_point(x, y)
-                                transformed_points.append((final_x, final_y, z))
-                            
-                            if transformed_points:
-                                from ezdxf.math import Vec3
-                                new_control_points = [Vec3(x, y, z) for x, y, z in transformed_points]
-                                new_entity.control_points = new_control_points
-                                new_entity.dxf.layer = entity_data["layer"]
-                                msp.add_entity(new_entity)
-                                
-                    elif entity_type in ["TEXT", "MTEXT"]:
-                        # Handle text entities
-                        new_entity = entity_data["entity"].copy()
-                        
-                        # Get text insertion point
-                        if hasattr(new_entity.dxf, 'insert'):
-                            insert = new_entity.dxf.insert
-                            if hasattr(insert, 'x') and hasattr(insert, 'y'):
-                                x, y = insert.x, insert.y
-                                final_x, final_y = transform_point(x, y)
-                                from ezdxf.math import Vec3
-                                new_entity.dxf.insert = Vec3(final_x, final_y, insert.z)
-                            else:
-                                x, y = insert[:2]
-                                final_x, final_y = transform_point(x, y)
-                                new_entity.dxf.insert = (final_x, final_y, insert[2] if len(insert) > 2 else 0)
-                        
-                        # Apply rotation to text
-                        if rotation_angle != 0 and hasattr(new_entity.dxf, 'rotation'):
-                            new_entity.dxf.rotation = (new_entity.dxf.rotation + rotation_angle) % 360
-                        
-                        new_entity.dxf.layer = entity_data["layer"]
-                        msp.add_entity(new_entity)
-                        
-                    elif entity_type == "CIRCLE":
-                        # Handle circle entities
-                        new_entity = entity_data["entity"].copy()
-                        
-                        # Transform center (handle Vec3 objects)
-                        center = new_entity.dxf.center
-                        center_x, center_y = center.x, center.y
-                        final_x, final_y = transform_point(center_x, center_y)
+                    start_x, start_y = start[:2]
+                    final_start_x, final_start_y = transform_point(start_x, start_y)
+                    new_entity.dxf.start = (
+                        final_start_x,
+                        final_start_y,
+                        start[2] if len(start) > 2 else 0,
+                    )
+
+                if hasattr(end, "x") and hasattr(end, "y"):
+                    end_x, end_y = end.x, end.y
+                    final_end_x, final_end_y = transform_point(end_x, end_y)
+                    from ezdxf.math import Vec3
+
+                    new_entity.dxf.end = Vec3(final_end_x, final_end_y, end.z)
+                else:
+                    end_x, end_y = end[:2]
+                    final_end_x, final_end_y = transform_point(end_x, end_y)
+                    new_entity.dxf.end = (
+                        final_end_x,
+                        final_end_y,
+                        end[2] if len(end) > 2 else 0,
+                    )
+
+                new_entity.dxf.layer = entity_data["layer"]
+                msp.add_entity(new_entity)
+
+            elif entity_type == "ELLIPSE":
+                # Handle ellipse entities (including circles represented as ellipses)
+                new_entity = entity_data["entity"].copy()
+
+                # Transform center (handle Vec3 objects)
+                center = new_entity.dxf.center
+                center_x, center_y = center.x, center.y
+                final_x, final_y = transform_point(center_x, center_y)
+                from ezdxf.math import Vec3
+
+                new_entity.dxf.center = Vec3(final_x, final_y, center.z)
+
+                # Transform major axis vector
+                if hasattr(new_entity.dxf, "major_axis") and rotation_angle != 0:
+                    major_axis = new_entity.dxf.major_axis
+                    # Rotate major axis vector
+                    major_x, major_y = major_axis.x, major_axis.y
+                    rotated_major_x = major_x * cos_angle - major_y * sin_angle
+                    rotated_major_y = major_x * sin_angle + major_y * cos_angle
+                    new_entity.dxf.major_axis = Vec3(
+                        rotated_major_x, rotated_major_y, major_axis.z
+                    )
+
+                new_entity.dxf.layer = entity_data["layer"]
+                msp.add_entity(new_entity)
+
+            elif entity_type == "POLYLINE":
+                # Handle polyline entities with vertices
+                new_entity = entity_data["entity"].copy()
+
+                # Transform all vertices
+                if hasattr(new_entity, "vertices"):
+                    transformed_vertices = []
+                    for vertex in new_entity.vertices:
+                        if hasattr(vertex.dxf, "location"):
+                            x, y = vertex.dxf.location[:2]
+                            final_x, final_y = transform_point(x, y)
+                            vertex.dxf.location = (
+                                final_x,
+                                final_y,
+                                vertex.dxf.location[2]
+                                if len(vertex.dxf.location) > 2
+                                else 0,
+                            )
+                        transformed_vertices.append(vertex)
+                    new_entity.vertices = transformed_vertices
+
+                new_entity.dxf.layer = entity_data["layer"]
+                msp.add_entity(new_entity)
+
+            elif entity_type == "POINT":
+                # Handle point entities
+                new_entity = entity_data["entity"].copy()
+
+                # Transform location (handle Vec3 objects)
+                if hasattr(new_entity.dxf, "location"):
+                    location = new_entity.dxf.location
+                    if hasattr(location, "x") and hasattr(location, "y"):
+                        x, y = location.x, location.y
+                        final_x, final_y = transform_point(x, y)
                         from ezdxf.math import Vec3
-                        new_entity.dxf.center = Vec3(final_x, final_y, center.z)
-                        
-                        new_entity.dxf.layer = entity_data["layer"]
-                        msp.add_entity(new_entity)
-                        
-                    elif entity_type == "ARC":
-                        # Handle arc entities
-                        new_entity = entity_data["entity"].copy()
-                        
-                        # Transform center (handle Vec3 objects)
-                        center = new_entity.dxf.center
-                        center_x, center_y = center.x, center.y
-                        final_x, final_y = transform_point(center_x, center_y)
+
+                        new_entity.dxf.location = Vec3(final_x, final_y, location.z)
+                    else:
+                        x, y = location[:2]
+                        final_x, final_y = transform_point(x, y)
+                        new_entity.dxf.location = (
+                            final_x,
+                            final_y,
+                            location[2] if len(location) > 2 else 0,
+                        )
+
+                new_entity.dxf.layer = entity_data["layer"]
+                msp.add_entity(new_entity)
+
+            elif entity_type == "INSERT":
+                # Handle insert entities (blocks)
+                new_entity = entity_data["entity"].copy()
+
+                # Transform insertion point (handle Vec3 objects)
+                if hasattr(new_entity.dxf, "insert"):
+                    insert = new_entity.dxf.insert
+                    if hasattr(insert, "x") and hasattr(insert, "y"):
+                        x, y = insert.x, insert.y
+                        final_x, final_y = transform_point(x, y)
                         from ezdxf.math import Vec3
-                        new_entity.dxf.center = Vec3(final_x, final_y, center.z)
-                        
-                        # Adjust angles for rotation
-                        if rotation_angle != 0:
-                            new_entity.dxf.start_angle = (new_entity.dxf.start_angle + rotation_angle) % 360
-                            new_entity.dxf.end_angle = (new_entity.dxf.end_angle + rotation_angle) % 360
-                        
-                        new_entity.dxf.layer = entity_data["layer"]
-                        msp.add_entity(new_entity)
-                        
-                    elif entity_type == "LWPOLYLINE":
-                        # Handle lightweight polylines
-                        new_entity = entity_data["entity"].copy()
-                        
-                        # Transform all vertices
-                        if hasattr(new_entity, 'vertices'):
-                            new_vertices = []
-                            for vertex in new_entity.vertices:
-                                if len(vertex) >= 2:
-                                    x, y = vertex[:2]
-                                    final_x, final_y = transform_point(x, y)
-                                    new_vertex = (final_x, final_y) + tuple(vertex[2:]) if len(vertex) > 2 else (final_x, final_y)
-                                    new_vertices.append(new_vertex)
-                            new_entity.vertices = new_vertices
-                        
-                        new_entity.dxf.layer = entity_data["layer"]
-                        msp.add_entity(new_entity)
-                        
-                    elif entity_type == "LINE":
-                        # Handle line entities
-                        new_entity = entity_data["entity"].copy()
-                        
-                        # Transform start and end points (handle Vec3 objects)
+
+                        new_entity.dxf.insert = Vec3(final_x, final_y, insert.z)
+                    else:
+                        x, y = insert[:2]
+                        final_x, final_y = transform_point(x, y)
+                        new_entity.dxf.insert = (
+                            final_x,
+                            final_y,
+                            insert[2] if len(insert) > 2 else 0,
+                        )
+
+                # Apply rotation to block
+                if rotation_angle != 0 and hasattr(new_entity.dxf, "rotation"):
+                    new_entity.dxf.rotation = (
+                        new_entity.dxf.rotation + rotation_angle
+                    ) % 360
+
+                new_entity.dxf.layer = entity_data["layer"]
+                msp.add_entity(new_entity)
+
+            elif entity_type == "IMAGE":
+                # Skip IMAGE elements to avoid artifacts
+                continue
+
+            else:
+                # Handle other entity types with basic transformation
+                # This ensures that no elements are lost and basic transformations are applied
+                try:
+                    new_entity = entity_data["entity"].copy()
+
+                    # Try to apply basic transformations if entity has common attributes
+                    # This is a fallback for any entity types not explicitly handled above
+
+                    # Check for common location attributes and transform them
+                    if hasattr(new_entity.dxf, "center"):
+                        # Has center point (like CIRCLE, ELLIPSE variants)
+                        center = new_entity.dxf.center
+                        if hasattr(center, "x") and hasattr(center, "y"):
+                            # Vec3 object
+                            center_x, center_y = center.x, center.y
+                            final_x, final_y = transform_point(center_x, center_y)
+                            from ezdxf.math import Vec3
+
+                            new_entity.dxf.center = Vec3(final_x, final_y, center.z)
+                        else:
+                            # Tuple/list object
+                            center_x, center_y = center[:2]
+                            final_x, final_y = transform_point(center_x, center_y)
+                            new_entity.dxf.center = (
+                                final_x,
+                                final_y,
+                                center[2] if len(center) > 2 else 0,
+                            )
+
+                    elif hasattr(new_entity.dxf, "location"):
+                        # Has location point
+                        location = new_entity.dxf.location
+                        if hasattr(location, "x") and hasattr(location, "y"):
+                            # Vec3 object
+                            x, y = location.x, location.y
+                            final_x, final_y = transform_point(x, y)
+                            from ezdxf.math import Vec3
+
+                            new_entity.dxf.location = Vec3(final_x, final_y, location.z)
+                        else:
+                            # Tuple/list object
+                            x, y = location[:2]
+                            final_x, final_y = transform_point(x, y)
+                            new_entity.dxf.location = (
+                                final_x,
+                                final_y,
+                                location[2] if len(location) > 2 else 0,
+                            )
+
+                    elif hasattr(new_entity.dxf, "insert"):
+                        # Has insertion point
+                        insert = new_entity.dxf.insert
+                        if hasattr(insert, "x") and hasattr(insert, "y"):
+                            # Vec3 object
+                            x, y = insert.x, insert.y
+                            final_x, final_y = transform_point(x, y)
+                            from ezdxf.math import Vec3
+
+                            new_entity.dxf.insert = Vec3(final_x, final_y, insert.z)
+                        else:
+                            # Tuple/list object
+                            x, y = insert[:2]
+                            final_x, final_y = transform_point(x, y)
+                            new_entity.dxf.insert = (
+                                final_x,
+                                final_y,
+                                insert[2] if len(insert) > 2 else 0,
+                            )
+
+                    elif hasattr(new_entity.dxf, "start") and hasattr(
+                        new_entity.dxf, "end"
+                    ):
+                        # Has start and end points (like LINE variants)
                         start = new_entity.dxf.start
                         end = new_entity.dxf.end
-                        
-                        if hasattr(start, 'x') and hasattr(start, 'y'):
+
+                        # Handle start point
+                        if hasattr(start, "x") and hasattr(start, "y"):
                             start_x, start_y = start.x, start.y
-                            final_start_x, final_start_y = transform_point(start_x, start_y)
+                            final_start_x, final_start_y = transform_point(
+                                start_x, start_y
+                            )
                             from ezdxf.math import Vec3
-                            new_entity.dxf.start = Vec3(final_start_x, final_start_y, start.z)
+
+                            new_entity.dxf.start = Vec3(
+                                final_start_x, final_start_y, start.z
+                            )
                         else:
                             start_x, start_y = start[:2]
-                            final_start_x, final_start_y = transform_point(start_x, start_y)
-                            new_entity.dxf.start = (final_start_x, final_start_y, start[2] if len(start) > 2 else 0)
-                        
-                        if hasattr(end, 'x') and hasattr(end, 'y'):
+                            final_start_x, final_start_y = transform_point(
+                                start_x, start_y
+                            )
+                            new_entity.dxf.start = (
+                                final_start_x,
+                                final_start_y,
+                                start[2] if len(start) > 2 else 0,
+                            )
+
+                        # Handle end point
+                        if hasattr(end, "x") and hasattr(end, "y"):
                             end_x, end_y = end.x, end.y
                             final_end_x, final_end_y = transform_point(end_x, end_y)
                             from ezdxf.math import Vec3
+
                             new_entity.dxf.end = Vec3(final_end_x, final_end_y, end.z)
                         else:
                             end_x, end_y = end[:2]
                             final_end_x, final_end_y = transform_point(end_x, end_y)
-                            new_entity.dxf.end = (final_end_x, final_end_y, end[2] if len(end) > 2 else 0)
-                        
-                        new_entity.dxf.layer = entity_data["layer"]
-                        msp.add_entity(new_entity)
-                        
-                    elif entity_type == "ELLIPSE":
-                        # Handle ellipse entities (including circles represented as ellipses)
+                            new_entity.dxf.end = (
+                                final_end_x,
+                                final_end_y,
+                                end[2] if len(end) > 2 else 0,
+                            )
+
+                    # Apply rotation to entities that support it
+                    if rotation_angle != 0 and hasattr(new_entity.dxf, "rotation"):
+                        new_entity.dxf.rotation = (
+                            new_entity.dxf.rotation + rotation_angle
+                        ) % 360
+                    elif rotation_angle != 0 and hasattr(new_entity.dxf, "angle"):
+                        new_entity.dxf.angle = (
+                            new_entity.dxf.angle + rotation_angle
+                        ) % 360
+
+                    new_entity.dxf.layer = entity_data["layer"]
+                    msp.add_entity(new_entity)
+                    print(
+                        f"✅ Обработан элемент типа {entity_type} с базовой трансформацией"
+                    )
+
+                except Exception as e:
+                    print(f"⚠️ Не удалось скопировать элемент типа {entity_type}: {e}")
+                    # Try to copy without transformation as last resort
+                    try:
                         new_entity = entity_data["entity"].copy()
-                        
-                        # Transform center (handle Vec3 objects)
-                        center = new_entity.dxf.center
-                        center_x, center_y = center.x, center.y
-                        final_x, final_y = transform_point(center_x, center_y)
-                        from ezdxf.math import Vec3
-                        new_entity.dxf.center = Vec3(final_x, final_y, center.z)
-                        
-                        # Transform major axis vector
-                        if hasattr(new_entity.dxf, 'major_axis') and rotation_angle != 0:
-                            major_axis = new_entity.dxf.major_axis
-                            # Rotate major axis vector
-                            major_x, major_y = major_axis.x, major_axis.y
-                            rotated_major_x = major_x * cos_angle - major_y * sin_angle
-                            rotated_major_y = major_x * sin_angle + major_y * cos_angle
-                            new_entity.dxf.major_axis = Vec3(rotated_major_x, rotated_major_y, major_axis.z)
-                        
                         new_entity.dxf.layer = entity_data["layer"]
                         msp.add_entity(new_entity)
-                        
-                    elif entity_type == "POLYLINE":
-                        # Handle polyline entities with vertices
-                        new_entity = entity_data["entity"].copy()
-                        
-                        # Transform all vertices
-                        if hasattr(new_entity, 'vertices'):
-                            transformed_vertices = []
-                            for vertex in new_entity.vertices:
-                                if hasattr(vertex.dxf, 'location'):
-                                    x, y = vertex.dxf.location[:2]
-                                    final_x, final_y = transform_point(x, y)
-                                    vertex.dxf.location = (final_x, final_y, vertex.dxf.location[2] if len(vertex.dxf.location) > 2 else 0)
-                                transformed_vertices.append(vertex)
-                            new_entity.vertices = transformed_vertices
-                        
-                        new_entity.dxf.layer = entity_data["layer"]
-                        msp.add_entity(new_entity)
-                        
-                    elif entity_type == "POINT":
-                        # Handle point entities
-                        new_entity = entity_data["entity"].copy()
-                        
-                        # Transform location (handle Vec3 objects)
-                        if hasattr(new_entity.dxf, 'location'):
-                            location = new_entity.dxf.location
-                            if hasattr(location, 'x') and hasattr(location, 'y'):
-                                x, y = location.x, location.y
-                                final_x, final_y = transform_point(x, y)
-                                from ezdxf.math import Vec3
-                                new_entity.dxf.location = Vec3(final_x, final_y, location.z)
-                            else:
-                                x, y = location[:2]
-                                final_x, final_y = transform_point(x, y)
-                                new_entity.dxf.location = (final_x, final_y, location[2] if len(location) > 2 else 0)
-                        
-                        new_entity.dxf.layer = entity_data["layer"]
-                        msp.add_entity(new_entity)
-                        
-                    elif entity_type == "INSERT":
-                        # Handle insert entities (blocks)
-                        new_entity = entity_data["entity"].copy()
-                        
-                        # Transform insertion point (handle Vec3 objects)
-                        if hasattr(new_entity.dxf, 'insert'):
-                            insert = new_entity.dxf.insert
-                            if hasattr(insert, 'x') and hasattr(insert, 'y'):
-                                x, y = insert.x, insert.y
-                                final_x, final_y = transform_point(x, y)
-                                from ezdxf.math import Vec3
-                                new_entity.dxf.insert = Vec3(final_x, final_y, insert.z)
-                            else:
-                                x, y = insert[:2]
-                                final_x, final_y = transform_point(x, y)
-                                new_entity.dxf.insert = (final_x, final_y, insert[2] if len(insert) > 2 else 0)
-                        
-                        # Apply rotation to block
-                        if rotation_angle != 0 and hasattr(new_entity.dxf, 'rotation'):
-                            new_entity.dxf.rotation = (new_entity.dxf.rotation + rotation_angle) % 360
-                        
-                        new_entity.dxf.layer = entity_data["layer"]
-                        msp.add_entity(new_entity)
-                        
-                    elif entity_type == "IMAGE":
-                        # Skip IMAGE elements to avoid artifacts
-                        continue
-                    
-                    else:
-                        # Handle other entity types with basic transformation
-                        # This ensures that no elements are lost and basic transformations are applied
-                        try:
-                            new_entity = entity_data["entity"].copy()
-                            
-                            # Try to apply basic transformations if entity has common attributes
-                            # This is a fallback for any entity types not explicitly handled above
-                            
-                            # Check for common location attributes and transform them
-                            if hasattr(new_entity.dxf, 'center'):
-                                # Has center point (like CIRCLE, ELLIPSE variants)
-                                center = new_entity.dxf.center
-                                if hasattr(center, 'x') and hasattr(center, 'y'):
-                                    # Vec3 object
-                                    center_x, center_y = center.x, center.y
-                                    final_x, final_y = transform_point(center_x, center_y)
-                                    from ezdxf.math import Vec3
-                                    new_entity.dxf.center = Vec3(final_x, final_y, center.z)
-                                else:
-                                    # Tuple/list object
-                                    center_x, center_y = center[:2]
-                                    final_x, final_y = transform_point(center_x, center_y)
-                                    new_entity.dxf.center = (final_x, final_y, center[2] if len(center) > 2 else 0)
-                            
-                            elif hasattr(new_entity.dxf, 'location'):
-                                # Has location point
-                                location = new_entity.dxf.location
-                                if hasattr(location, 'x') and hasattr(location, 'y'):
-                                    # Vec3 object
-                                    x, y = location.x, location.y
-                                    final_x, final_y = transform_point(x, y)
-                                    from ezdxf.math import Vec3
-                                    new_entity.dxf.location = Vec3(final_x, final_y, location.z)
-                                else:
-                                    # Tuple/list object
-                                    x, y = location[:2]
-                                    final_x, final_y = transform_point(x, y)
-                                    new_entity.dxf.location = (final_x, final_y, location[2] if len(location) > 2 else 0)
-                            
-                            elif hasattr(new_entity.dxf, 'insert'):
-                                # Has insertion point
-                                insert = new_entity.dxf.insert
-                                if hasattr(insert, 'x') and hasattr(insert, 'y'):
-                                    # Vec3 object
-                                    x, y = insert.x, insert.y
-                                    final_x, final_y = transform_point(x, y)
-                                    from ezdxf.math import Vec3
-                                    new_entity.dxf.insert = Vec3(final_x, final_y, insert.z)
-                                else:
-                                    # Tuple/list object
-                                    x, y = insert[:2]
-                                    final_x, final_y = transform_point(x, y)
-                                    new_entity.dxf.insert = (final_x, final_y, insert[2] if len(insert) > 2 else 0)
-                            
-                            elif hasattr(new_entity.dxf, 'start') and hasattr(new_entity.dxf, 'end'):
-                                # Has start and end points (like LINE variants)
-                                start = new_entity.dxf.start
-                                end = new_entity.dxf.end
-                                
-                                # Handle start point
-                                if hasattr(start, 'x') and hasattr(start, 'y'):
-                                    start_x, start_y = start.x, start.y
-                                    final_start_x, final_start_y = transform_point(start_x, start_y)
-                                    from ezdxf.math import Vec3
-                                    new_entity.dxf.start = Vec3(final_start_x, final_start_y, start.z)
-                                else:
-                                    start_x, start_y = start[:2]
-                                    final_start_x, final_start_y = transform_point(start_x, start_y)
-                                    new_entity.dxf.start = (final_start_x, final_start_y, start[2] if len(start) > 2 else 0)
-                                
-                                # Handle end point
-                                if hasattr(end, 'x') and hasattr(end, 'y'):
-                                    end_x, end_y = end.x, end.y
-                                    final_end_x, final_end_y = transform_point(end_x, end_y)
-                                    from ezdxf.math import Vec3
-                                    new_entity.dxf.end = Vec3(final_end_x, final_end_y, end.z)
-                                else:
-                                    end_x, end_y = end[:2]
-                                    final_end_x, final_end_y = transform_point(end_x, end_y)
-                                    new_entity.dxf.end = (final_end_x, final_end_y, end[2] if len(end) > 2 else 0)
-                            
-                            # Apply rotation to entities that support it
-                            if rotation_angle != 0 and hasattr(new_entity.dxf, 'rotation'):
-                                new_entity.dxf.rotation = (new_entity.dxf.rotation + rotation_angle) % 360
-                            elif rotation_angle != 0 and hasattr(new_entity.dxf, 'angle'):
-                                new_entity.dxf.angle = (new_entity.dxf.angle + rotation_angle) % 360
-                            
-                            new_entity.dxf.layer = entity_data["layer"]
-                            msp.add_entity(new_entity)
-                            print(f"✅ Обработан элемент типа {entity_type} с базовой трансформацией")
-                            
-                        except Exception as e:
-                            print(f"⚠️ Не удалось скопировать элемент типа {entity_type}: {e}")
-                            # Try to copy without transformation as last resort
-                            try:
-                                new_entity = entity_data["entity"].copy()
-                                new_entity.dxf.layer = entity_data["layer"]
-                                msp.add_entity(new_entity)
-                                print(f"⚠️ Элемент {entity_type} скопирован без трансформации")
-                            except Exception as e2:
-                                print(f"❌ Полностью не удалось скопировать элемент {entity_type}: {e2}")
-    
+                        print(f"⚠️ Элемент {entity_type} скопирован без трансформации")
+                    except Exception as e2:
+                        print(
+                            f"❌ Полностью не удалось скопировать элемент {entity_type}: {e2}"
+                        )
+
     # Save the document
     doc.saveas(output_path)
 
@@ -1705,7 +1821,9 @@ def bin_packing_with_inventory(
 
     # Process orders one by one, but allow filling sheets with multiple orders
     remaining_orders = dict(order_groups)  # Copy to modify
-    max_iterations = max(100, len(remaining_orders) * 50)  # Safety limit with higher multiplier
+    max_iterations = max(
+        100, len(remaining_orders) * 50
+    )  # Safety limit with higher multiplier
     iteration_count = 0
 
     while remaining_orders and any(
@@ -1762,7 +1880,9 @@ def bin_packing_with_inventory(
                         orders_to_try.append(order_id)
 
             if not compatible_polygons:
-                logger.debug(f"Нет совместимых полигонов для листа {sheet_type['name']} цвета {sheet_color}")
+                logger.debug(
+                    f"Нет совместимых полигонов для листа {sheet_type['name']} цвета {sheet_color}"
+                )
                 continue  # No compatible polygons for this sheet color
 
             sheet_counter += 1
@@ -1923,7 +2043,7 @@ def bin_packing_with_inventory(
             sheets_still_available = any(
                 sheet["count"] - sheet["used"] > 0 for sheet in sheet_inventory
             )
-            
+
             if not sheets_still_available:
                 logger.warning(
                     f"Все листы закончились. Не удалось разместить оставшиеся заказы: {list(remaining_orders.keys())}"

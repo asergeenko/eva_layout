@@ -112,7 +112,7 @@ def parse_dxf_complete(file, verbose=True):
             artifact in layer_name
             for artifact in [
                 "POLYGON_",
-                "SHEET_BOUNDARY", 
+                "SHEET_BOUNDARY",
                 "_black",
                 "_gray",
                 "_white",
@@ -120,11 +120,11 @@ def parse_dxf_complete(file, verbose=True):
             ]
         ):
             continue  # Skip this entity - it's an artifact
-            
+
         # Skip IMAGE entities - they are artifacts from previous processing
         if entity_type == "IMAGE":
             continue
-            
+
         # Skip HATCH entities - they are fill patterns that duplicate geometry
         if entity_type == "HATCH":
             continue  # Skip hatches - they cause duplication with contours
@@ -143,17 +143,19 @@ def parse_dxf_complete(file, verbose=True):
         try:
             polygon = convert_entity_to_polygon_improved(entity)
             # Enhanced polygon validation and filtering
-            if polygon:# and polygon.area > 0.1:
+            if polygon:  # and polygon.area > 0.1:
                 # Try to fix invalid polygons using buffer(0)
                 if not polygon.is_valid:
                     fixed_polygon = polygon.buffer(0)
-                    if fixed_polygon.is_valid:# and fixed_polygon.area > 0.1:
+                    if fixed_polygon.is_valid:  # and fixed_polygon.area > 0.1:
                         polygon = fixed_polygon
                         if verbose:
-                            st.info(f"   🔧 Исправлен невалидный полигон с помощью buffer(0)")
+                            st.info(
+                                "   🔧 Исправлен невалидный полигон с помощью buffer(0)"
+                            )
                     else:
                         if verbose:
-                            st.warning(f"   ❌ Не удалось исправить невалидный полигон")
+                            st.warning("   ❌ Не удалось исправить невалидный полигон")
                         continue
                 result["polygons"].append(polygon)
         except Exception as e:
@@ -337,31 +339,46 @@ def convert_entity_to_polygon_improved(entity):
     return None
 
 
-def save_dxf_layout_complete(placed_elements, sheet_size, output_path, original_dxf_data_map=None):
+def save_dxf_layout_complete(
+    placed_elements, sheet_size, output_path, original_dxf_data_map=None
+):
     """COMPLETELY CORRECTED - Use coordinate mapping from original to transformed polygon"""
-    
-    print(f"🔧 CORRECTED save_dxf_layout_complete called with {len(placed_elements)} elements")
+
+    print(
+        f"🔧 CORRECTED save_dxf_layout_complete called with {len(placed_elements)} elements"
+    )
     print(f"🔧 Output path: {output_path}")
     print(f"🔧 Sheet size: {sheet_size}")
-    
+
     # Create new DXF document
     doc = ezdxf.new("R2010")
     doc.header["$INSUNITS"] = 4  # millimeters
-    doc.header["$LUNITS"] = 2    # decimal units
+    doc.header["$LUNITS"] = 2  # decimal units
     msp = doc.modelspace()
-    
+
     for placed_element in placed_elements:
         if len(placed_element) >= 6:
-            (transformed_polygon, x_offset, y_offset, rotation_angle, file_name, color) = placed_element[:6]
+            (
+                transformed_polygon,
+                x_offset,
+                y_offset,
+                rotation_angle,
+                file_name,
+                color,
+            ) = placed_element[:6]
         else:
-            transformed_polygon, x_offset, y_offset, rotation_angle, file_name = placed_element[:5]
-        
-        print(f"🔧 Processing {file_name}: transformed bounds = {transformed_polygon.bounds}")
-        
+            transformed_polygon, x_offset, y_offset, rotation_angle, file_name = (
+                placed_element[:5]
+            )
+
+        print(
+            f"🔧 Processing {file_name}: transformed bounds = {transformed_polygon.bounds}"
+        )
+
         # Get original DXF data
         file_basename = os.path.basename(file_name) if file_name else file_name
         original_data_key = None
-        
+
         if original_dxf_data_map:
             if file_name in original_dxf_data_map:
                 original_data_key = file_name
@@ -372,61 +389,76 @@ def save_dxf_layout_complete(placed_elements, sheet_size, output_path, original_
                     if os.path.basename(key) == file_basename:
                         original_data_key = key
                         break
-        
+
         if original_data_key:
             original_data = original_dxf_data_map[original_data_key]
-            
+
             if original_data["original_entities"] and original_data["combined_polygon"]:
                 original_polygon = original_data["combined_polygon"]
                 orig_bounds = original_polygon.bounds
                 target_bounds = transformed_polygon.bounds
-                
+
                 # Calculate uniform scale factor to avoid distortion
                 orig_width = orig_bounds[2] - orig_bounds[0]
                 orig_height = orig_bounds[3] - orig_bounds[1]
                 target_width = target_bounds[2] - target_bounds[0]
                 target_height = target_bounds[3] - target_bounds[1]
-                
+
                 # For rotated polygons, dimensions are swapped, so calculate both possibilities
-                scale_direct = min(target_width / orig_width, target_height / orig_height) if orig_width > 0 and orig_height > 0 else 1.0
-                scale_swapped = min(target_width / orig_height, target_height / orig_width) if orig_width > 0 and orig_height > 0 else 1.0
-                
+                scale_direct = (
+                    min(target_width / orig_width, target_height / orig_height)
+                    if orig_width > 0 and orig_height > 0
+                    else 1.0
+                )
+                scale_swapped = (
+                    min(target_width / orig_height, target_height / orig_width)
+                    if orig_width > 0 and orig_height > 0
+                    else 1.0
+                )
+
                 # Choose the scale that makes more sense based on rotation
                 if rotation_angle % 180 == 90:  # 90° or 270° rotation
                     scale_factor = scale_swapped
                 else:  # 0° or 180° rotation
                     scale_factor = scale_direct
-                
-                print(f"🔧 Rotation: {rotation_angle}°, Scale factor: {scale_factor:.3f}")
+
+                print(
+                    f"🔧 Rotation: {rotation_angle}°, Scale factor: {scale_factor:.3f}"
+                )
                 print(f"🔧 Original bounds: {orig_bounds}")
                 print(f"🔧 Target bounds: {target_bounds}")
-                
+
                 # Calculate centers
                 orig_center_x = (orig_bounds[0] + orig_bounds[2]) / 2
                 orig_center_y = (orig_bounds[1] + orig_bounds[3]) / 2
                 target_center_x = (target_bounds[0] + target_bounds[2]) / 2
                 target_center_y = (target_bounds[1] + target_bounds[3]) / 2
-                
+
                 # For rotation calculations
-                rotation_rad = math.radians(rotation_angle) if rotation_angle != 0 else 0
+                rotation_rad = (
+                    math.radians(rotation_angle) if rotation_angle != 0 else 0
+                )
                 cos_angle = math.cos(rotation_rad) if rotation_angle != 0 else 1.0
                 sin_angle = math.sin(rotation_rad) if rotation_angle != 0 else 0.0
-                
+
                 for entity_data in original_data["original_entities"]:
                     entity_type = entity_data["type"]
-                    
+
                     # Skip IMAGE elements to avoid artifacts
                     if entity_type == "IMAGE":
                         continue
-                    
+
                     # Create a copy of the original entity
                     new_entity = entity_data["entity"].copy()
-                    
+
                     # Apply transformation based on entity type
                     if entity_type == "SPLINE":
-                        if hasattr(new_entity, 'control_points') and new_entity.control_points:
+                        if (
+                            hasattr(new_entity, "control_points")
+                            and new_entity.control_points
+                        ):
                             transformed_points = []
-                            
+
                             for cp in new_entity.control_points:
                                 if hasattr(cp, "x") and hasattr(cp, "y"):
                                     x, y = cp.x, cp.y
@@ -436,248 +468,304 @@ def save_dxf_layout_complete(placed_elements, sheet_size, output_path, original_
                                     z = float(cp[2]) if len(cp) > 2 else 0.0
                                 else:
                                     continue
-                                
+
                                 # Apply transformation to match the transformed_polygon exactly:
                                 # 1. Move to origin relative to original center
                                 x_rel = x - orig_center_x
                                 y_rel = y - orig_center_y
-                                
+
                                 # 2. Apply uniform scaling to preserve aspect ratio
                                 x_scaled = x_rel * scale_factor
                                 y_scaled = y_rel * scale_factor
-                                
+
                                 # 3. Apply rotation around origin
                                 if rotation_angle != 0:
-                                    x_rotated = x_scaled * cos_angle - y_scaled * sin_angle
-                                    y_rotated = x_scaled * sin_angle + y_scaled * cos_angle
+                                    x_rotated = (
+                                        x_scaled * cos_angle - y_scaled * sin_angle
+                                    )
+                                    y_rotated = (
+                                        x_scaled * sin_angle + y_scaled * cos_angle
+                                    )
                                 else:
                                     x_rotated = x_scaled
                                     y_rotated = y_scaled
-                                
+
                                 # 4. Translate to final position (target center)
                                 final_x = x_rotated + target_center_x
                                 final_y = y_rotated + target_center_y
-                                
+
                                 transformed_points.append((final_x, final_y, z))
-                            
+
                             if transformed_points:
                                 from ezdxf.math import Vec3
-                                new_control_points = [Vec3(x, y, z) for x, y, z in transformed_points]
+
+                                new_control_points = [
+                                    Vec3(x, y, z) for x, y, z in transformed_points
+                                ]
                                 new_entity.control_points = new_control_points
-                    
+
                     elif entity_type == "CIRCLE":
                         # Transform circle center
                         orig_center = new_entity.dxf.center
                         x_rel = orig_center[0] - orig_center_x
                         y_rel = orig_center[1] - orig_center_y
-                        
+
                         x_scaled = x_rel * scale_factor
                         y_scaled = y_rel * scale_factor
-                        
+
                         if rotation_angle != 0:
                             x_rotated = x_scaled * cos_angle - y_scaled * sin_angle
                             y_rotated = x_scaled * sin_angle + y_scaled * cos_angle
                         else:
                             x_rotated = x_scaled
                             y_rotated = y_scaled
-                        
+
                         final_x = x_rotated + target_center_x
                         final_y = y_rotated + target_center_y
-                        
-                        new_entity.dxf.center = (final_x, final_y, orig_center[2] if len(orig_center) > 2 else 0)
+
+                        new_entity.dxf.center = (
+                            final_x,
+                            final_y,
+                            orig_center[2] if len(orig_center) > 2 else 0,
+                        )
                         new_entity.dxf.radius = new_entity.dxf.radius * scale_factor
-                    
+
                     elif entity_type == "ARC":
                         # Transform arc center
                         orig_center = new_entity.dxf.center
                         x_rel = orig_center[0] - orig_center_x
                         y_rel = orig_center[1] - orig_center_y
-                        
+
                         x_scaled = x_rel * scale_factor
                         y_scaled = y_rel * scale_factor
-                        
+
                         if rotation_angle != 0:
                             x_rotated = x_scaled * cos_angle - y_scaled * sin_angle
                             y_rotated = x_scaled * sin_angle + y_scaled * cos_angle
                         else:
                             x_rotated = x_scaled
                             y_rotated = y_scaled
-                        
+
                         final_x = x_rotated + target_center_x
                         final_y = y_rotated + target_center_y
-                        
-                        new_entity.dxf.center = (final_x, final_y, orig_center[2] if len(orig_center) > 2 else 0)
+
+                        new_entity.dxf.center = (
+                            final_x,
+                            final_y,
+                            orig_center[2] if len(orig_center) > 2 else 0,
+                        )
                         new_entity.dxf.radius = new_entity.dxf.radius * scale_factor
-                        
+
                         # Adjust angles for rotation
                         if rotation_angle != 0:
-                            new_entity.dxf.start_angle = (new_entity.dxf.start_angle + rotation_angle) % 360
-                            new_entity.dxf.end_angle = (new_entity.dxf.end_angle + rotation_angle) % 360
-                    
+                            new_entity.dxf.start_angle = (
+                                new_entity.dxf.start_angle + rotation_angle
+                            ) % 360
+                            new_entity.dxf.end_angle = (
+                                new_entity.dxf.end_angle + rotation_angle
+                            ) % 360
+
                     elif entity_type == "LWPOLYLINE":
                         # Transform all points in the polyline
                         points = list(new_entity.get_points())
                         transformed_points = []
-                        
+
                         for point in points:
                             x, y = point[0], point[1]
                             bulge = point[2] if len(point) > 2 else 0
                             start_width = point[3] if len(point) > 3 else 0
                             end_width = point[4] if len(point) > 4 else 0
-                            
+
                             x_rel = x - orig_center_x
                             y_rel = y - orig_center_y
-                            
+
                             x_scaled = x_rel * scale_factor
                             y_scaled = y_rel * scale_factor
-                            
+
                             if rotation_angle != 0:
                                 x_rotated = x_scaled * cos_angle - y_scaled * sin_angle
                                 y_rotated = x_scaled * sin_angle + y_scaled * cos_angle
                             else:
                                 x_rotated = x_scaled
                                 y_rotated = y_scaled
-                            
+
                             final_x = x_rotated + target_center_x
                             final_y = y_rotated + target_center_y
-                            
-                            transformed_points.append((final_x, final_y, bulge, start_width * scale_factor, end_width * scale_factor))
-                        
+
+                            transformed_points.append(
+                                (
+                                    final_x,
+                                    final_y,
+                                    bulge,
+                                    start_width * scale_factor,
+                                    end_width * scale_factor,
+                                )
+                            )
+
                         # Clear existing points and add transformed ones
                         new_entity.clear()
                         for tp in transformed_points:
-                            new_entity.append(tp[:2], format='xyb' if len(tp) > 2 and tp[2] != 0 else 'xy')
+                            new_entity.append(
+                                tp[:2],
+                                format="xyb" if len(tp) > 2 and tp[2] != 0 else "xy",
+                            )
                             if len(tp) > 3 and (tp[3] != 0 or tp[4] != 0):
                                 new_entity[-1] = (tp[0], tp[1], tp[2], tp[3], tp[4])
-                    
+
                     elif entity_type == "POLYLINE":
                         # Transform all vertices in the polyline
                         for vertex in new_entity.vertices:
                             orig_location = vertex.dxf.location
                             x, y = orig_location[0], orig_location[1]
                             z = orig_location[2] if len(orig_location) > 2 else 0
-                            
+
                             x_rel = x - orig_center_x
                             y_rel = y - orig_center_y
-                            
+
                             x_scaled = x_rel * scale_factor
                             y_scaled = y_rel * scale_factor
-                            
+
                             if rotation_angle != 0:
                                 x_rotated = x_scaled * cos_angle - y_scaled * sin_angle
                                 y_rotated = x_scaled * sin_angle + y_scaled * cos_angle
                             else:
                                 x_rotated = x_scaled
                                 y_rotated = y_scaled
-                            
+
                             final_x = x_rotated + target_center_x
                             final_y = y_rotated + target_center_y
-                            
+
                             vertex.dxf.location = (final_x, final_y, z)
-                    
+
                     elif entity_type == "ELLIPSE":
                         # Transform ellipse center and axes
                         orig_center = new_entity.dxf.center
                         x_rel = orig_center[0] - orig_center_x
                         y_rel = orig_center[1] - orig_center_y
-                        
+
                         x_scaled = x_rel * scale_factor
                         y_scaled = y_rel * scale_factor
-                        
+
                         if rotation_angle != 0:
                             x_rotated = x_scaled * cos_angle - y_scaled * sin_angle
                             y_rotated = x_scaled * sin_angle + y_scaled * cos_angle
                         else:
                             x_rotated = x_scaled
                             y_rotated = y_scaled
-                        
+
                         final_x = x_rotated + target_center_x
                         final_y = y_rotated + target_center_y
-                        
-                        new_entity.dxf.center = (final_x, final_y, orig_center[2] if len(orig_center) > 2 else 0)
-                        
+
+                        new_entity.dxf.center = (
+                            final_x,
+                            final_y,
+                            orig_center[2] if len(orig_center) > 2 else 0,
+                        )
+
                         # Scale and rotate major axis
                         orig_major_axis = new_entity.dxf.major_axis
                         major_x_scaled = orig_major_axis[0] * scale_factor
                         major_y_scaled = orig_major_axis[1] * scale_factor
-                        
+
                         if rotation_angle != 0:
-                            major_x_rotated = major_x_scaled * cos_angle - major_y_scaled * sin_angle
-                            major_y_rotated = major_x_scaled * sin_angle + major_y_scaled * cos_angle
+                            major_x_rotated = (
+                                major_x_scaled * cos_angle - major_y_scaled * sin_angle
+                            )
+                            major_y_rotated = (
+                                major_x_scaled * sin_angle + major_y_scaled * cos_angle
+                            )
                         else:
                             major_x_rotated = major_x_scaled
                             major_y_rotated = major_y_scaled
-                        
-                        new_entity.dxf.major_axis = (major_x_rotated, major_y_rotated, orig_major_axis[2] if len(orig_major_axis) > 2 else 0)
-                        new_entity.dxf.ratio = new_entity.dxf.ratio  # Keep ratio unchanged
-                    
+
+                        new_entity.dxf.major_axis = (
+                            major_x_rotated,
+                            major_y_rotated,
+                            orig_major_axis[2] if len(orig_major_axis) > 2 else 0,
+                        )
+                        new_entity.dxf.ratio = (
+                            new_entity.dxf.ratio
+                        )  # Keep ratio unchanged
+
                     elif entity_type in ["LINE", "POINT", "TEXT", "MTEXT", "DIMENSION"]:
                         # For other common entity types, apply basic transformation
                         # This is a simplified approach - you might need more specific handling
-                        if hasattr(new_entity.dxf, 'location'):
+                        if hasattr(new_entity.dxf, "location"):
                             orig_location = new_entity.dxf.location
                             x, y = orig_location[0], orig_location[1]
                             z = orig_location[2] if len(orig_location) > 2 else 0
-                            
+
                             x_rel = x - orig_center_x
                             y_rel = y - orig_center_y
-                            
+
                             x_scaled = x_rel * scale_factor
                             y_scaled = y_rel * scale_factor
-                            
+
                             if rotation_angle != 0:
                                 x_rotated = x_scaled * cos_angle - y_scaled * sin_angle
                                 y_rotated = x_scaled * sin_angle + y_scaled * cos_angle
                             else:
                                 x_rotated = x_scaled
                                 y_rotated = y_scaled
-                            
+
                             final_x = x_rotated + target_center_x
                             final_y = y_rotated + target_center_y
-                            
+
                             new_entity.dxf.location = (final_x, final_y, z)
-                        
-                        elif hasattr(new_entity.dxf, 'start') and hasattr(new_entity.dxf, 'end'):
+
+                        elif hasattr(new_entity.dxf, "start") and hasattr(
+                            new_entity.dxf, "end"
+                        ):
                             # Handle LINE entities
-                            for attr_name in ['start', 'end']:
+                            for attr_name in ["start", "end"]:
                                 orig_point = getattr(new_entity.dxf, attr_name)
                                 x, y = orig_point[0], orig_point[1]
                                 z = orig_point[2] if len(orig_point) > 2 else 0
-                                
+
                                 x_rel = x - orig_center_x
                                 y_rel = y - orig_center_y
-                                
+
                                 x_scaled = x_rel * scale_factor
                                 y_scaled = y_rel * scale_factor
-                                
+
                                 if rotation_angle != 0:
-                                    x_rotated = x_scaled * cos_angle - y_scaled * sin_angle
-                                    y_rotated = x_scaled * sin_angle + y_scaled * cos_angle
+                                    x_rotated = (
+                                        x_scaled * cos_angle - y_scaled * sin_angle
+                                    )
+                                    y_rotated = (
+                                        x_scaled * sin_angle + y_scaled * cos_angle
+                                    )
                                 else:
                                     x_rotated = x_scaled
                                     y_rotated = y_scaled
-                                
+
                                 final_x = x_rotated + target_center_x
                                 final_y = y_rotated + target_center_y
-                                
-                                setattr(new_entity.dxf, attr_name, (final_x, final_y, z))
-                    
+
+                                setattr(
+                                    new_entity.dxf, attr_name, (final_x, final_y, z)
+                                )
+
                     # Set layer and add to modelspace
                     new_entity.dxf.layer = entity_data["layer"]
-                    
+
                     # Set color: keep red range as is, make everything else black (7)
                     original_color = entity_data.get("color", 256)
-                    
+
                     # Check if color is in red range: 1, 10-19, 240-255
-                    is_red = original_color in [1,6] or 10 <= original_color <= 26 or 190 <= original_color < 250
-                    
+                    is_red = (
+                        original_color in [1, 6]
+                        or 10 <= original_color <= 26
+                        or 190 <= original_color < 250
+                    )
+
                     if is_red:
                         new_entity.dxf.color = 1  # Set the one and only red color
                     else:
                         new_entity.dxf.color = 0  # Make everything else black
 
                     msp.add_entity(new_entity)
-    
+
     # Save the document
     doc.saveas(output_path)
 
@@ -1596,7 +1684,9 @@ def bin_packing_with_inventory(
 
     # Process orders one by one, but allow filling sheets with multiple orders
     remaining_orders = dict(order_groups)  # Copy to modify
-    max_iterations = max(100, len(remaining_orders) * 50)  # Safety limit with higher multiplier
+    max_iterations = max(
+        100, len(remaining_orders) * 50
+    )  # Safety limit with higher multiplier
     iteration_count = 0
 
     while remaining_orders and any(
@@ -1653,7 +1743,9 @@ def bin_packing_with_inventory(
                         orders_to_try.append(order_id)
 
             if not compatible_polygons:
-                logger.debug(f"Нет совместимых полигонов для листа {sheet_type['name']} цвета {sheet_color}")
+                logger.debug(
+                    f"Нет совместимых полигонов для листа {sheet_type['name']} цвета {sheet_color}"
+                )
                 continue  # No compatible polygons for this sheet color
 
             sheet_counter += 1
@@ -1814,7 +1906,7 @@ def bin_packing_with_inventory(
             sheets_still_available = any(
                 sheet["count"] - sheet["used"] > 0 for sheet in sheet_inventory
             )
-            
+
             if not sheets_still_available:
                 logger.warning(
                     f"Все листы закончились. Не удалось разместить оставшиеся заказы: {list(remaining_orders.keys())}"

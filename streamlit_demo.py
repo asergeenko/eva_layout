@@ -34,25 +34,6 @@ logger = logging.getLogger(__name__)
 logger.info("=== НАЧАЛО СЕССИИ EVA LAYOUT ===")
 logger.info(f"MAX_SHEETS_PER_ORDER = {MAX_SHEETS_PER_ORDER}")
 
-# Clear any cached imports (for Streamlit Cloud)
-import sys
-
-if "layout_optimizer" in sys.modules:
-    del sys.modules["layout_optimizer"]
-
-# Force cache clear and reload module
-import importlib
-import sys
-
-try:
-    if "layout_optimizer" in sys.modules:
-        del sys.modules["layout_optimizer"]
-    import layout_optimizer
-
-    importlib.reload(layout_optimizer)
-except:
-    import layout_optimizer
-
 # Configuration
 DEFAULT_SHEET_TYPES = [
     (140, 200),
