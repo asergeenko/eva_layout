@@ -1641,28 +1641,49 @@ def bin_packing_with_inventory(
         if max_sheets_per_order:
             st.info(f"Ограничение: максимум {max_sheets_per_order} листов на заказ")
 
-    # Group polygons by order_id
-    logger.info("Группировка полигонов по order_id...")
+    # Group polygons by order_id and separate by priority
+    logger.info("Группировка полигонов по order_id и приоритету...")
     order_groups = {}
+    priority2_polygons = []  # Polygons with priority 2 for later processing
+
     for polygon_tuple in polygons:
-        if len(polygon_tuple) >= 4:  # Extended format with color and order_id
+        if (
+            len(polygon_tuple) >= 5
+        ):  # Extended format with color, order_id, and priority
+            polygon, name, color, order_id, priority = polygon_tuple[:5]
+        elif len(polygon_tuple) >= 4:  # Format with color and order_id
             polygon, name, color, order_id = polygon_tuple[:4]
+            priority = 1  # Default priority
         elif len(polygon_tuple) >= 3:  # Format with color
             polygon, name, color = polygon_tuple[:3]
             order_id = "unknown"
+            priority = 1  # Default priority
         else:  # Old format without color
             polygon, name = polygon_tuple[:2]
             color = "серый"
             order_id = "unknown"
+            priority = 1  # Default priority
 
-        if order_id not in order_groups:
-            order_groups[order_id] = []
-            logger.debug(f"Создана новая группа для заказа: {order_id}")
-        order_groups[order_id].append(polygon_tuple)
+        # Separate priority 2 polygons for later processing
+        if priority == 2:
+            priority2_polygons.append(polygon_tuple)
+            logger.debug(f"Полигон {name} отложен для приоритета 2 (заполнение пустот)")
+        else:
+            # Process priority 1 and Excel files normally
+            if order_id not in order_groups:
+                order_groups[order_id] = []
+                logger.debug(f"Создана новая группа для заказа: {order_id}")
+            order_groups[order_id].append(polygon_tuple)
 
-    logger.info(f"Группировка завершена: {len(order_groups)} уникальных заказов")
+    logger.info(
+        f"Группировка завершена: {len(order_groups)} уникальных заказов, {len(priority2_polygons)} полигонов приоритета 2"
+    )
     for order_id, group in order_groups.items():
         logger.info(f"  • Заказ {order_id}: {len(group)} файлов")
+    if priority2_polygons:
+        logger.info(
+            f"  • Приоритет 2 (заполнение пустот): {len(priority2_polygons)} файлов"
+        )
 
     if verbose:
         st.info(f"Найдено {len(order_groups)} уникальных заказов для размещения:")
@@ -1681,6 +1702,18 @@ def bin_packing_with_inventory(
     logger.info(
         f"Используем упрощенный эффективный алгоритм: {len(order_groups)} заказов"
     )
+
+    # Check if we only have priority 2 polygons
+    if not order_groups and priority2_polygons:
+        logger.info(
+            f"Только файлы приоритета 2: {len(priority2_polygons)} файлов не размещаются (новые листы не создаются)"
+        )
+        if verbose:
+            st.warning(
+                f"⚠️ Только файлы приоритета 2: {len(priority2_polygons)} файлов не размещаются (новые листы не создаются)"
+            )
+        all_unplaced.extend(priority2_polygons)
+        return placed_layouts, all_unplaced
 
     # Process orders one by one, but allow filling sheets with multiple orders
     remaining_orders = dict(order_groups)  # Copy to modify
@@ -1947,6 +1980,136 @@ def bin_packing_with_inventory(
         if verbose:
             st.error(error_msg)
         raise ValueError(error_msg)
+
+    # PRIORITY 2 PROCESSING: Try to fit priority 2 polygons into existing sheets only
+    if priority2_polygons and placed_layouts:
+        logger.info(
+            f"=== ОБРАБОТКА ПРИОРИТЕТА 2: {len(priority2_polygons)} полигонов ==="
+        )
+        if verbose:
+            st.info(
+                f"🔄 Размещение файлов приоритета 2: {len(priority2_polygons)} файлов в существующие листы"
+            )
+
+        priority2_placed = 0
+        priority2_remaining = list(priority2_polygons)
+
+        # Try to fill existing sheets with priority 2 polygons
+        for layout_idx, layout in enumerate(placed_layouts):
+            if not priority2_remaining:
+                break
+
+            sheet_size = layout["sheet_size"]
+            sheet_color = None
+            # Find sheet color by matching with inventory
+            for sheet in sheet_inventory:
+                if sheet["name"] == layout["sheet_type"]:
+                    sheet_color = sheet.get("color", "серый")
+                    break
+            if sheet_color is None:
+                sheet_color = "серый"  # fallback
+
+            existing_placed = layout["placed_polygons"]
+            current_usage = layout["usage_percent"]
+
+            if current_usage >= 95:  # Skip nearly full sheets
+                continue
+
+            logger.info(
+                f"Пытаемся добавить приоритет 2 на лист #{layout['sheet_number']} (заполнение: {current_usage:.1f}%)"
+            )
+
+            # Filter priority 2 polygons by color compatibility
+            compatible_priority2 = []
+            for poly_tuple in priority2_remaining:
+                if len(poly_tuple) >= 3:
+                    poly_color = poly_tuple[2]
+                else:
+                    poly_color = "серый"
+                if poly_color == sheet_color:
+                    compatible_priority2.append(poly_tuple)
+
+            if not compatible_priority2:
+                logger.debug(
+                    f"Нет совместимых по цвету приоритет 2 полигонов для листа {sheet_color}"
+                )
+                continue
+
+            # Try to place compatible priority 2 polygons on this existing sheet
+            try:
+                additional_placed, still_remaining = bin_packing_with_existing(
+                    compatible_priority2, existing_placed, sheet_size, verbose=False
+                )
+
+                if additional_placed:
+                    # Update the layout with additional polygons
+                    placed_layouts[layout_idx]["placed_polygons"] = (
+                        existing_placed + additional_placed
+                    )
+                    placed_layouts[layout_idx]["usage_percent"] = (
+                        calculate_usage_percent(
+                            placed_layouts[layout_idx]["placed_polygons"], sheet_size
+                        )
+                    )
+                    new_usage = placed_layouts[layout_idx]["usage_percent"]
+                    priority2_placed += len(additional_placed)
+
+                    logger.info(
+                        f"✅ Добавлено {len(additional_placed)} файлов приоритета 2 на лист #{layout['sheet_number']} ({current_usage:.1f}% → {new_usage:.1f}%)"
+                    )
+                    if verbose:
+                        st.success(
+                            f"✅ Добавлено {len(additional_placed)} файлов приоритета 2 на лист #{layout['sheet_number']}"
+                        )
+
+                    # Remove placed polygons from priority2_remaining
+                    placed_names = [
+                        p[4] if len(p) >= 5 else p[1] for p in additional_placed
+                    ]  # Get filenames
+                    priority2_remaining = [
+                        p for p in priority2_remaining if (p[1] not in placed_names)
+                    ]
+
+            except Exception as e:
+                logger.warning(
+                    f"Ошибка при добавлении приоритета 2 на лист #{layout['sheet_number']}: {e}"
+                )
+
+        logger.info(
+            f"Приоритет 2: размещено {priority2_placed}, осталось {len(priority2_remaining)}"
+        )
+        if priority2_remaining:
+            logger.info(
+                f"⚠️ {len(priority2_remaining)} файлов приоритета 2 не размещены (новые листы не создаются)"
+            )
+            if verbose:
+                st.warning(
+                    f"⚠️ {len(priority2_remaining)} файлов приоритета 2 не удалось разместить в существующие листы"
+                )
+
+        # Add remaining priority 2 polygons to unplaced list
+        all_unplaced.extend(priority2_remaining)
+
+    elif priority2_polygons and not placed_layouts:
+        logger.warning(
+            f"Нет существующих листов для размещения {len(priority2_polygons)} файлов приоритета 2"
+        )
+        if verbose:
+            st.warning(
+                f"⚠️ Нет размещенных листов для {len(priority2_polygons)} файлов приоритета 2"
+            )
+        # Add all priority 2 polygons to unplaced list since no sheets were created
+        all_unplaced.extend(priority2_polygons)
+    elif priority2_polygons and not order_groups:
+        # Special case: only priority 2 polygons exist, no priority 1 files
+        logger.info(
+            f"Только priority 2 файлы без существующих листов: {len(priority2_polygons)} файлов не размещаются"
+        )
+        if verbose:
+            st.warning(
+                f"⚠️ Только файлы приоритета 2: {len(priority2_polygons)} файлов не размещаются (новые листы не создаются)"
+            )
+        all_unplaced.extend(priority2_polygons)
 
     # IMPROVEMENT: Try to fit remaining polygons into existing sheets before giving up
     remaining_polygons_list = []
@@ -2288,15 +2451,22 @@ def scale_polygons_to_fit(
         )
 
     for polygon_tuple in polygons_with_names:
-        if len(polygon_tuple) >= 4:  # Extended format with color and order_id
+        if (
+            len(polygon_tuple) >= 5
+        ):  # Extended format with color, order_id, and priority
+            polygon, name, color, order_id, priority = polygon_tuple[:5]
+        elif len(polygon_tuple) >= 4:  # Extended format with color and order_id
             polygon, name, color, order_id = polygon_tuple[:4]
+            priority = 1  # Default priority
         elif len(polygon_tuple) >= 3:  # Format with color
             polygon, name, color = polygon_tuple[:3]
             order_id = "unknown"
+            priority = 1  # Default priority
         else:  # Old format without color
             polygon, name = polygon_tuple[:2]
             color = "серый"
             order_id = "unknown"
+            priority = 1  # Default priority
         bounds = polygon.bounds
         poly_width = bounds[2] - bounds[0]
         poly_height = bounds[3] - bounds[1]
@@ -2344,9 +2514,9 @@ def scale_polygons_to_fit(
                 st.info(
                     f"Масштабирован {name}: {original_width_cm:.1f}x{original_height_cm:.1f} см → {new_width_cm:.1f}x{new_height_cm:.1f} см (коэффициент: {scale_factor:.4f})"
                 )
-            scaled_polygons.append((scaled_polygon, name, color, order_id))
+            scaled_polygons.append((scaled_polygon, name, color, order_id, priority))
         else:
-            scaled_polygons.append((polygon, name, color, order_id))
+            scaled_polygons.append((polygon, name, color, order_id, priority))
 
     return scaled_polygons
 

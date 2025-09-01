@@ -173,16 +173,18 @@ class TestBinPackingWithInventory:
     def test_bin_packing_single_polygon(self, simple_polygon):
         """Test bin packing with a single polygon."""
         polygons = [(simple_polygon, "test_polygon", "серый", "test_order")]
-        
+
         # Create available sheets list
-        available_sheets = [{
-            "name": "Test Sheet",
-            "width": 140,
-            "height": 200,
-            "color": "серый",
-            "count": 5,
-            "used": 0
-        }]
+        available_sheets = [
+            {
+                "name": "Test Sheet",
+                "width": 140,
+                "height": 200,
+                "color": "серый",
+                "count": 5,
+                "used": 0,
+            }
+        ]
 
         placed_layouts, unplaced = bin_packing_with_inventory(
             polygons, available_sheets, verbose=False, max_sheets_per_order=5
@@ -200,14 +202,16 @@ class TestBinPackingWithInventory:
             poly = Polygon([(i * 2, 0), (i * 2 + 1, 0), (i * 2 + 1, 1), (i * 2, 1)])
             polygons.append((poly, f"poly_{i}", "серый", f"order_{i}"))
 
-        available_sheets = [{
-            "name": "Test Sheet",
-            "width": 140,
-            "height": 200,
-            "color": "серый",
-            "count": 10,
-            "used": 0
-        }]
+        available_sheets = [
+            {
+                "name": "Test Sheet",
+                "width": 140,
+                "height": 200,
+                "color": "серый",
+                "count": 10,
+                "used": 0,
+            }
+        ]
 
         placed_layouts, unplaced = bin_packing_with_inventory(
             polygons, available_sheets, verbose=False, max_sheets_per_order=5
@@ -221,24 +225,31 @@ class TestBinPackingWithInventory:
     def test_bin_packing_too_large_polygon(self):
         """Test bin packing with polygon too large for sheet."""
         # Create a polygon larger than the sheet
-        large_polygon = Polygon([(0, 0), (2000, 0), (2000, 3000), (0, 3000)])  # Much larger
+        large_polygon = Polygon(
+            [(0, 0), (2000, 0), (2000, 3000), (0, 3000)]
+        )  # Much larger
         polygons = [(large_polygon, "large_polygon", "серый", "large_order")]
-        
-        available_sheets = [{
-            "name": "Small Sheet",
-            "width": 140,
-            "height": 200,
-            "color": "серый",
-            "count": 1,
-            "used": 0
-        }]
+
+        available_sheets = [
+            {
+                "name": "Small Sheet",
+                "width": 140,
+                "height": 200,
+                "color": "серый",
+                "count": 1,
+                "used": 0,
+            }
+        ]
 
         placed_layouts, unplaced = bin_packing_with_inventory(
             polygons, available_sheets, verbose=False, max_sheets_per_order=5
         )
 
         # Large polygon should not fit
-        assert len(placed_layouts) == 0 or sum(len(layout["placed_polygons"]) for layout in placed_layouts) == 0
+        assert (
+            len(placed_layouts) == 0
+            or sum(len(layout["placed_polygons"]) for layout in placed_layouts) == 0
+        )
         assert len(unplaced) == 1
 
     def test_bin_packing_with_sample_files(self, sample_dxf_files):
@@ -259,14 +270,16 @@ class TestBinPackingWithInventory:
         # Create polygon list with proper tuple format
         polygons = [(polygon_from_file, "sample_0", "серый", "sample_order")]
 
-        available_sheets = [{
-            "name": "Test Sheet",
-            "width": 200,
-            "height": 300,
-            "color": "серый",
-            "count": 3,
-            "used": 0
-        }]
+        available_sheets = [
+            {
+                "name": "Test Sheet",
+                "width": 200,
+                "height": 300,
+                "color": "серый",
+                "count": 3,
+                "used": 0,
+            }
+        ]
 
         placed_layouts, unplaced = bin_packing_with_inventory(
             polygons, available_sheets, verbose=False, max_sheets_per_order=5
@@ -284,13 +297,17 @@ class TestSaveDxfLayoutComplete:
         """Test saving DXF layout to file."""
         placed_polygons = [(simple_polygon, 0, 0, 0, "test_polygon")]
         sheet_size = (100, 100)
-        original_dxf_data_map = {"test_polygon": {"polygons": [], "original_entities": []}}
+        original_dxf_data_map = {
+            "test_polygon": {"polygons": [], "original_entities": []}
+        }
 
         with tempfile.NamedTemporaryFile(suffix=".dxf", delete=False) as tmp:
             output_path = tmp.name
 
         try:
-            save_dxf_layout_complete(placed_polygons, sheet_size, output_path, original_dxf_data_map)
+            save_dxf_layout_complete(
+                placed_polygons, sheet_size, output_path, original_dxf_data_map
+            )
 
             assert os.path.exists(output_path)
 
@@ -372,20 +389,24 @@ class TestIntegration:
                 parsed_data = parse_dxf_complete(file_bytes, verbose=False)
                 if parsed_data and parsed_data.get("combined_polygon"):
                     polygon = parsed_data["combined_polygon"]
-                    all_polygons.append((polygon, dxf_file.name, "серый", f"order_{dxf_file.name}"))
+                    all_polygons.append(
+                        (polygon, dxf_file.name, "серый", f"order_{dxf_file.name}")
+                    )
 
         if not all_polygons:
             pytest.skip("No valid polygons found in sample files")
 
         # Create available sheets for new bin packing function
-        available_sheets = [{
-            "name": "Test Sheet 144x200",
-            "width": 144,
-            "height": 200,
-            "color": "серый",
-            "count": 5,
-            "used": 0
-        }]
+        available_sheets = [
+            {
+                "name": "Test Sheet 144x200",
+                "width": 144,
+                "height": 200,
+                "color": "серый",
+                "count": 5,
+                "used": 0,
+            }
+        ]
 
         # Run bin packing with inventory
         placed_layouts, unplaced = bin_packing_with_inventory(
@@ -401,18 +422,23 @@ class TestIntegration:
             layout = placed_layouts[0]
             placed_polygons = layout["placed_polygons"]
             sheet_size = layout["sheet_size"]
-            
+
             # Create minimal original DXF data map
             original_dxf_data_map = {}
             for polygon_data in placed_polygons:
                 filename = polygon_data[4] if len(polygon_data) > 4 else "unknown"
-                original_dxf_data_map[filename] = {"polygons": [], "original_entities": []}
+                original_dxf_data_map[filename] = {
+                    "polygons": [],
+                    "original_entities": [],
+                }
 
             with tempfile.NamedTemporaryFile(suffix=".dxf", delete=False) as tmp:
                 output_path = tmp.name
 
             try:
-                save_dxf_layout_complete(placed_polygons, sheet_size, output_path, original_dxf_data_map)
+                save_dxf_layout_complete(
+                    placed_polygons, sheet_size, output_path, original_dxf_data_map
+                )
                 assert os.path.exists(output_path)
 
                 # Test plotting

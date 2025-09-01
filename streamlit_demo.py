@@ -831,7 +831,7 @@ if manual_files:
     st.write(f"**Новая группа #{st.session_state.group_counter}:**")
 
     # Settings for this group
-    col1, col2 = st.columns([1, 1])
+    col1, col2, col3 = st.columns([1, 1, 1])
 
     with col1:
         group_color = st.selectbox(
@@ -850,6 +850,15 @@ if manual_files:
             value=1,
             key=f"qty_{current_group_key}",
             help="Копий каждого файла",
+        )
+
+    with col3:
+        group_priority = st.selectbox(
+            "Приоритет:",
+            options=[1, 2],
+            index=1,  # Default to priority 2
+            key=f"priority_{current_group_key}",
+            help="1 - размещается наравне с Excel файлами, 2 - заполняет пустоты на листах",
         )
 
     # Button to create group with current settings
@@ -872,6 +881,7 @@ if manual_files:
                 file_copy = io.BytesIO(file_content)
                 file_copy.name = file.name
                 file_copy.color = group_color
+                file_copy.priority = group_priority
                 file_copy.order_id = f"group_{st.session_state.group_counter}"
                 file_copy.copy_number = copy_num + 1
                 file_copy.original_name = file.name
@@ -893,6 +903,7 @@ if manual_files:
             "name": group_name,
             "files": [f.name for f in manual_files],
             "color": group_color,
+            "priority": group_priority,
             "quantity": group_quantity,
             "total_objects": len(manual_files) * group_quantity,
             "file_objects": group_files,
@@ -902,7 +913,7 @@ if manual_files:
         st.session_state.group_counter += 1
 
         st.success(
-            f"✅ Группа создана: {len(manual_files)} файлов × {group_quantity} копий = {len(group_files)} объектов"
+            f"✅ Группа создана: {len(manual_files)} файлов × {group_quantity} копий = {len(group_files)} объектов (приоритет {group_priority})"
         )
 
         # Force rerun to reset uploader
@@ -931,6 +942,7 @@ if st.session_state.file_groups:
                 "Группа": group["name"],
                 "Файлы": files_list,
                 "Цвет": f"{color_emoji} {group['color']}",
+                "Приоритет": group.get("priority", 2),
                 "Копий на файл": group["quantity"],
                 "Всего объектов": group["total_objects"],
             }
@@ -1097,20 +1109,24 @@ if st.button("🚀 Оптимизировать раскрой"):
                 # Add color and order information to polygon tuple
                 file_color = getattr(file, "color", "серый")
                 file_order_id = getattr(file, "order_id", "unknown")
+                file_priority = getattr(
+                    file, "priority", 1
+                )  # Default priority 1 for Excel files
 
                 # DEBUG: Log all file attributes to understand the issue
                 file_attrs = [attr for attr in dir(file) if not attr.startswith("_")]
                 logger.debug(f"ФАЙЛ {display_name}: атрибуты = {file_attrs}")
                 logger.debug(
-                    f"ФАЙЛ {display_name}: color = {file_color}, order_id = {file_order_id}"
+                    f"ФАЙЛ {display_name}: color = {file_color}, order_id = {file_order_id}, priority = {file_priority}"
                 )
 
-                # Use the display_name for polygon identification
+                # Use the display_name for polygon identification, include priority
                 polygon_tuple = (
                     parsed_data["combined_polygon"],
                     display_name,
                     file_color,
                     file_order_id,
+                    file_priority,  # Add priority as 5th element
                 )
                 polygons.append(polygon_tuple)
                 logger.info(
