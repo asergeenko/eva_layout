@@ -1618,6 +1618,7 @@ def bin_packing_with_inventory(
     available_sheets: list[dict],
     verbose: bool = True,
     max_sheets_per_order: int = None,
+    progress_callback=None,
 ) -> tuple[list[dict], list[tuple]]:
     """Optimize placement of polygons on available sheets with inventory tracking."""
     logger.info("=== НАЧАЛО bin_packing_with_inventory ===")
@@ -1713,6 +1714,11 @@ def bin_packing_with_inventory(
                 f"⚠️ Только файлы приоритета 2: {len(priority2_polygons)} файлов не размещаются (новые листы не создаются)"
             )
         all_unplaced.extend(priority2_polygons)
+        
+        # Progress update for early return
+        if progress_callback:
+            progress_callback(100, "Завершено: только файлы приоритета 2 (не размещены)")
+        
         return placed_layouts, all_unplaced
 
     # Process orders one by one, but allow filling sheets with multiple orders
@@ -1882,6 +1888,15 @@ def bin_packing_with_inventory(
                         "orders_on_sheet": list(orders_on_sheet),
                     }
                 )
+                
+                # Update progress callback if provided
+                if progress_callback:
+                    # Better estimate based on actual polygons and sheet capacity
+                    total_priority1_polygons = len([p for order_polys in order_groups.values() for p in order_polys])
+                    # Estimate sheets needed based on average usage and total polygons
+                    estimated_total_sheets = max(1, total_priority1_polygons // 4)  # Assume 4 polygons per sheet on average
+                    progress_percent = min(95, 50 + (len(placed_layouts) / max(1, estimated_total_sheets)) * 40)  # 50-95% range
+                    progress_callback(progress_percent, f"Создан лист #{sheet_counter} ({sheet_type['name']})")
 
                 # Remove placed polygons from remaining orders
                 # We need to match polygons by both filename AND order_id
@@ -1990,6 +2005,10 @@ def bin_packing_with_inventory(
             st.info(
                 f"🔄 Размещение файлов приоритета 2: {len(priority2_polygons)} файлов в существующие листы"
             )
+        
+        # Update progress for priority 2 processing
+        if progress_callback:
+            progress_callback(96, f"Обработка файлов приоритета 2: {len(priority2_polygons)} файлов")
 
         priority2_placed = 0
         priority2_remaining = list(priority2_polygons)
@@ -2214,6 +2233,10 @@ def bin_packing_with_inventory(
                         else "❌"
                     )
                     st.info(f"  {status} Заказ {order_id}: {sheet_count} листов")
+
+    # Final progress update
+    if progress_callback:
+        progress_callback(100, f"Завершено: {len(placed_layouts)} листов создано")
 
     return placed_layouts, all_unplaced
 

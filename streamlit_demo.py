@@ -1305,11 +1305,17 @@ if st.button("🚀 Оптимизировать раскрой"):
             optimization_progress.progress(50)
             optimization_status.text("Выполнение алгоритма размещения...")
 
+            # Progress callback function
+            def update_progress(percent, status_text):
+                optimization_progress.progress(int(percent))
+                optimization_status.text(status_text)
+
             placed_layouts, unplaced_polygons = bin_packing_with_inventory(
                 polygons,
                 st.session_state.available_sheets,
                 verbose=False,
                 max_sheets_per_order=MAX_SHEETS_PER_ORDER,
+                progress_callback=update_progress,
             )
 
             # Processing results
