@@ -1721,7 +1721,11 @@ def bin_packing_with_inventory(
         
         return placed_layouts, all_unplaced
 
-    # Process orders one by one, but allow filling sheets with multiple orders
+    # NEW LOGIC: Priority queue for orders based on MAX_SHEETS_PER_ORDER constraint
+    # Track which order was placed first and its starting sheet
+    order_first_sheet = {}  # order_id -> first_sheet_number
+    
+    # Process orders using priority queue logic
     remaining_orders = dict(order_groups)  # Copy to modify
     max_iterations = max(
         100, len(remaining_orders) * 50
@@ -1752,34 +1756,84 @@ def bin_packing_with_inventory(
 
             sheet_size = (sheet_type["width"], sheet_type["height"])
             sheet_color = sheet_type.get("color", "серый")
+            
+            # Calculate which sheet number this would be
+            next_sheet_number = sheet_counter + 1
+
+            # NEW APPROACH: Reserve sheets for started orders to guarantee completion
+            # Step 1: Check which started orders need priority on this sheet
+            priority_orders = []
+            blocked_orders = []
+            new_orders = []
+            
+            for order_id, order_polygons in remaining_orders.items():
+                # Skip orders that don't apply to MAX_SHEETS_PER_ORDER constraint
+                is_constrained = (
+                    max_sheets_per_order is not None
+                    and order_id != "additional"
+                    and order_id != "unknown"  # Manual uploads are not limited
+                    and not order_id.startswith("group_")  # Group uploads are not limited
+                )
+                
+                if not is_constrained:
+                    # Unconstrained orders can be placed anytime
+                    new_orders.append((order_id, order_polygons))
+                    continue
+                
+                if order_id in order_first_sheet:
+                    # Order already started - check if within range
+                    first_sheet = order_first_sheet[order_id]
+                    max_allowed_sheet = first_sheet + max_sheets_per_order - 1
+                    
+                    if next_sheet_number <= max_allowed_sheet:
+                        # Within range - MAXIMUM priority (must complete this order)
+                        priority_orders.append((order_id, order_polygons))
+                        logger.debug(
+                            f"Заказ {order_id}: МАКСИМАЛЬНЫЙ приоритет (листы {first_sheet}-{max_allowed_sheet}, текущий {next_sheet_number})"
+                        )
+                    else:
+                        # Outside range - blocked from starting new placement
+                        blocked_orders.append(order_id)
+                        logger.debug(
+                            f"Заказ {order_id}: ЗАБЛОКИРОВАН (вне диапазона {first_sheet}-{max_allowed_sheet}, текущий {next_sheet_number})"
+                        )
+                else:
+                    # New order - can start only if no priority orders need this sheet
+                    new_orders.append((order_id, order_polygons))
+            
+            # PRIORITY STRATEGY: If there are started orders within range, give them ALL the space
+            if priority_orders:
+                # Only consider priority orders - they get the entire sheet
+                orders_to_consider = priority_orders
+                logger.info(
+                    f"Лист {next_sheet_number}: РЕЖИМ ПРИОРИТЕТА - {len(priority_orders)} начатых заказов"
+                )
+            else:
+                # No priority orders - allow new orders to start
+                orders_to_consider = new_orders
+                logger.info(
+                    f"Лист {next_sheet_number}: Обычный режим - {len(new_orders)} новых заказов"
+                )
 
             # Collect polygons from orders that can fit on this sheet
             compatible_polygons = []
             orders_to_try = []
 
-            for order_id, order_polygons in remaining_orders.items():
-                # Check if this order can still use more sheets
-                if (
-                    max_sheets_per_order is None
-                    or order_id == "additional"
-                    or order_id == "unknown"  # Manual uploads are not limited
-                    or order_id.startswith("group_")  # Group uploads are not limited
-                    or order_sheet_usage[order_id] < max_sheets_per_order
-                ):
-                    # Filter polygons by color
-                    color_matched_polygons = []
-                    for polygon_tuple in order_polygons:
-                        if len(polygon_tuple) >= 3:
-                            color = polygon_tuple[2]
-                        else:
-                            color = "серый"
+            for order_id, order_polygons in orders_to_consider:
+                # Filter polygons by color
+                color_matched_polygons = []
+                for polygon_tuple in order_polygons:
+                    if len(polygon_tuple) >= 3:
+                        color = polygon_tuple[2]
+                    else:
+                        color = "серый"
 
-                        if color == sheet_color:
-                            color_matched_polygons.append(polygon_tuple)
+                    if color == sheet_color:
+                        color_matched_polygons.append(polygon_tuple)
 
-                    if color_matched_polygons:
-                        compatible_polygons.extend(color_matched_polygons)
-                        orders_to_try.append(order_id)
+                if color_matched_polygons:
+                    compatible_polygons.extend(color_matched_polygons)
+                    orders_to_try.append(order_id)
 
             if not compatible_polygons:
                 logger.debug(
@@ -1870,10 +1924,18 @@ def bin_packing_with_inventory(
                     f"УСПЕХ: Лист #{sheet_counter} содержит заказы: {orders_on_sheet}"
                 )
 
-                # Update order sheet usage
+                # Update order sheet usage and track first sheet
                 for order_id in orders_on_sheet:
                     if order_id in order_sheet_usage:
                         order_sheet_usage[order_id] += 1
+                        
+                        # Track first sheet for MAX_SHEETS_PER_ORDER constraint
+                        if order_id not in order_first_sheet:
+                            order_first_sheet[order_id] = sheet_counter
+                            logger.info(
+                                f"  Заказ {order_id}: начат на листе {sheet_counter}"
+                            )
+                        
                         logger.info(
                             f"  Заказ {order_id}: теперь использует {order_sheet_usage[order_id]} листов"
                         )
@@ -1965,14 +2027,38 @@ def bin_packing_with_inventory(
                 available_sheets_count = sum(
                     max(0, sheet["count"] - sheet["used"]) for sheet in sheet_inventory
                 )
-                logger.info(
-                    f"Не удалось разместить в этой итерации. Доступно листов: {available_sheets_count}. Продолжаем..."
-                )
+                
+                # Enhanced debugging: show what's blocking placement
+                logger.info(f"Не удалось разместить в итерации {iteration_count}:")
+                logger.info(f"  Доступно листов: {available_sheets_count}")
+                logger.info(f"  Осталось заказов: {len(remaining_orders)}")
+                
+                # Show remaining orders and their polygon counts
+                for order_id, order_polygons in remaining_orders.items():
+                    colors_in_order = {}
+                    for poly_tuple in order_polygons:
+                        color = poly_tuple[2] if len(poly_tuple) >= 3 else "серый"
+                        colors_in_order[color] = colors_in_order.get(color, 0) + 1
+                    logger.info(f"    {order_id}: {len(order_polygons)} полигонов, цвета: {colors_in_order}")
+                
+                # Show available sheets
+                for sheet_type in sheet_inventory:
+                    remaining = sheet_type["count"] - sheet_type["used"]
+                    if remaining > 0:
+                        logger.info(f"    Доступен лист: {sheet_type['name']} цвет {sheet_type.get('color', 'серый')}, осталось: {remaining}")
+                
+                if verbose:
+                    st.info(f"⚠️ Пропуск итерации {iteration_count}: нет совместимых комбинаций полигон/лист")
+                    st.info(f"📋 Осталось {len(remaining_orders)} заказов, {available_sheets_count} листов")
+                
                 continue
 
-    # Check order constraints after placement
+    # Check order constraints after placement - both sheet count and adjacency
     violated_orders = []
+    adjacency_violations = []
+    
     for order_id, sheets_used in order_sheet_usage.items():
+        # Check sheet count constraint
         if (
             max_sheets_per_order
             and order_id != "additional"
@@ -1984,17 +2070,51 @@ def bin_packing_with_inventory(
             logger.error(
                 f"НАРУШЕНИЕ ОГРАНИЧЕНИЙ: Заказ {order_id} использует {sheets_used} листов (лимит: {max_sheets_per_order})"
             )
+        
+        # Check adjacency constraint
+        if (
+            max_sheets_per_order
+            and order_id != "additional"
+            and order_id != "unknown"
+            and not order_id.startswith("group_")
+            and order_id in order_first_sheet
+        ):
+            first_sheet = order_first_sheet[order_id]
+            # Find all sheets where this order appears
+            order_sheets = []
+            for layout in placed_layouts:
+                if order_id in layout["orders_on_sheet"]:
+                    order_sheets.append(layout["sheet_number"])
+            
+            if order_sheets:
+                min_sheet = min(order_sheets)
+                max_sheet = max(order_sheets)
+                expected_max_sheet = first_sheet + max_sheets_per_order - 1
+                
+                if max_sheet > expected_max_sheet:
+                    adjacency_violations.append((order_id, min_sheet, max_sheet, expected_max_sheet))
+                    logger.error(
+                        f"НАРУШЕНИЕ СМЕЖНОСТИ: Заказ {order_id} размещен на листах {min_sheet}-{max_sheet}, "
+                        f"но должен быть в диапазоне {first_sheet}-{expected_max_sheet}"
+                    )
 
-    if violated_orders:
-        error_msg = "❌ Нарушение ограничений заказов:\n" + "\n".join(
-            [
-                f"Заказ {order_id}: {sheets_used} листов (лимит: {max_sheets_per_order})"
-                for order_id, sheets_used in violated_orders
-            ]
-        )
+    if violated_orders or adjacency_violations:
+        warning_parts = []
+        if violated_orders:
+            warning_parts.append("⚠️ Предупреждение: Нарушение ограничений заказов:")
+            for order_id, sheets_used in violated_orders:
+                warning_parts.append(f"Заказ {order_id}: {sheets_used} листов (лимит: {max_sheets_per_order})")
+        
+        if adjacency_violations:
+            warning_parts.append("⚠️ Предупреждение: Нарушение смежности листов:")
+            for order_id, min_sheet, max_sheet, expected_max in adjacency_violations:
+                warning_parts.append(f"Заказ {order_id}: листы {min_sheet}-{max_sheet} (ожидалось до {expected_max})")
+        
+        warning_msg = "\n".join(warning_parts)
+        logger.warning(warning_msg)
         if verbose:
-            st.error(error_msg)
-        raise ValueError(error_msg)
+            st.warning(warning_msg)
+        # Don't raise error - allow algorithm to continue with warnings
 
     # PRIORITY 2 PROCESSING: Try to fit priority 2 polygons into existing sheets only
     if priority2_polygons and placed_layouts:

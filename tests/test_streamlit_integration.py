@@ -259,7 +259,42 @@ class TestStreamlitIntegration:
                 len(layout["placed_polygons"]) > 0
             ), f"Лист {layout['sheet_number']} пустой"
 
-        # 13. ФИНАЛЬНЫЕ ПРОВЕРКИ СТАТИСТИКИ
+        # 13. СТРОГАЯ ПРОВЕРКА MAX_SHEETS_PER_ORDER ДЛЯ ЗАКЗАА ZAKAZ_row_20
+        # Проверяем, что конкретно заказ ZAKAZ_row_20 соблюдает ограничение смежности
+        zakaz_20_sheets = []
+        for layout in placed_layouts:
+            if "orders_on_sheet" in layout and "ZAKAZ_row_20" in layout["orders_on_sheet"]:
+                zakaz_20_sheets.append(layout["sheet_number"])
+        
+        if zakaz_20_sheets:
+            zakaz_20_sheets.sort()
+            min_sheet = min(zakaz_20_sheets)
+            max_sheet = max(zakaz_20_sheets)
+            sheet_range = max_sheet - min_sheet + 1
+            
+            # Проверяем, что заказ размещен в пределах MAX_SHEETS_PER_ORDER смежных листов
+            assert (
+                sheet_range <= MAX_SHEETS_PER_ORDER
+            ), (
+                f"Заказ ZAKAZ_row_20 нарушает ограничение смежности: "
+                f"размещен на листах {zakaz_20_sheets} (диапазон {sheet_range} > {MAX_SHEETS_PER_ORDER})"
+            )
+            
+            # Дополнительная проверка: если заказ начат на листе N, то должен закончиться не позже чем на листе N+MAX_SHEETS_PER_ORDER-1
+            expected_max_sheet = min_sheet + MAX_SHEETS_PER_ORDER - 1
+            assert (
+                max_sheet <= expected_max_sheet
+            ), (
+                f"Заказ ZAKAZ_row_20 выходит за пределы допустимого диапазона: "
+                f"начат на листе {min_sheet}, закончен на листе {max_sheet}, "
+                f"но должен был закончиться не позже листа {expected_max_sheet}"
+            )
+            
+            print(f"✅ Заказ ZAKAZ_row_20: размещен на листах {zakaz_20_sheets} (диапазон {sheet_range} листов)")
+        else:
+            print(f"⚠️ Заказ ZAKAZ_row_20 не был размещен ни на одном листе")
+
+        # 14. ФИНАЛЬНЫЕ ПРОВЕРКИ СТАТИСТИКИ
         print(f"\n=== РЕЗУЛЬТАТЫ ТЕСТА ===")
         print(f"Всего листов в наличии: {total_available_sheets}")
         print(f"Невыполненных заказов найдено: {len(all_orders)}")
@@ -270,6 +305,7 @@ class TestStreamlitIntegration:
         print(f"Всего полигонов размещено: {total_placed}")
         print(f"Полигонов не размещено: {len(unplaced_polygons)}")
         print(f"Процент размещения: {placement_rate*100:.1f}%")
+        print(f"MAX_SHEETS_PER_ORDER ограничение: {MAX_SHEETS_PER_ORDER} листов")
 
         # Проверяем что тест прошел успешно
         assert len(all_orders) == 37  # Найдено ровно 37 невыполненных заказов
