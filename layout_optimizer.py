@@ -1061,7 +1061,7 @@ def bin_packing_with_existing(
     polygons: list[tuple],
     existing_placed: list[tuple],
     sheet_size: tuple[float, float],
-    max_attempts: int = 1000,
+    max_attempts: int = 100,  # Reduced from 1000 to 100 for speed
     verbose: bool = True,
 ) -> tuple[list[tuple], list[tuple]]:
     """Bin packing that considers already placed polygons on the sheet."""
@@ -1181,7 +1181,7 @@ def bin_packing_with_existing(
 def bin_packing(
     polygons: list[tuple],
     sheet_size: tuple[float, float],
-    max_attempts: int = 1000,
+    max_attempts: int = 100,  # Reduced from 1000 to 100 for speed
     verbose: bool = True,
 ) -> tuple[list[tuple], list[tuple]]:
     """Optimize placement of complex polygons on a sheet with improved algorithm."""
@@ -1866,7 +1866,7 @@ def bin_packing_with_inventory(
                     max_sheets_per_order is not None
                     and order_id != "additional"
                     and order_id != "unknown"  # Manual uploads are not limited
-                    and not order_id.startswith("group_")  # Group uploads are not limited
+                    and not str(order_id).startswith("group_")  # Group uploads are not limited
                 )
                 
                 if not is_constrained:
@@ -1978,8 +1978,15 @@ def bin_packing_with_inventory(
                             # Track orders and remove placed polygons from remaining orders
                             additional_orders_on_sheet = set()
                             for placed_tuple in additional_placed:
-                                # Получаем order_id из placed_tuple (он должен быть в индексе 3)
-                                placed_order_id = placed_tuple[3] if len(placed_tuple) > 3 else "unknown"
+                                # Handle different tuple structures for order_id
+                                if len(placed_tuple) == 7:
+                                    # Extended format from bin_packing_with_existing: (polygon, x, y, angle, file_name, color, order_id)
+                                    placed_order_id = placed_tuple[6]
+                                elif len(placed_tuple) > 3:
+                                    # Standard format: (polygon, file_name, color, order_id)
+                                    placed_order_id = placed_tuple[3]
+                                else:
+                                    placed_order_id = "unknown"
                                 additional_orders_on_sheet.add(placed_order_id)
                                 
                                 # Update order sheet tracking
@@ -2137,6 +2144,7 @@ def bin_packing_with_inventory(
                     {
                         "sheet_number": sheet_counter,
                         "sheet_type": sheet_type["name"],
+                        "sheet_color": sheet_color,  # Add sheet color directly
                         "sheet_size": sheet_size,
                         "placed_polygons": placed,
                         "usage_percent": calculate_usage_percent(placed, sheet_size),
@@ -2256,7 +2264,7 @@ def bin_packing_with_inventory(
             max_sheets_per_order
             and order_id != "additional"
             and order_id != "unknown"  # Manual uploads are not limited
-            and not order_id.startswith("group_")  # Group uploads are not limited
+            and not str(order_id).startswith("group_")  # Group uploads are not limited
             and sheets_used > max_sheets_per_order
         ):
             violated_orders.append((order_id, sheets_used))
@@ -2269,7 +2277,7 @@ def bin_packing_with_inventory(
             max_sheets_per_order
             and order_id != "additional"
             and order_id != "unknown"
-            and not order_id.startswith("group_")
+            and not str(order_id).startswith("group_")
             and order_id in order_first_sheet
         ):
             first_sheet = order_first_sheet[order_id]
@@ -2419,14 +2427,7 @@ def bin_packing_with_inventory(
                 break
 
             sheet_size = layout["sheet_size"]
-            sheet_color = None
-            # Find sheet color by matching with inventory
-            for sheet in sheet_inventory:
-                if sheet["name"] == layout["sheet_type"]:
-                    sheet_color = sheet.get("color", "серый")
-                    break
-            if sheet_color is None:
-                sheet_color = "серый"  # fallback
+            sheet_color = layout.get("sheet_color", "серый")  # Get color directly from layout
 
             existing_placed = layout["placed_polygons"]
             current_usage = layout["usage_percent"]
@@ -2435,7 +2436,7 @@ def bin_packing_with_inventory(
                 continue
 
             logger.info(
-                f"Пытаемся добавить приоритет 2 на лист #{layout['sheet_number']} (заполнение: {current_usage:.1f}%)"
+                f"Пытаемся добавить приоритет 2 на лист #{layout['sheet_number']} (заполнение: {current_usage:.1f}%, цвет листа: {sheet_color})"
             )
 
             # Filter priority 2 polygons by color compatibility
@@ -2445,8 +2446,12 @@ def bin_packing_with_inventory(
                     poly_color = poly_tuple[2]
                 else:
                     poly_color = "серый"
+                    
+                # Skip detailed logging for speed
                 if poly_color == sheet_color:
                     compatible_priority2.append(poly_tuple)
+            
+            logger.info(f"Найдено {len(compatible_priority2)} совместимых полигонов приоритета 2 из {len(priority2_remaining)}")
 
             if not compatible_priority2:
                 logger.debug(
@@ -2657,9 +2662,13 @@ def bin_packing_with_inventory(
         successfully_redistributed = 0
         sheets_to_remove = []
         
-        # Sort low usage sheets by usage (lowest first) and high usage by usage (lowest first)
-        low_usage_sheets.sort(key=lambda x: x[2])
-        high_usage_sheets.sort(key=lambda x: x[2])
+        # Sort and limit sheets for faster processing
+        low_usage_sheets.sort(key=lambda x: x[2])  # Sort by usage (lowest first)
+        high_usage_sheets.sort(key=lambda x: x[2])  # Sort by usage (lowest first) 
+        
+        # Limit processing to first 5 low-usage sheets and first 10 high-usage sheets for speed
+        low_usage_sheets = low_usage_sheets[:5]
+        high_usage_sheets = high_usage_sheets[:10]
         
         for low_idx, low_layout, low_usage in low_usage_sheets:
             polygons_to_move = low_layout["placed_polygons"]
@@ -2673,8 +2682,13 @@ def bin_packing_with_inventory(
             # Try to place all polygons from this sheet onto other sheets
             all_moved = True
             moved_polygons = []
+            failed_attempts = 0
             
             for poly_tuple in polygons_to_move:
+                # Early exit if too many failures
+                if failed_attempts >= 5:
+                    all_moved = False
+                    break
                 moved = False
                 
                 # Try to place on compatible high-usage sheets
@@ -2689,17 +2703,26 @@ def bin_packing_with_inventory(
                     if high_usage >= 85:  # Skip nearly full sheets
                         continue
                     
-                    # Log attempt for debugging
-                    poly_order_id = poly_tuple[3] if len(poly_tuple) > 3 else "unknown"
-                    logger.info(f"    Попытка переместить {poly_order_id} на лист #{high_layout['sheet_number']} ({high_usage:.1f}%)")
+                    # Log attempt for debugging  
+                    # Handle different tuple structures: (polygon, file_name, color, order_id) vs (polygon, x, y, angle, file_name, color, order_id)
+                    if len(poly_tuple) == 7:
+                        # Extended format from bin_packing_with_existing: (polygon, x, y, angle, file_name, color, order_id)
+                        poly_order_id = poly_tuple[6]
+                        poly_filename = poly_tuple[4]
+                    else:
+                        # Standard format: (polygon, file_name, color, order_id) 
+                        poly_order_id = poly_tuple[3] if len(poly_tuple) > 3 else "unknown"
+                        poly_filename = poly_tuple[1] if len(poly_tuple) > 1 else "unknown"
+                    
+                    logger.info(f"    Попытка переместить {poly_order_id} ({poly_filename}) на лист #{high_layout['sheet_number']} ({high_usage:.1f}%)")
                     
                     existing_placed = high_layout["placed_polygons"]
                     sheet_size = high_layout["sheet_size"]
                     
                     try:
-                        # Try to add this polygon to the target sheet
+                        # Try to add this polygon to the target sheet (fast attempt)
                         additional_placed, still_remaining = bin_packing_with_existing(
-                            [poly_tuple], existing_placed, sheet_size, verbose=False
+                            [poly_tuple], existing_placed, sheet_size, max_attempts=20, verbose=False
                         )
                         
                         if additional_placed:
@@ -2717,7 +2740,12 @@ def bin_packing_with_inventory(
                                 # Convert list to set if needed
                                 placed_layouts[high_idx]["orders_on_sheet"] = set(placed_layouts[high_idx]["orders_on_sheet"])
                             
-                            if len(poly_tuple) > 3:
+                            # Add the order_id with correct indexing based on tuple structure
+                            if len(poly_tuple) == 7:
+                                # Extended format: order_id is at index 6
+                                placed_layouts[high_idx]["orders_on_sheet"].add(poly_tuple[6])
+                            elif len(poly_tuple) > 3:
+                                # Standard format: order_id is at index 3
                                 placed_layouts[high_idx]["orders_on_sheet"].add(poly_tuple[3])
                             
                             moved_polygons.append(poly_tuple)
@@ -2739,6 +2767,7 @@ def bin_packing_with_inventory(
                         continue
                 
                 if not moved:
+                    failed_attempts += 1
                     all_moved = False
                     break
             
