@@ -44,16 +44,10 @@ __all__ = [
 ]
 
 
-def get_color_for_file(filename):
+def get_color_for_file(filename: str):
     """Generate a consistent color for a given filename."""
-    # Handle case where filename might be a float64 or other non-string type
-    if isinstance(filename, (int, float)):
-        filename = str(filename)
-    elif filename is None:
-        filename = "unknown"
-    
     # Use hash of filename to generate consistent color
-    hash_object = hashlib.md5(str(filename).encode())
+    hash_object = hashlib.md5(filename.encode())
     hash_hex = hash_object.hexdigest()
 
     # Convert first 6 characters of hash to RGB
@@ -131,10 +125,6 @@ def parse_dxf_complete(file, verbose=True):
         if entity_type == "IMAGE":
             continue
 
-        # Skip HATCH entities - they are fill patterns that duplicate geometry
-        if entity_type == "HATCH":
-            continue  # Skip hatches - they cause duplication with contours
-
         entity_data = {
             "type": entity_type,
             "entity": entity,  # Store reference to original entity
@@ -148,21 +138,9 @@ def parse_dxf_complete(file, verbose=True):
         # Try to convert to polygon for layout purposes
         try:
             polygon = convert_entity_to_polygon_improved(entity)
-            # Enhanced polygon validation and filtering
-            if polygon:  # and polygon.area > 0.1:
-                # Try to fix invalid polygons using buffer(0)
-                if not polygon.is_valid:
-                    fixed_polygon = polygon.buffer(0)
-                    if fixed_polygon.is_valid:  # and fixed_polygon.area > 0.1:
-                        polygon = fixed_polygon
-                        if verbose:
-                            st.info(
-                                "   🔧 Исправлен невалидный полигон с помощью buffer(0)"
-                            )
-                    else:
-                        if verbose:
-                            st.warning("   ❌ Не удалось исправить невалидный полигон")
-                        continue
+            if (
+                polygon and polygon.is_valid and polygon.area > 0.1
+            ):  # Minimum area threshold
                 result["polygons"].append(polygon)
         except Exception as e:
             if verbose:
@@ -348,11 +326,9 @@ def convert_entity_to_polygon_improved(entity):
 def save_dxf_layout_complete(
     placed_elements, sheet_size, output_path, original_dxf_data_map=None
 ):
-    """COMPLETELY CORRECTED - Use coordinate mapping from original to transformed polygon"""
+    """Save DXF layout using coordinate mapping between original and transformed polygons"""
 
-    print(
-        f"🔧 CORRECTED save_dxf_layout_complete called with {len(placed_elements)} elements"
-    )
+    print(f"🔧 save_dxf_layout_complete called with {len(placed_elements)} elements")
     print(f"🔧 Output path: {output_path}")
     print(f"🔧 Sheet size: {sheet_size}")
 
@@ -378,402 +354,554 @@ def save_dxf_layout_complete(
             )
 
         print(
-            f"🔧 Processing {file_name}: transformed bounds = {transformed_polygon.bounds}"
+            f"🔧 Processing {file_name}: final position bounds = {transformed_polygon.bounds}"
+        )
+        print(
+            f"🔧 Applied transformations: offset=({x_offset}, {y_offset}), rotation={rotation_angle}°"
         )
 
-        # Get original DXF data
-        # Handle case where file_name might be a float64 or other non-string type
-        if isinstance(file_name, (int, float)):
-            file_name = str(file_name)
-        file_basename = os.path.basename(file_name) if file_name else str(file_name)
+        # Get original DXF data with improved key matching
+        # CRITICAL FIX: Handle duplicate filenames properly
+        file_basename = os.path.basename(file_name) if file_name else file_name
         original_data_key = None
 
         if original_dxf_data_map:
+            # First try exact match
             if file_name in original_dxf_data_map:
                 original_data_key = file_name
             elif file_basename in original_dxf_data_map:
                 original_data_key = file_basename
             else:
-                for key in original_dxf_data_map.keys():
-                    if os.path.basename(key) == file_basename:
-                        original_data_key = key
-                        break
+                # For duplicate filenames, try to match by content
+                # This is a fallback for when multiple files have same basename
+                matching_keys = [
+                    key
+                    for key in original_dxf_data_map.keys()
+                    if os.path.basename(key) == file_basename
+                ]
 
-        if original_data_key:
-            original_data = original_dxf_data_map[original_data_key]
+                if len(matching_keys) == 1:
+                    original_data_key = matching_keys[0]
+                elif len(matching_keys) > 1:
+                    # Multiple matches - this is the problem!
+                    # For now, issue a warning and use the first match
+                    print(
+                        f"⚠️  WARNING: Multiple files with name '{file_basename}' found in original_dxf_data_map"
+                    )
+                    print(f"   Available keys: {list(original_dxf_data_map.keys())}")
+                    print(f"   Using first match: {matching_keys[0]}")
+                    original_data_key = matching_keys[0]
 
-            if original_data["original_entities"] and original_data["combined_polygon"]:
-                original_polygon = original_data["combined_polygon"]
-                orig_bounds = original_polygon.bounds
-                target_bounds = transformed_polygon.bounds
+        if not original_data_key:
+            print(f"⚠️  No original_data found for {file_name}")
+            continue  # Skip this element if no original data found
 
-                # Calculate uniform scale factor to avoid distortion
-                orig_width = orig_bounds[2] - orig_bounds[0]
-                orig_height = orig_bounds[3] - orig_bounds[1]
-                target_width = target_bounds[2] - target_bounds[0]
-                target_height = target_bounds[3] - target_bounds[1]
+        original_data = original_dxf_data_map[original_data_key]
+        print(f"🔧 Using original_data_key: {original_data_key}")
 
-                # For rotated polygons, dimensions are swapped, so calculate both possibilities
-                scale_direct = (
-                    min(target_width / orig_width, target_height / orig_height)
-                    if orig_width > 0 and orig_height > 0
-                    else 1.0
-                )
-                scale_swapped = (
-                    min(target_width / orig_height, target_height / orig_width)
-                    if orig_width > 0 and orig_height > 0
-                    else 1.0
-                )
+        if not (
+            original_data["original_entities"] and original_data["combined_polygon"]
+        ):
+            print(
+                f"⚠️  No original_entities or combined_polygon found for {original_data_key}"
+            )
+            continue
 
-                # Choose the scale that makes more sense based on rotation
-                if rotation_angle % 180 == 90:  # 90° or 270° rotation
-                    scale_factor = scale_swapped
-                else:  # 0° or 180° rotation
-                    scale_factor = scale_direct
+        print(
+            f"🔧 Found {len(original_data['original_entities'])} original entities for {original_data_key}"
+        )
 
-                print(
-                    f"🔧 Rotation: {rotation_angle}°, Scale factor: {scale_factor:.3f}"
-                )
-                print(f"🔧 Original bounds: {orig_bounds}")
-                print(f"🔧 Target bounds: {target_bounds}")
+        original_polygon = original_data["combined_polygon"]
 
-                # Calculate centers
-                orig_center_x = (orig_bounds[0] + orig_bounds[2]) / 2
-                orig_center_y = (orig_bounds[1] + orig_bounds[3]) / 2
-                target_center_x = (target_bounds[0] + target_bounds[2]) / 2
-                target_center_y = (target_bounds[1] + target_bounds[3]) / 2
+        # CRITICAL FIX: Use direct coordinate mapping between original and final polygons
+        # The transformed_polygon is already correctly positioned - use it as ground truth!
+        orig_bounds = original_polygon.bounds
+        final_bounds = transformed_polygon.bounds
 
-                # For rotation calculations
-                rotation_rad = (
-                    math.radians(rotation_angle) if rotation_angle != 0 else 0
-                )
-                cos_angle = math.cos(rotation_rad) if rotation_angle != 0 else 1.0
-                sin_angle = math.sin(rotation_rad) if rotation_angle != 0 else 0.0
+        print("🔧 Coordinate mapping from original to final position:")
+        print(f"    Original bounds: {orig_bounds}")
+        print(f"    Final bounds: {final_bounds}")
 
-                for entity_data in original_data["original_entities"]:
-                    entity_type = entity_data["type"]
+        # CRITICAL: Use exact affine transformation from original bounds to final bounds
+        # This reproduces the exact same transformation applied to the polygon
 
-                    # Skip IMAGE elements to avoid artifacts
-                    if entity_type == "IMAGE":
-                        continue
+        # Calculate scale factors (should be 1.0 if no scaling, could be different if rotated)
+        orig_width = orig_bounds[2] - orig_bounds[0]
+        orig_height = orig_bounds[3] - orig_bounds[1]
+        final_width = final_bounds[2] - final_bounds[0]
+        final_height = final_bounds[3] - final_bounds[1]
 
-                    # Create a copy of the original entity
-                    new_entity = entity_data["entity"].copy()
+        print(f"    Rotation: {rotation_angle}°")
+        print(f"    Original size: {orig_width:.1f} x {orig_height:.1f}")
+        print(f"    Final size: {final_width:.1f} x {final_height:.1f}")
 
-                    # Apply transformation based on entity type
-                    if entity_type == "SPLINE":
-                        if (
-                            hasattr(new_entity, "control_points")
-                            and new_entity.control_points
-                        ):
-                            transformed_points = []
+        # Process entities in original order to maintain structure
+        print(
+            f"🔧 Starting to process {len(original_data['original_entities'])} entities..."
+        )
+        for i, entity_data in enumerate(original_data["original_entities"]):
+            entity_type = entity_data["type"]
+            print(
+                f"🔧 Processing entity {i+1}/{len(original_data['original_entities'])}: {entity_type}"
+            )
 
-                            for cp in new_entity.control_points:
-                                if hasattr(cp, "x") and hasattr(cp, "y"):
-                                    x, y = cp.x, cp.y
-                                    z = getattr(cp, "z", 0.0)
-                                elif len(cp) >= 2:
-                                    x, y = float(cp[0]), float(cp[1])
-                                    z = float(cp[2]) if len(cp) > 2 else 0.0
-                                else:
-                                    continue
+            sin_angle = 0
+            cos_angle = 1
 
-                                # Apply transformation to match the transformed_polygon exactly:
-                                # 1. Move to origin relative to original center
-                                x_rel = x - orig_center_x
-                                y_rel = y - orig_center_y
+            # Direct coordinate mapping using the same transformation as the polygon
+            def transform_point(x, y):
+                # Apply the exact same transformation sequence as apply_placement_transform:
+                # 1. Normalize to (0,0) origin
+                x_norm = x - orig_bounds[0]
+                y_norm = y - orig_bounds[1]
 
-                                # 2. Apply uniform scaling to preserve aspect ratio
-                                x_scaled = x_rel * scale_factor
-                                y_scaled = y_rel * scale_factor
+                # 2. Apply rotation around center of normalized space
+                if rotation_angle != 0:
+                    center_x = orig_width / 2
+                    center_y = orig_height / 2
 
-                                # 3. Apply rotation around origin
-                                if rotation_angle != 0:
-                                    x_rotated = (
-                                        x_scaled * cos_angle - y_scaled * sin_angle
-                                    )
-                                    y_rotated = (
-                                        x_scaled * sin_angle + y_scaled * cos_angle
-                                    )
-                                else:
-                                    x_rotated = x_scaled
-                                    y_rotated = y_scaled
+                    # Move to center
+                    x_centered = x_norm - center_x
+                    y_centered = y_norm - center_y
 
-                                # 4. Translate to final position (target center)
-                                final_x = x_rotated + target_center_x
-                                final_y = y_rotated + target_center_y
+                    # Rotate
+                    rotation_rad = math.radians(rotation_angle)
+                    cos_angle = math.cos(rotation_rad)
+                    sin_angle = math.sin(rotation_rad)
 
-                                transformed_points.append((final_x, final_y, z))
+                    x_rotated = x_centered * cos_angle - y_centered * sin_angle
+                    y_rotated = x_centered * sin_angle + y_centered * cos_angle
 
-                            if transformed_points:
-                                from ezdxf.math import Vec3
+                    # Move back from center (now in rotated space)
+                    if rotation_angle == 90 or rotation_angle == 270:
+                        # For 90/270 rotation, center changes
+                        x_norm = x_rotated + orig_height / 2
+                        y_norm = y_rotated + orig_width / 2
+                    else:
+                        x_norm = x_rotated + center_x
+                        y_norm = y_rotated + center_y
 
-                                new_control_points = [
-                                    Vec3(x, y, z) for x, y, z in transformed_points
-                                ]
-                                new_entity.control_points = new_control_points
+                # 3. Map to final bounds
+                final_x = x_norm + final_bounds[0]
+                final_y = y_norm + final_bounds[1]
 
-                    elif entity_type == "CIRCLE":
-                        # Transform circle center
-                        orig_center = new_entity.dxf.center
-                        x_rel = orig_center[0] - orig_center_x
-                        y_rel = orig_center[1] - orig_center_y
+                return final_x, final_y
 
-                        x_scaled = x_rel * scale_factor
-                        y_scaled = y_rel * scale_factor
+            if entity_type == "SPLINE":
+                new_entity = entity_data["entity"].copy()
 
-                        if rotation_angle != 0:
-                            x_rotated = x_scaled * cos_angle - y_scaled * sin_angle
-                            y_rotated = x_scaled * sin_angle + y_scaled * cos_angle
+                if hasattr(new_entity, "control_points") and new_entity.control_points:
+                    transformed_points = []
+
+                    for cp in new_entity.control_points:
+                        if hasattr(cp, "x") and hasattr(cp, "y"):
+                            x, y = cp.x, cp.y
+                            z = getattr(cp, "z", 0.0)
+                        elif len(cp) >= 2:
+                            x, y = float(cp[0]), float(cp[1])
+                            z = float(cp[2]) if len(cp) > 2 else 0.0
                         else:
-                            x_rotated = x_scaled
-                            y_rotated = y_scaled
+                            continue
 
-                        final_x = x_rotated + target_center_x
-                        final_y = y_rotated + target_center_y
+                        final_x, final_y = transform_point(x, y)
+                        transformed_points.append((final_x, final_y, z))
 
-                        new_entity.dxf.center = (
+                    if transformed_points:
+                        from ezdxf.math import Vec3
+
+                        new_control_points = [
+                            Vec3(x, y, z) for x, y, z in transformed_points
+                        ]
+                        new_entity.control_points = new_control_points
+                        new_entity.dxf.layer = entity_data["layer"]
+                        msp.add_entity(new_entity)
+
+            elif entity_type in ["TEXT", "MTEXT"]:
+                # Handle text entities
+                new_entity = entity_data["entity"].copy()
+
+                # Get text insertion point
+                if hasattr(new_entity.dxf, "insert"):
+                    insert = new_entity.dxf.insert
+                    if hasattr(insert, "x") and hasattr(insert, "y"):
+                        x, y = insert.x, insert.y
+                        final_x, final_y = transform_point(x, y)
+                        from ezdxf.math import Vec3
+
+                        new_entity.dxf.insert = Vec3(final_x, final_y, insert.z)
+                    else:
+                        x, y = insert[:2]
+                        final_x, final_y = transform_point(x, y)
+                        new_entity.dxf.insert = (
                             final_x,
                             final_y,
-                            orig_center[2] if len(orig_center) > 2 else 0,
-                        )
-                        new_entity.dxf.radius = new_entity.dxf.radius * scale_factor
-
-                    elif entity_type == "ARC":
-                        # Transform arc center
-                        orig_center = new_entity.dxf.center
-                        x_rel = orig_center[0] - orig_center_x
-                        y_rel = orig_center[1] - orig_center_y
-
-                        x_scaled = x_rel * scale_factor
-                        y_scaled = y_rel * scale_factor
-
-                        if rotation_angle != 0:
-                            x_rotated = x_scaled * cos_angle - y_scaled * sin_angle
-                            y_rotated = x_scaled * sin_angle + y_scaled * cos_angle
-                        else:
-                            x_rotated = x_scaled
-                            y_rotated = y_scaled
-
-                        final_x = x_rotated + target_center_x
-                        final_y = y_rotated + target_center_y
-
-                        new_entity.dxf.center = (
-                            final_x,
-                            final_y,
-                            orig_center[2] if len(orig_center) > 2 else 0,
-                        )
-                        new_entity.dxf.radius = new_entity.dxf.radius * scale_factor
-
-                        # Adjust angles for rotation
-                        if rotation_angle != 0:
-                            new_entity.dxf.start_angle = (
-                                new_entity.dxf.start_angle + rotation_angle
-                            ) % 360
-                            new_entity.dxf.end_angle = (
-                                new_entity.dxf.end_angle + rotation_angle
-                            ) % 360
-
-                    elif entity_type == "LWPOLYLINE":
-                        # Transform all points in the polyline
-                        points = list(new_entity.get_points())
-                        transformed_points = []
-
-                        for point in points:
-                            x, y = point[0], point[1]
-                            bulge = point[2] if len(point) > 2 else 0
-                            start_width = point[3] if len(point) > 3 else 0
-                            end_width = point[4] if len(point) > 4 else 0
-
-                            x_rel = x - orig_center_x
-                            y_rel = y - orig_center_y
-
-                            x_scaled = x_rel * scale_factor
-                            y_scaled = y_rel * scale_factor
-
-                            if rotation_angle != 0:
-                                x_rotated = x_scaled * cos_angle - y_scaled * sin_angle
-                                y_rotated = x_scaled * sin_angle + y_scaled * cos_angle
-                            else:
-                                x_rotated = x_scaled
-                                y_rotated = y_scaled
-
-                            final_x = x_rotated + target_center_x
-                            final_y = y_rotated + target_center_y
-
-                            transformed_points.append(
-                                (
-                                    final_x,
-                                    final_y,
-                                    bulge,
-                                    start_width * scale_factor,
-                                    end_width * scale_factor,
-                                )
-                            )
-
-                        # Clear existing points and add transformed ones
-                        new_entity.clear()
-                        for tp in transformed_points:
-                            new_entity.append(
-                                tp[:2],
-                                format="xyb" if len(tp) > 2 and tp[2] != 0 else "xy",
-                            )
-                            if len(tp) > 3 and (tp[3] != 0 or tp[4] != 0):
-                                new_entity[-1] = (tp[0], tp[1], tp[2], tp[3], tp[4])
-
-                    elif entity_type == "POLYLINE":
-                        # Transform all vertices in the polyline
-                        for vertex in new_entity.vertices:
-                            orig_location = vertex.dxf.location
-                            x, y = orig_location[0], orig_location[1]
-                            z = orig_location[2] if len(orig_location) > 2 else 0
-
-                            x_rel = x - orig_center_x
-                            y_rel = y - orig_center_y
-
-                            x_scaled = x_rel * scale_factor
-                            y_scaled = y_rel * scale_factor
-
-                            if rotation_angle != 0:
-                                x_rotated = x_scaled * cos_angle - y_scaled * sin_angle
-                                y_rotated = x_scaled * sin_angle + y_scaled * cos_angle
-                            else:
-                                x_rotated = x_scaled
-                                y_rotated = y_scaled
-
-                            final_x = x_rotated + target_center_x
-                            final_y = y_rotated + target_center_y
-
-                            vertex.dxf.location = (final_x, final_y, z)
-
-                    elif entity_type == "ELLIPSE":
-                        # Transform ellipse center and axes
-                        orig_center = new_entity.dxf.center
-                        x_rel = orig_center[0] - orig_center_x
-                        y_rel = orig_center[1] - orig_center_y
-
-                        x_scaled = x_rel * scale_factor
-                        y_scaled = y_rel * scale_factor
-
-                        if rotation_angle != 0:
-                            x_rotated = x_scaled * cos_angle - y_scaled * sin_angle
-                            y_rotated = x_scaled * sin_angle + y_scaled * cos_angle
-                        else:
-                            x_rotated = x_scaled
-                            y_rotated = y_scaled
-
-                        final_x = x_rotated + target_center_x
-                        final_y = y_rotated + target_center_y
-
-                        new_entity.dxf.center = (
-                            final_x,
-                            final_y,
-                            orig_center[2] if len(orig_center) > 2 else 0,
+                            insert[2] if len(insert) > 2 else 0,
                         )
 
-                        # Scale and rotate major axis
-                        orig_major_axis = new_entity.dxf.major_axis
-                        major_x_scaled = orig_major_axis[0] * scale_factor
-                        major_y_scaled = orig_major_axis[1] * scale_factor
+                # Apply rotation to text
+                if rotation_angle != 0 and hasattr(new_entity.dxf, "rotation"):
+                    new_entity.dxf.rotation = (
+                        new_entity.dxf.rotation + rotation_angle
+                    ) % 360
 
-                        if rotation_angle != 0:
-                            major_x_rotated = (
-                                major_x_scaled * cos_angle - major_y_scaled * sin_angle
+                new_entity.dxf.layer = entity_data["layer"]
+                msp.add_entity(new_entity)
+
+            elif entity_type == "CIRCLE":
+                # Handle circle entities
+                new_entity = entity_data["entity"].copy()
+
+                # Transform center (handle Vec3 objects)
+                center = new_entity.dxf.center
+                center_x, center_y = center.x, center.y
+                final_x, final_y = transform_point(center_x, center_y)
+                from ezdxf.math import Vec3
+
+                new_entity.dxf.center = Vec3(final_x, final_y, center.z)
+
+                new_entity.dxf.layer = entity_data["layer"]
+                msp.add_entity(new_entity)
+
+            elif entity_type == "ARC":
+                # Handle arc entities
+                new_entity = entity_data["entity"].copy()
+
+                # Transform center (handle Vec3 objects)
+                center = new_entity.dxf.center
+                center_x, center_y = center.x, center.y
+                final_x, final_y = transform_point(center_x, center_y)
+                from ezdxf.math import Vec3
+
+                new_entity.dxf.center = Vec3(final_x, final_y, center.z)
+
+                # Adjust angles for rotation
+                if rotation_angle != 0:
+                    new_entity.dxf.start_angle = (
+                        new_entity.dxf.start_angle + rotation_angle
+                    ) % 360
+                    new_entity.dxf.end_angle = (
+                        new_entity.dxf.end_angle + rotation_angle
+                    ) % 360
+
+                new_entity.dxf.layer = entity_data["layer"]
+                msp.add_entity(new_entity)
+
+            elif entity_type == "LWPOLYLINE":
+                # Handle lightweight polylines
+                new_entity = entity_data["entity"].copy()
+
+                # Transform all vertices
+                if hasattr(new_entity, "vertices"):
+                    new_vertices = []
+                    for vertex in new_entity.vertices:
+                        if len(vertex) >= 2:
+                            x, y = vertex[:2]
+                            final_x, final_y = transform_point(x, y)
+                            new_vertex = (
+                                (final_x, final_y) + tuple(vertex[2:])
+                                if len(vertex) > 2
+                                else (final_x, final_y)
                             )
-                            major_y_rotated = (
-                                major_x_scaled * sin_angle + major_y_scaled * cos_angle
-                            )
-                        else:
-                            major_x_rotated = major_x_scaled
-                            major_y_rotated = major_y_scaled
+                            new_vertices.append(new_vertex)
+                    new_entity.vertices = new_vertices
 
-                        new_entity.dxf.major_axis = (
-                            major_x_rotated,
-                            major_y_rotated,
-                            orig_major_axis[2] if len(orig_major_axis) > 2 else 0,
-                        )
-                        new_entity.dxf.ratio = (
-                            new_entity.dxf.ratio
-                        )  # Keep ratio unchanged
+                new_entity.dxf.layer = entity_data["layer"]
+                msp.add_entity(new_entity)
 
-                    elif entity_type in ["LINE", "POINT", "TEXT", "MTEXT", "DIMENSION"]:
-                        # For other common entity types, apply basic transformation
-                        # This is a simplified approach - you might need more specific handling
-                        if hasattr(new_entity.dxf, "location"):
-                            orig_location = new_entity.dxf.location
-                            x, y = orig_location[0], orig_location[1]
-                            z = orig_location[2] if len(orig_location) > 2 else 0
+            elif entity_type == "LINE":
+                # Handle line entities
+                new_entity = entity_data["entity"].copy()
 
-                            x_rel = x - orig_center_x
-                            y_rel = y - orig_center_y
+                # Transform start and end points (handle Vec3 objects)
+                start = new_entity.dxf.start
+                end = new_entity.dxf.end
 
-                            x_scaled = x_rel * scale_factor
-                            y_scaled = y_rel * scale_factor
+                if hasattr(start, "x") and hasattr(start, "y"):
+                    start_x, start_y = start.x, start.y
+                    final_start_x, final_start_y = transform_point(start_x, start_y)
+                    from ezdxf.math import Vec3
 
-                            if rotation_angle != 0:
-                                x_rotated = x_scaled * cos_angle - y_scaled * sin_angle
-                                y_rotated = x_scaled * sin_angle + y_scaled * cos_angle
-                            else:
-                                x_rotated = x_scaled
-                                y_rotated = y_scaled
-
-                            final_x = x_rotated + target_center_x
-                            final_y = y_rotated + target_center_y
-
-                            new_entity.dxf.location = (final_x, final_y, z)
-
-                        elif hasattr(new_entity.dxf, "start") and hasattr(
-                            new_entity.dxf, "end"
-                        ):
-                            # Handle LINE entities
-                            for attr_name in ["start", "end"]:
-                                orig_point = getattr(new_entity.dxf, attr_name)
-                                x, y = orig_point[0], orig_point[1]
-                                z = orig_point[2] if len(orig_point) > 2 else 0
-
-                                x_rel = x - orig_center_x
-                                y_rel = y - orig_center_y
-
-                                x_scaled = x_rel * scale_factor
-                                y_scaled = y_rel * scale_factor
-
-                                if rotation_angle != 0:
-                                    x_rotated = (
-                                        x_scaled * cos_angle - y_scaled * sin_angle
-                                    )
-                                    y_rotated = (
-                                        x_scaled * sin_angle + y_scaled * cos_angle
-                                    )
-                                else:
-                                    x_rotated = x_scaled
-                                    y_rotated = y_scaled
-
-                                final_x = x_rotated + target_center_x
-                                final_y = y_rotated + target_center_y
-
-                                setattr(
-                                    new_entity.dxf, attr_name, (final_x, final_y, z)
-                                )
-
-                    # Set layer and add to modelspace
-                    new_entity.dxf.layer = entity_data["layer"]
-
-                    # Set color: keep red range as is, make everything else black (7)
-                    original_color = entity_data.get("color", 256)
-
-                    # Check if color is in red range: 1, 10-19, 240-255
-                    is_red = (
-                        original_color in [1, 6]
-                        or 10 <= original_color <= 26
-                        or 190 <= original_color < 250
+                    new_entity.dxf.start = Vec3(final_start_x, final_start_y, start.z)
+                else:
+                    start_x, start_y = start[:2]
+                    final_start_x, final_start_y = transform_point(start_x, start_y)
+                    new_entity.dxf.start = (
+                        final_start_x,
+                        final_start_y,
+                        start[2] if len(start) > 2 else 0,
                     )
 
-                    if is_red:
-                        new_entity.dxf.color = 1  # Set the one and only red color
-                    else:
-                        new_entity.dxf.color = 0  # Make everything else black
+                if hasattr(end, "x") and hasattr(end, "y"):
+                    end_x, end_y = end.x, end.y
+                    final_end_x, final_end_y = transform_point(end_x, end_y)
+                    from ezdxf.math import Vec3
 
+                    new_entity.dxf.end = Vec3(final_end_x, final_end_y, end.z)
+                else:
+                    end_x, end_y = end[:2]
+                    final_end_x, final_end_y = transform_point(end_x, end_y)
+                    new_entity.dxf.end = (
+                        final_end_x,
+                        final_end_y,
+                        end[2] if len(end) > 2 else 0,
+                    )
+
+                new_entity.dxf.layer = entity_data["layer"]
+                msp.add_entity(new_entity)
+
+            elif entity_type == "ELLIPSE":
+                # Handle ellipse entities (including circles represented as ellipses)
+                new_entity = entity_data["entity"].copy()
+
+                # Transform center (handle Vec3 objects)
+                center = new_entity.dxf.center
+                center_x, center_y = center.x, center.y
+                final_x, final_y = transform_point(center_x, center_y)
+                from ezdxf.math import Vec3
+
+                new_entity.dxf.center = Vec3(final_x, final_y, center.z)
+
+                # Transform major axis vector
+                if hasattr(new_entity.dxf, "major_axis") and rotation_angle != 0:
+                    major_axis = new_entity.dxf.major_axis
+                    # Rotate major axis vector
+                    major_x, major_y = major_axis.x, major_axis.y
+                    rotated_major_x = major_x * cos_angle - major_y * sin_angle
+                    rotated_major_y = major_x * sin_angle + major_y * cos_angle
+                    new_entity.dxf.major_axis = Vec3(
+                        rotated_major_x, rotated_major_y, major_axis.z
+                    )
+
+                new_entity.dxf.layer = entity_data["layer"]
+                msp.add_entity(new_entity)
+
+            elif entity_type == "POLYLINE":
+                # Handle polyline entities with vertices
+                new_entity = entity_data["entity"].copy()
+
+                # Transform all vertices
+                if hasattr(new_entity, "vertices"):
+                    transformed_vertices = []
+                    for vertex in new_entity.vertices:
+                        if hasattr(vertex.dxf, "location"):
+                            x, y = vertex.dxf.location[:2]
+                            final_x, final_y = transform_point(x, y)
+                            vertex.dxf.location = (
+                                final_x,
+                                final_y,
+                                vertex.dxf.location[2]
+                                if len(vertex.dxf.location) > 2
+                                else 0,
+                            )
+                        transformed_vertices.append(vertex)
+                    new_entity.vertices = transformed_vertices
+
+                new_entity.dxf.layer = entity_data["layer"]
+                msp.add_entity(new_entity)
+
+            elif entity_type == "POINT":
+                # Handle point entities
+                new_entity = entity_data["entity"].copy()
+
+                # Transform location (handle Vec3 objects)
+                if hasattr(new_entity.dxf, "location"):
+                    location = new_entity.dxf.location
+                    if hasattr(location, "x") and hasattr(location, "y"):
+                        x, y = location.x, location.y
+                        final_x, final_y = transform_point(x, y)
+                        from ezdxf.math import Vec3
+
+                        new_entity.dxf.location = Vec3(final_x, final_y, location.z)
+                    else:
+                        x, y = location[:2]
+                        final_x, final_y = transform_point(x, y)
+                        new_entity.dxf.location = (
+                            final_x,
+                            final_y,
+                            location[2] if len(location) > 2 else 0,
+                        )
+
+                new_entity.dxf.layer = entity_data["layer"]
+                msp.add_entity(new_entity)
+
+            elif entity_type == "INSERT":
+                # Handle insert entities (blocks)
+                new_entity = entity_data["entity"].copy()
+
+                # Transform insertion point (handle Vec3 objects)
+                if hasattr(new_entity.dxf, "insert"):
+                    insert = new_entity.dxf.insert
+                    if hasattr(insert, "x") and hasattr(insert, "y"):
+                        x, y = insert.x, insert.y
+                        final_x, final_y = transform_point(x, y)
+                        from ezdxf.math import Vec3
+
+                        new_entity.dxf.insert = Vec3(final_x, final_y, insert.z)
+                    else:
+                        x, y = insert[:2]
+                        final_x, final_y = transform_point(x, y)
+                        new_entity.dxf.insert = (
+                            final_x,
+                            final_y,
+                            insert[2] if len(insert) > 2 else 0,
+                        )
+
+                # Apply rotation to block
+                if rotation_angle != 0 and hasattr(new_entity.dxf, "rotation"):
+                    new_entity.dxf.rotation = (
+                        new_entity.dxf.rotation + rotation_angle
+                    ) % 360
+
+                new_entity.dxf.layer = entity_data["layer"]
+                msp.add_entity(new_entity)
+
+            elif entity_type == "IMAGE":
+                # Skip IMAGE elements to avoid artifacts
+                continue
+
+            else:
+                # Handle other entity types with basic transformation
+                # This ensures that no elements are lost and basic transformations are applied
+                try:
+                    new_entity = entity_data["entity"].copy()
+
+                    # Try to apply basic transformations if entity has common attributes
+                    # This is a fallback for any entity types not explicitly handled above
+
+                    # Check for common location attributes and transform them
+                    if hasattr(new_entity.dxf, "center"):
+                        # Has center point (like CIRCLE, ELLIPSE variants)
+                        center = new_entity.dxf.center
+                        if hasattr(center, "x") and hasattr(center, "y"):
+                            # Vec3 object
+                            center_x, center_y = center.x, center.y
+                            final_x, final_y = transform_point(center_x, center_y)
+                            from ezdxf.math import Vec3
+
+                            new_entity.dxf.center = Vec3(final_x, final_y, center.z)
+                        else:
+                            # Tuple/list object
+                            center_x, center_y = center[:2]
+                            final_x, final_y = transform_point(center_x, center_y)
+                            new_entity.dxf.center = (
+                                final_x,
+                                final_y,
+                                center[2] if len(center) > 2 else 0,
+                            )
+
+                    elif hasattr(new_entity.dxf, "location"):
+                        # Has location point
+                        location = new_entity.dxf.location
+                        if hasattr(location, "x") and hasattr(location, "y"):
+                            # Vec3 object
+                            x, y = location.x, location.y
+                            final_x, final_y = transform_point(x, y)
+                            from ezdxf.math import Vec3
+
+                            new_entity.dxf.location = Vec3(final_x, final_y, location.z)
+                        else:
+                            # Tuple/list object
+                            x, y = location[:2]
+                            final_x, final_y = transform_point(x, y)
+                            new_entity.dxf.location = (
+                                final_x,
+                                final_y,
+                                location[2] if len(location) > 2 else 0,
+                            )
+
+                    elif hasattr(new_entity.dxf, "insert"):
+                        # Has insertion point
+                        insert = new_entity.dxf.insert
+                        if hasattr(insert, "x") and hasattr(insert, "y"):
+                            # Vec3 object
+                            x, y = insert.x, insert.y
+                            final_x, final_y = transform_point(x, y)
+                            from ezdxf.math import Vec3
+
+                            new_entity.dxf.insert = Vec3(final_x, final_y, insert.z)
+                        else:
+                            # Tuple/list object
+                            x, y = insert[:2]
+                            final_x, final_y = transform_point(x, y)
+                            new_entity.dxf.insert = (
+                                final_x,
+                                final_y,
+                                insert[2] if len(insert) > 2 else 0,
+                            )
+
+                    elif hasattr(new_entity.dxf, "start") and hasattr(
+                        new_entity.dxf, "end"
+                    ):
+                        # Has start and end points (like LINE variants)
+                        start = new_entity.dxf.start
+                        end = new_entity.dxf.end
+
+                        # Handle start point
+                        if hasattr(start, "x") and hasattr(start, "y"):
+                            start_x, start_y = start.x, start.y
+                            final_start_x, final_start_y = transform_point(
+                                start_x, start_y
+                            )
+                            from ezdxf.math import Vec3
+
+                            new_entity.dxf.start = Vec3(
+                                final_start_x, final_start_y, start.z
+                            )
+                        else:
+                            start_x, start_y = start[:2]
+                            final_start_x, final_start_y = transform_point(
+                                start_x, start_y
+                            )
+                            new_entity.dxf.start = (
+                                final_start_x,
+                                final_start_y,
+                                start[2] if len(start) > 2 else 0,
+                            )
+
+                        # Handle end point
+                        if hasattr(end, "x") and hasattr(end, "y"):
+                            end_x, end_y = end.x, end.y
+                            final_end_x, final_end_y = transform_point(end_x, end_y)
+                            from ezdxf.math import Vec3
+
+                            new_entity.dxf.end = Vec3(final_end_x, final_end_y, end.z)
+                        else:
+                            end_x, end_y = end[:2]
+                            final_end_x, final_end_y = transform_point(end_x, end_y)
+                            new_entity.dxf.end = (
+                                final_end_x,
+                                final_end_y,
+                                end[2] if len(end) > 2 else 0,
+                            )
+
+                    # Apply rotation to entities that support it
+                    if rotation_angle != 0 and hasattr(new_entity.dxf, "rotation"):
+                        new_entity.dxf.rotation = (
+                            new_entity.dxf.rotation + rotation_angle
+                        ) % 360
+                    elif rotation_angle != 0 and hasattr(new_entity.dxf, "angle"):
+                        new_entity.dxf.angle = (
+                            new_entity.dxf.angle + rotation_angle
+                        ) % 360
+
+                    new_entity.dxf.layer = entity_data["layer"]
                     msp.add_entity(new_entity)
+                    print(
+                        f"✅ Обработан элемент типа {entity_type} с базовой трансформацией"
+                    )
+
+                except Exception as e:
+                    print(f"⚠️ Не удалось скопировать элемент типа {entity_type}: {e}")
+                    # Try to copy without transformation as last resort
+                    try:
+                        new_entity = entity_data["entity"].copy()
+                        new_entity.dxf.layer = entity_data["layer"]
+                        msp.add_entity(new_entity)
+                        print(f"⚠️ Элемент {entity_type} скопирован без трансформации")
+                    except Exception as e2:
+                        print(
+                            f"❌ Полностью не удалось скопировать элемент {entity_type}: {e2}"
+                        )
 
     # Save the document
     doc.saveas(output_path)
@@ -1345,8 +1473,8 @@ def bin_packing(
                     if not (
                         test_bounds[0] >= -0.1
                         and test_bounds[1] >= -0.1
-                        and test_bounds[2] <= sheet_width_mm + 0.1
-                        and test_bounds[3] <= sheet_height_mm + 0.1
+                        and test_bounds[2] <= sheet_width_mm
+                        and test_bounds[3] <= sheet_height_mm
                     ):
                         continue
 
@@ -1449,7 +1577,7 @@ def find_bottom_left_position_with_obstacles(
     # Test each position
     for x, y in candidate_positions:
         # OPTIMIZATION: Fast boundary pre-check without polygon creation
-        if x + poly_width > sheet_width + 0.1 or y + poly_height > sheet_height + 0.1:
+        if x + poly_width > sheet_width or y + poly_height > sheet_height:
             continue
         if x < -0.1 or y < -0.1:
             continue
@@ -1468,8 +1596,8 @@ def find_bottom_left_position_with_obstacles(
         if (
             test_bounds[0] < -0.1
             or test_bounds[1] < -0.1
-            or test_bounds[2] > sheet_width + 0.1
-            or test_bounds[3] > sheet_height + 0.1
+            or test_bounds[2] > sheet_width
+            or test_bounds[3] > sheet_height
         ):
             continue
 
@@ -1557,8 +1685,8 @@ def find_bottom_left_position(polygon, placed_polygons, sheet_width, sheet_heigh
         if (
             test_bounds[0] < -0.1
             or test_bounds[1] < -0.1
-            or test_bounds[2] > sheet_width + 0.1
-            or test_bounds[3] > sheet_height + 0.1
+            or test_bounds[2] > sheet_width
+            or test_bounds[3] > sheet_height
         ):
             continue
 
@@ -1627,7 +1755,6 @@ def bin_packing_with_inventory(
     available_sheets: list[dict],
     verbose: bool = True,
     max_sheets_per_order: int = None,
-    progress_callback=None,
 ) -> tuple[list[dict], list[tuple]]:
     """Optimize placement of polygons on available sheets with inventory tracking."""
     logger.info("=== НАЧАЛО bin_packing_with_inventory ===")
@@ -1651,49 +1778,28 @@ def bin_packing_with_inventory(
         if max_sheets_per_order:
             st.info(f"Ограничение: максимум {max_sheets_per_order} листов на заказ")
 
-    # Group polygons by order_id and separate by priority
-    logger.info("Группировка полигонов по order_id и приоритету...")
+    # Group polygons by order_id
+    logger.info("Группировка полигонов по order_id...")
     order_groups = {}
-    priority2_polygons = []  # Polygons with priority 2 for later processing
-
     for polygon_tuple in polygons:
-        if (
-            len(polygon_tuple) >= 5
-        ):  # Extended format with color, order_id, and priority
-            polygon, name, color, order_id, priority = polygon_tuple[:5]
-        elif len(polygon_tuple) >= 4:  # Format with color and order_id
+        if len(polygon_tuple) >= 4:  # Extended format with color and order_id
             polygon, name, color, order_id = polygon_tuple[:4]
-            priority = 1  # Default priority
         elif len(polygon_tuple) >= 3:  # Format with color
             polygon, name, color = polygon_tuple[:3]
             order_id = "unknown"
-            priority = 1  # Default priority
         else:  # Old format without color
             polygon, name = polygon_tuple[:2]
             color = "серый"
             order_id = "unknown"
-            priority = 1  # Default priority
 
-        # Separate priority 2 polygons for later processing
-        if priority == 2:
-            priority2_polygons.append(polygon_tuple)
-            logger.debug(f"Полигон {name} отложен для приоритета 2 (заполнение пустот)")
-        else:
-            # Process priority 1 and Excel files normally
-            if order_id not in order_groups:
-                order_groups[order_id] = []
-                logger.debug(f"Создана новая группа для заказа: {order_id}")
-            order_groups[order_id].append(polygon_tuple)
+        if order_id not in order_groups:
+            order_groups[order_id] = []
+            logger.debug(f"Создана новая группа для заказа: {order_id}")
+        order_groups[order_id].append(polygon_tuple)
 
-    logger.info(
-        f"Группировка завершена: {len(order_groups)} уникальных заказов, {len(priority2_polygons)} полигонов приоритета 2"
-    )
+    logger.info(f"Группировка завершена: {len(order_groups)} уникальных заказов")
     for order_id, group in order_groups.items():
         logger.info(f"  • Заказ {order_id}: {len(group)} файлов")
-    if priority2_polygons:
-        logger.info(
-            f"  • Приоритет 2 (заполнение пустот): {len(priority2_polygons)} файлов"
-        )
 
     if verbose:
         st.info(f"Найдено {len(order_groups)} уникальных заказов для размещения:")
@@ -1713,28 +1819,7 @@ def bin_packing_with_inventory(
         f"Используем упрощенный эффективный алгоритм: {len(order_groups)} заказов"
     )
 
-    # Check if we only have priority 2 polygons
-    if not order_groups and priority2_polygons:
-        logger.info(
-            f"Только файлы приоритета 2: {len(priority2_polygons)} файлов не размещаются (новые листы не создаются)"
-        )
-        if verbose:
-            st.warning(
-                f"⚠️ Только файлы приоритета 2: {len(priority2_polygons)} файлов не размещаются (новые листы не создаются)"
-            )
-        all_unplaced.extend(priority2_polygons)
-        
-        # Progress update for early return
-        if progress_callback:
-            progress_callback(100, "Завершено: только файлы приоритета 2 (не размещены)")
-        
-        return placed_layouts, all_unplaced
-
-    # NEW LOGIC: Priority queue for orders based on MAX_SHEETS_PER_ORDER constraint
-    # Track which order was placed first and its starting sheet
-    order_first_sheet = {}  # order_id -> first_sheet_number
-    
-    # Process orders using priority queue logic
+    # Process orders one by one, but allow filling sheets with multiple orders
     remaining_orders = dict(order_groups)  # Copy to modify
     max_iterations = max(
         100, len(remaining_orders) * 50
@@ -1749,91 +1834,6 @@ def bin_packing_with_inventory(
         logger.info(f"Остается заказов: {len(remaining_orders)}")
         for order_id, polygons in remaining_orders.items():
             logger.info(f"  {order_id}: {len(polygons)} полигонов")
-        
-        # ENHANCED STRATEGY: Try to fill existing sheets FIRST before creating new ones
-        # ОТКЛЮЧЕНО: старая логика дозаполнения - теперь используем новый алгоритм выше
-        if False and placed_layouts:  # Only if we have existing sheets
-            logger.info("🔄 ПРОВЕРЯЕМ ДОЗАПОЛНЕНИЕ СУЩЕСТВУЮЩИХ ЛИСТОВ")
-            
-            # Find single-polygon orders that can be added to existing sheets
-            single_polygon_orders = {
-                order_id: order_polygons
-                for order_id, order_polygons in remaining_orders.items()
-                if len(order_polygons) == 1
-            }
-            
-            if single_polygon_orders:
-                logger.info(f"Найдено {len(single_polygon_orders)} однополигонных заказов для дозаполнения")
-                
-                filled_orders = 0
-                for order_id, order_polygons in single_polygon_orders.items():
-                    polygon_tuple = order_polygons[0]
-                    color = polygon_tuple[2] if len(polygon_tuple) >= 3 else "серый"
-                    
-                    # Try to place this single polygon on existing sheets with same color
-                    placed_successfully = False
-                    for layout_idx, existing_layout in enumerate(placed_layouts):
-                        sheet_color = existing_layout.get("sheet_color", "серый")
-                        if color != sheet_color:
-                            continue
-                            
-                        current_usage = existing_layout.get("usage_percent", 0)
-                        if current_usage >= 85:  # Skip nearly full sheets
-                            continue
-                            
-                        sheet_size = existing_layout["sheet_size"]
-                        existing_placed = existing_layout["placed_polygons"]
-                        
-                        logger.info(f"Пытаемся дозаполнить лист #{existing_layout['sheet_number']} заказом {order_id}")
-                        
-                        try:
-                            additional_placed, still_remaining = bin_packing_with_existing(
-                                [polygon_tuple], existing_placed, sheet_size, verbose=False
-                            )
-                            
-                            if additional_placed:
-                                # Update existing layout
-                                placed_layouts[layout_idx]["placed_polygons"] = existing_placed + additional_placed
-                                new_usage = calculate_usage_percent(
-                                    placed_layouts[layout_idx]["placed_polygons"], sheet_size
-                                )
-                                placed_layouts[layout_idx]["usage_percent"] = new_usage
-                                
-                                # Update orders_on_sheet set
-                                if "orders_on_sheet" not in placed_layouts[layout_idx]:
-                                    placed_layouts[layout_idx]["orders_on_sheet"] = set()
-                                placed_layouts[layout_idx]["orders_on_sheet"].add(order_id)
-                                
-                                # Track sheet usage for this order
-                                if order_id not in order_sheet_usage:
-                                    order_sheet_usage[order_id] = 0
-                                order_sheet_usage[order_id] = 1
-                                
-                                # Track order first sheet
-                                if order_id not in order_first_sheet:
-                                    order_first_sheet[order_id] = existing_layout['sheet_number']
-                                
-                                filled_orders += 1
-                                placed_successfully = True
-                                
-                                logger.info(
-                                    f"✅ ДОЗАПОЛНЕНИЕ УСПЕШНО: Заказ {order_id} размещен на лист #{existing_layout['sheet_number']} ({current_usage:.1f}% → {new_usage:.1f}%)"
-                                )
-                                break
-                        except Exception as e:
-                            logger.debug(f"Не удалось дозаполнить лист #{existing_layout['sheet_number']}: {e}")
-                            continue
-                    
-                    if placed_successfully:
-                        # Remove this order from remaining_orders
-                        del remaining_orders[order_id]
-                
-                if filled_orders > 0:
-                    logger.info(f"Дозаполнение завершено: {filled_orders} заказов размещено на существующих листах")
-                    placed_on_current_sheet = True
-                    continue  # Skip to next iteration, don't create new sheets
-        
-        # If no orders were filled by existing sheets, proceed with normal sheet creation
 
         if iteration_count > max_iterations:
             logger.error(
@@ -1850,189 +1850,40 @@ def bin_packing_with_inventory(
 
             sheet_size = (sheet_type["width"], sheet_type["height"])
             sheet_color = sheet_type.get("color", "серый")
-            
-            # Calculate which sheet number this would be
-            next_sheet_number = sheet_counter + 1
-
-            # NEW APPROACH: Reserve sheets for started orders to guarantee completion
-            # Step 1: Check which started orders need priority on this sheet
-            priority_orders = []
-            blocked_orders = []
-            new_orders = []
-            
-            for order_id, order_polygons in remaining_orders.items():
-                # Skip orders that don't apply to MAX_SHEETS_PER_ORDER constraint
-                is_constrained = (
-                    max_sheets_per_order is not None
-                    and order_id != "additional"
-                    and order_id != "unknown"  # Manual uploads are not limited
-                    and not order_id.startswith("group_")  # Group uploads are not limited
-                )
-                
-                if not is_constrained:
-                    # Unconstrained orders can be placed anytime
-                    new_orders.append((order_id, order_polygons))
-                    continue
-                
-                if order_id in order_first_sheet:
-                    # Order already started - check if within range
-                    first_sheet = order_first_sheet[order_id]
-                    max_allowed_sheet = first_sheet + max_sheets_per_order - 1
-                    
-                    if next_sheet_number <= max_allowed_sheet:
-                        # Within range - MAXIMUM priority (must complete this order)
-                        priority_orders.append((order_id, order_polygons))
-                        logger.debug(
-                            f"Заказ {order_id}: МАКСИМАЛЬНЫЙ приоритет (листы {first_sheet}-{max_allowed_sheet}, текущий {next_sheet_number})"
-                        )
-                    else:
-                        # Outside range - blocked from starting new placement
-                        blocked_orders.append(order_id)
-                        logger.debug(
-                            f"Заказ {order_id}: ЗАБЛОКИРОВАН (вне диапазона {first_sheet}-{max_allowed_sheet}, текущий {next_sheet_number})"
-                        )
-                else:
-                    # New order - can start only if no priority orders need this sheet
-                    new_orders.append((order_id, order_polygons))
-            
-            # PRIORITY STRATEGY: If there are started orders within range, give them ALL the space
-            if priority_orders:
-                # Only consider priority orders - they get the entire sheet
-                orders_to_consider = priority_orders
-                logger.info(
-                    f"Лист {next_sheet_number}: РЕЖИМ ПРИОРИТЕТА - {len(priority_orders)} начатых заказов"
-                )
-            else:
-                # No priority orders - allow new orders to start  
-                # IMPROVED STRATEGY: Sort new orders by carpet count (descending)
-                # Orders with more carpets should be processed first as they are harder to fit within MAX_SHEETS_PER_ORDER constraint
-                new_orders_sorted = sorted(new_orders, key=lambda x: len(x[1]), reverse=True)
-                orders_to_consider = new_orders_sorted
-                logger.info(
-                    f"Лист {next_sheet_number}: Обычный режим - {len(new_orders_sorted)} новых заказов (отсортированы по убыванию количества ковров)"
-                )
-                # Log order sorting for debugging
-                for order_id, order_polygons in new_orders_sorted[:5]:  # Show top 5
-                    logger.debug(f"  Заказ {order_id}: {len(order_polygons)} ковров")
-                if len(new_orders_sorted) > 5:
-                    logger.debug(f"  ... еще {len(new_orders_sorted) - 5} заказов")
 
             # Collect polygons from orders that can fit on this sheet
             compatible_polygons = []
             orders_to_try = []
 
-            for order_id, order_polygons in orders_to_consider:
-                # Filter polygons by color
-                color_matched_polygons = []
-                for polygon_tuple in order_polygons:
-                    if len(polygon_tuple) >= 3:
-                        color = polygon_tuple[2]
-                    else:
-                        color = "серый"
+            for order_id, order_polygons in remaining_orders.items():
+                # Check if this order can still use more sheets
+                if (
+                    max_sheets_per_order is None
+                    or order_id == "additional"
+                    or order_id == "unknown"  # Manual uploads are not limited
+                    or order_id.startswith("group_")  # Group uploads are not limited
+                    or order_sheet_usage[order_id] < max_sheets_per_order
+                ):
+                    # Filter polygons by color
+                    color_matched_polygons = []
+                    for polygon_tuple in order_polygons:
+                        if len(polygon_tuple) >= 3:
+                            color = polygon_tuple[2]
+                        else:
+                            color = "серый"
 
-                    if color == sheet_color:
-                        color_matched_polygons.append(polygon_tuple)
+                        if color == sheet_color:
+                            color_matched_polygons.append(polygon_tuple)
 
-                if color_matched_polygons:
-                    compatible_polygons.extend(color_matched_polygons)
-                    orders_to_try.append(order_id)
+                    if color_matched_polygons:
+                        compatible_polygons.extend(color_matched_polygons)
+                        orders_to_try.append(order_id)
 
             if not compatible_polygons:
                 logger.debug(
                     f"Нет совместимых полигонов для листа {sheet_type['name']} цвета {sheet_color}"
                 )
                 continue  # No compatible polygons for this sheet color
-
-            # NEW STRATEGY: Try to fill existing sheets BEFORE creating a new one
-            filled_existing_sheet = False
-            logger.info("🚀 НОВЫЙ АЛГОРИТМ: Попытка дозаполнить существующие листы")
-            
-            # Try to add compatible polygons to existing sheets of the same color first
-            for layout_idx, existing_layout in enumerate(placed_layouts):
-                if existing_layout.get("sheet_color") == sheet_color:
-                    current_usage = existing_layout.get("usage_percent", 0)
-                    
-                    # Skip nearly full sheets (>90%) to avoid tiny gaps
-                    if current_usage >= 90:
-                        continue
-                        
-                    existing_placed = existing_layout["placed_polygons"]
-                    sheet_size = existing_layout["sheet_size"]
-                    
-                    logger.debug(f"Пытаемся дозаполнить лист #{existing_layout['sheet_number']} (заполнение: {current_usage:.1f}%)")
-                    
-                    try:
-                        additional_placed, still_remaining = bin_packing_with_existing(
-                            compatible_polygons, existing_placed, sheet_size, verbose=False
-                        )
-                        
-                        if additional_placed:
-                            logger.info(f"✅ ДОЗАПОЛНЕНИЕ: Лист #{existing_layout['sheet_number']} получил +{len(additional_placed)} полигонов ({current_usage:.1f}% → {calculate_usage_percent(existing_placed + additional_placed, sheet_size):.1f}%)")
-                            
-                            # Update existing layout
-                            placed_layouts[layout_idx]["placed_polygons"] = existing_placed + additional_placed
-                            placed_layouts[layout_idx]["usage_percent"] = calculate_usage_percent(
-                                placed_layouts[layout_idx]["placed_polygons"], sheet_size
-                            )
-                            
-                            # Track orders and remove placed polygons from remaining orders
-                            additional_orders_on_sheet = set()
-                            for placed_tuple in additional_placed:
-                                # Получаем order_id из placed_tuple (он должен быть в индексе 3)
-                                placed_order_id = placed_tuple[3] if len(placed_tuple) > 3 else "unknown"
-                                additional_orders_on_sheet.add(placed_order_id)
-                                
-                                # Update order sheet tracking
-                                if placed_order_id not in order_sheet_usage:
-                                    order_sheet_usage[placed_order_id] = 0
-                                if placed_order_id not in order_first_sheet:
-                                    order_first_sheet[placed_order_id] = existing_layout['sheet_number']
-                            
-                            # Remove placed polygons from compatible_polygons for next iterations
-                            # Используем более точное сравнение по всем полям кортежа
-                            placed_polygons_set = set(additional_placed)
-                            compatible_polygons = [p for p in compatible_polygons if p not in placed_polygons_set]
-                            
-                            # Update remaining orders - remove empty orders or reduce polygon counts
-                            for order_id in list(remaining_orders.keys()):
-                                if order_id in additional_orders_on_sheet:
-                                    # Count how many polygons from this order were placed
-                                    placed_from_order = [p for p in additional_placed if len(p) > 3 and p[3] == order_id]
-                                    
-                                    # Remove exactly those polygons that were placed
-                                    for placed_poly in placed_from_order:
-                                        for orig_tuple in remaining_orders[order_id][:]:
-                                            # Более точное сравнение: проверяем полигон, имя файла и order_id
-                                            if (len(orig_tuple) > 3 and len(placed_poly) > 3 and 
-                                                orig_tuple[1] == placed_poly[1] and orig_tuple[3] == placed_poly[3]):
-                                                remaining_orders[order_id].remove(orig_tuple)
-                                                break
-                                    
-                                    # Remove empty orders
-                                    if not remaining_orders[order_id]:
-                                        logger.info(f"  Заказ {order_id} полностью размещен (дозаполнение)")
-                                        del remaining_orders[order_id]
-                            
-                            # Update orders on this sheet
-                            if "orders_on_sheet" not in placed_layouts[layout_idx]:
-                                placed_layouts[layout_idx]["orders_on_sheet"] = set()
-                            placed_layouts[layout_idx]["orders_on_sheet"].update(additional_orders_on_sheet)
-                            
-                            filled_existing_sheet = True
-                            placed_on_current_sheet = True
-                            
-                            if verbose:
-                                st.success(f"✅ Дозаполнен лист #{existing_layout['sheet_number']}: +{len(additional_placed)} деталей")
-                            
-                            break  # Found space, don't need to create new sheet yet
-                            
-                    except Exception as e:
-                        logger.debug(f"Не удалось дозаполнить лист #{existing_layout['sheet_number']}: {e}")
-                        continue
-            
-            # If we filled an existing sheet, continue to next iteration without creating new sheet
-            if filled_existing_sheet:
-                continue
 
             sheet_counter += 1
 
@@ -2117,18 +1968,10 @@ def bin_packing_with_inventory(
                     f"УСПЕХ: Лист #{sheet_counter} содержит заказы: {orders_on_sheet}"
                 )
 
-                # Update order sheet usage and track first sheet
+                # Update order sheet usage
                 for order_id in orders_on_sheet:
                     if order_id in order_sheet_usage:
                         order_sheet_usage[order_id] += 1
-                        
-                        # Track first sheet for MAX_SHEETS_PER_ORDER constraint
-                        if order_id not in order_first_sheet:
-                            order_first_sheet[order_id] = sheet_counter
-                            logger.info(
-                                f"  Заказ {order_id}: начат на листе {sheet_counter}"
-                            )
-                        
                         logger.info(
                             f"  Заказ {order_id}: теперь использует {order_sheet_usage[order_id]} листов"
                         )
@@ -2143,15 +1986,6 @@ def bin_packing_with_inventory(
                         "orders_on_sheet": list(orders_on_sheet),
                     }
                 )
-                
-                # Update progress callback if provided
-                if progress_callback:
-                    # Better estimate based on actual polygons and sheet capacity
-                    total_priority1_polygons = len([p for order_polys in order_groups.values() for p in order_polys])
-                    # Estimate sheets needed based on average usage and total polygons
-                    estimated_total_sheets = max(1, total_priority1_polygons // 4)  # Assume 4 polygons per sheet on average
-                    progress_percent = min(95, 50 + (len(placed_layouts) / max(1, estimated_total_sheets)) * 40)  # 50-95% range
-                    progress_callback(progress_percent, f"Создан лист #{sheet_counter} ({sheet_type['name']})")
 
                 # Remove placed polygons from remaining orders
                 # We need to match polygons by both filename AND order_id
@@ -2220,38 +2054,14 @@ def bin_packing_with_inventory(
                 available_sheets_count = sum(
                     max(0, sheet["count"] - sheet["used"]) for sheet in sheet_inventory
                 )
-                
-                # Enhanced debugging: show what's blocking placement
-                logger.info(f"Не удалось разместить в итерации {iteration_count}:")
-                logger.info(f"  Доступно листов: {available_sheets_count}")
-                logger.info(f"  Осталось заказов: {len(remaining_orders)}")
-                
-                # Show remaining orders and their polygon counts
-                for order_id, order_polygons in remaining_orders.items():
-                    colors_in_order = {}
-                    for poly_tuple in order_polygons:
-                        color = poly_tuple[2] if len(poly_tuple) >= 3 else "серый"
-                        colors_in_order[color] = colors_in_order.get(color, 0) + 1
-                    logger.info(f"    {order_id}: {len(order_polygons)} полигонов, цвета: {colors_in_order}")
-                
-                # Show available sheets
-                for sheet_type in sheet_inventory:
-                    remaining = sheet_type["count"] - sheet_type["used"]
-                    if remaining > 0:
-                        logger.info(f"    Доступен лист: {sheet_type['name']} цвет {sheet_type.get('color', 'серый')}, осталось: {remaining}")
-                
-                if verbose:
-                    st.info(f"⚠️ Пропуск итерации {iteration_count}: нет совместимых комбинаций полигон/лист")
-                    st.info(f"📋 Осталось {len(remaining_orders)} заказов, {available_sheets_count} листов")
-                
+                logger.info(
+                    f"Не удалось разместить в этой итерации. Доступно листов: {available_sheets_count}. Продолжаем..."
+                )
                 continue
 
-    # Check order constraints after placement - both sheet count and adjacency
+    # Check order constraints after placement
     violated_orders = []
-    adjacency_violations = []
-    
     for order_id, sheets_used in order_sheet_usage.items():
-        # Check sheet count constraint
         if (
             max_sheets_per_order
             and order_id != "additional"
@@ -2263,272 +2073,17 @@ def bin_packing_with_inventory(
             logger.error(
                 f"НАРУШЕНИЕ ОГРАНИЧЕНИЙ: Заказ {order_id} использует {sheets_used} листов (лимит: {max_sheets_per_order})"
             )
-        
-        # Check adjacency constraint
-        if (
-            max_sheets_per_order
-            and order_id != "additional"
-            and order_id != "unknown"
-            and not order_id.startswith("group_")
-            and order_id in order_first_sheet
-        ):
-            first_sheet = order_first_sheet[order_id]
-            # Find all sheets where this order appears
-            order_sheets = []
-            for layout in placed_layouts:
-                if order_id in layout["orders_on_sheet"]:
-                    order_sheets.append(layout["sheet_number"])
-            
-            if order_sheets:
-                min_sheet = min(order_sheets)
-                max_sheet = max(order_sheets)
-                expected_max_sheet = first_sheet + max_sheets_per_order - 1
-                
-                if max_sheet > expected_max_sheet:
-                    adjacency_violations.append((order_id, min_sheet, max_sheet, expected_max_sheet))
-                    logger.error(
-                        f"НАРУШЕНИЕ СМЕЖНОСТИ: Заказ {order_id} размещен на листах {min_sheet}-{max_sheet}, "
-                        f"но должен быть в диапазоне {first_sheet}-{expected_max_sheet}"
-                    )
 
-    if violated_orders or adjacency_violations:
-        warning_parts = []
-        if violated_orders:
-            warning_parts.append("⚠️ Предупреждение: Нарушение ограничений заказов:")
-            for order_id, sheets_used in violated_orders:
-                warning_parts.append(f"Заказ {order_id}: {sheets_used} листов (лимит: {max_sheets_per_order})")
-        
-        if adjacency_violations:
-            warning_parts.append("⚠️ Предупреждение: Нарушение смежности листов:")
-            for order_id, min_sheet, max_sheet, expected_max in adjacency_violations:
-                warning_parts.append(f"Заказ {order_id}: листы {min_sheet}-{max_sheet} (ожидалось до {expected_max})")
-        
-        warning_msg = "\n".join(warning_parts)
-        logger.warning(warning_msg)
-        if verbose:
-            st.warning(warning_msg)
-        # Don't raise error - allow algorithm to continue with warnings
-
-    # NEW: SINGLE-POLYGON ORDER FILL STRATEGY - Try to place remaining single-polygon orders into existing sheets
-    if remaining_orders and placed_layouts:
-        single_polygon_orders = {
-            order_id: order_polygons
-            for order_id, order_polygons in remaining_orders.items()
-            if len(order_polygons) == 1
-        }
-        
-        if single_polygon_orders:
-            logger.info(
-                f"=== ДОЗАПОЛНЕНИЕ ОДНОКОМПОНЕНТНЫМИ ЗАКАЗАМИ: {len(single_polygon_orders)} заказов ==="
-            )
-            if verbose:
-                st.info(
-                    f"🔄 Дозаполнение листов однокомпонентными заказами: {len(single_polygon_orders)} заказов"
-                )
-            
-            filled_orders = 0
-            for order_id, order_polygons in single_polygon_orders.items():
-                if len(order_polygons) != 1:
-                    continue
-                    
-                polygon_tuple = order_polygons[0]
-                color = polygon_tuple[2] if len(polygon_tuple) >= 3 else "серый"
-                
-                # Try to place this single polygon on existing sheets with same color
-                placed_successfully = False
-                for layout_idx, layout in enumerate(placed_layouts):
-                    sheet_color = layout.get("sheet_color", "серый")
-                    if color != sheet_color:
-                        continue
-                        
-                    current_usage = layout.get("usage_percent", 0)
-                    if current_usage >= 95:  # Skip nearly full sheets
-                        continue
-                        
-                    sheet_size = layout["sheet_size"]
-                    existing_placed = layout["placed_polygons"]
-                    
-                    logger.debug(f"Пытаемся добавить {order_id} на лист #{layout['sheet_number']} (заполнение: {current_usage:.1f}%)")
-                    
-                    try:
-                        additional_placed, still_remaining = bin_packing_with_existing(
-                            [polygon_tuple], existing_placed, sheet_size, verbose=False
-                        )
-                        
-                        if additional_placed:
-                            # Update the layout with the additional polygon
-                            placed_layouts[layout_idx]["placed_polygons"] = existing_placed + additional_placed
-                            new_usage = calculate_usage_percent(
-                                placed_layouts[layout_idx]["placed_polygons"], sheet_size
-                            )
-                            placed_layouts[layout_idx]["usage_percent"] = new_usage
-                            
-                            # Update orders_on_sheet set
-                            if "orders_on_sheet" not in placed_layouts[layout_idx]:
-                                placed_layouts[layout_idx]["orders_on_sheet"] = set()
-                            placed_layouts[layout_idx]["orders_on_sheet"].add(order_id)
-                            
-                            # Track sheet usage for this order
-                            if order_id not in order_sheet_usage:
-                                order_sheet_usage[order_id] = 0
-                            order_sheet_usage[order_id] = 1  # Single polygon order uses 1 sheet
-                            
-                            filled_orders += 1
-                            placed_successfully = True
-                            
-                            logger.info(
-                                f"✅ ДОЗАПОЛНЕНИЕ: Заказ {order_id} размещен на лист #{layout['sheet_number']} ({current_usage:.1f}% → {new_usage:.1f}%)"
-                            )
-                            if verbose:
-                                st.success(
-                                    f"✅ Заказ {order_id} добавлен на лист #{layout['sheet_number']} ({current_usage:.1f}% → {new_usage:.1f}%)"
-                                )
-                            break
-                    except Exception as e:
-                        logger.debug(f"Не удалось добавить {order_id} на лист #{layout['sheet_number']}: {e}")
-                        continue
-                
-                if placed_successfully:
-                    # Remove this order from remaining_orders
-                    del remaining_orders[order_id]
-                    
-            logger.info(f"Дозаполнение завершено: {filled_orders} заказов размещено")
-            if verbose:
-                st.info(f"📊 Дозаполнение: {filled_orders} однокомпонентных заказов размещено")
-
-    # PRIORITY 2 PROCESSING: Try to fit priority 2 polygons into existing sheets only
-    if priority2_polygons and placed_layouts:
-        logger.info(
-            f"=== ОБРАБОТКА ПРИОРИТЕТА 2: {len(priority2_polygons)} полигонов ==="
+    if violated_orders:
+        error_msg = "❌ Нарушение ограничений заказов:\n" + "\n".join(
+            [
+                f"Заказ {order_id}: {sheets_used} листов (лимит: {max_sheets_per_order})"
+                for order_id, sheets_used in violated_orders
+            ]
         )
         if verbose:
-            st.info(
-                f"🔄 Размещение файлов приоритета 2: {len(priority2_polygons)} файлов в существующие листы"
-            )
-        
-        # Update progress for priority 2 processing
-        if progress_callback:
-            progress_callback(96, f"Обработка файлов приоритета 2: {len(priority2_polygons)} файлов")
-
-        priority2_placed = 0
-        priority2_remaining = list(priority2_polygons)
-
-        # Try to fill existing sheets with priority 2 polygons
-        for layout_idx, layout in enumerate(placed_layouts):
-            if not priority2_remaining:
-                break
-
-            sheet_size = layout["sheet_size"]
-            sheet_color = None
-            # Find sheet color by matching with inventory
-            for sheet in sheet_inventory:
-                if sheet["name"] == layout["sheet_type"]:
-                    sheet_color = sheet.get("color", "серый")
-                    break
-            if sheet_color is None:
-                sheet_color = "серый"  # fallback
-
-            existing_placed = layout["placed_polygons"]
-            current_usage = layout["usage_percent"]
-
-            if current_usage >= 95:  # Skip nearly full sheets
-                continue
-
-            logger.info(
-                f"Пытаемся добавить приоритет 2 на лист #{layout['sheet_number']} (заполнение: {current_usage:.1f}%)"
-            )
-
-            # Filter priority 2 polygons by color compatibility
-            compatible_priority2 = []
-            for poly_tuple in priority2_remaining:
-                if len(poly_tuple) >= 3:
-                    poly_color = poly_tuple[2]
-                else:
-                    poly_color = "серый"
-                if poly_color == sheet_color:
-                    compatible_priority2.append(poly_tuple)
-
-            if not compatible_priority2:
-                logger.debug(
-                    f"Нет совместимых по цвету приоритет 2 полигонов для листа {sheet_color}"
-                )
-                continue
-
-            # Try to place compatible priority 2 polygons on this existing sheet
-            try:
-                additional_placed, still_remaining = bin_packing_with_existing(
-                    compatible_priority2, existing_placed, sheet_size, verbose=False
-                )
-
-                if additional_placed:
-                    # Update the layout with additional polygons
-                    placed_layouts[layout_idx]["placed_polygons"] = (
-                        existing_placed + additional_placed
-                    )
-                    placed_layouts[layout_idx]["usage_percent"] = (
-                        calculate_usage_percent(
-                            placed_layouts[layout_idx]["placed_polygons"], sheet_size
-                        )
-                    )
-                    new_usage = placed_layouts[layout_idx]["usage_percent"]
-                    priority2_placed += len(additional_placed)
-
-                    logger.info(
-                        f"✅ Добавлено {len(additional_placed)} файлов приоритета 2 на лист #{layout['sheet_number']} ({current_usage:.1f}% → {new_usage:.1f}%)"
-                    )
-                    if verbose:
-                        st.success(
-                            f"✅ Добавлено {len(additional_placed)} файлов приоритета 2 на лист #{layout['sheet_number']}"
-                        )
-
-                    # Remove placed polygons from priority2_remaining
-                    placed_names = [
-                        p[4] if len(p) >= 5 else p[1] for p in additional_placed
-                    ]  # Get filenames
-                    priority2_remaining = [
-                        p for p in priority2_remaining if (p[1] not in placed_names)
-                    ]
-
-            except Exception as e:
-                logger.warning(
-                    f"Ошибка при добавлении приоритета 2 на лист #{layout['sheet_number']}: {e}"
-                )
-
-        logger.info(
-            f"Приоритет 2: размещено {priority2_placed}, осталось {len(priority2_remaining)}"
-        )
-        if priority2_remaining:
-            logger.info(
-                f"⚠️ {len(priority2_remaining)} файлов приоритета 2 не размещены (новые листы не создаются)"
-            )
-            if verbose:
-                st.warning(
-                    f"⚠️ {len(priority2_remaining)} файлов приоритета 2 не удалось разместить в существующие листы"
-                )
-
-        # Add remaining priority 2 polygons to unplaced list
-        all_unplaced.extend(priority2_remaining)
-
-    elif priority2_polygons and not placed_layouts:
-        logger.warning(
-            f"Нет существующих листов для размещения {len(priority2_polygons)} файлов приоритета 2"
-        )
-        if verbose:
-            st.warning(
-                f"⚠️ Нет размещенных листов для {len(priority2_polygons)} файлов приоритета 2"
-            )
-        # Add all priority 2 polygons to unplaced list since no sheets were created
-        all_unplaced.extend(priority2_polygons)
-    elif priority2_polygons and not order_groups:
-        # Special case: only priority 2 polygons exist, no priority 1 files
-        logger.info(
-            f"Только priority 2 файлы без существующих листов: {len(priority2_polygons)} файлов не размещаются"
-        )
-        if verbose:
-            st.warning(
-                f"⚠️ Только файлы приоритета 2: {len(priority2_polygons)} файлов не размещаются (новые листы не создаются)"
-            )
-        all_unplaced.extend(priority2_polygons)
+            st.error(error_msg)
+        raise ValueError(error_msg)
 
     # IMPROVEMENT: Try to fit remaining polygons into existing sheets before giving up
     remaining_polygons_list = []
@@ -2634,144 +2189,6 @@ def bin_packing_with_inventory(
                     )
                     st.info(f"  {status} Заказ {order_id}: {sheet_count} листов")
 
-    # ======= POST-PROCESSING: AGGRESSIVE REDISTRIBUTION ======
-    logger.info("🔧 ФИНАЛЬНОЕ АГРЕССИВНОЕ ПЕРЕРАСПРЕДЕЛЕНИЕ ЛИСТОВ")
-    
-    # Find low-usage sheets (less than 50% filled) that we can redistribute
-    low_usage_sheets = []
-    high_usage_sheets = []
-    
-    for idx, layout in enumerate(placed_layouts):
-        usage = layout.get("usage_percent", 0)
-        poly_count = len(layout.get("placed_polygons", []))
-        
-        if usage < 50 and poly_count <= 3:  # Low usage and few polygons
-            low_usage_sheets.append((idx, layout, usage))
-        elif usage < 85:  # Can potentially accept more polygons
-            high_usage_sheets.append((idx, layout, usage))
-    
-    if low_usage_sheets:
-        logger.info(f"Найдено {len(low_usage_sheets)} листов с низким заполнением для перераспределения")
-        logger.info(f"Доступно {len(high_usage_sheets)} листов-получателей")
-        
-        successfully_redistributed = 0
-        sheets_to_remove = []
-        
-        # Sort low usage sheets by usage (lowest first) and high usage by usage (lowest first)
-        low_usage_sheets.sort(key=lambda x: x[2])
-        high_usage_sheets.sort(key=lambda x: x[2])
-        
-        for low_idx, low_layout, low_usage in low_usage_sheets:
-            polygons_to_move = low_layout["placed_polygons"]
-            sheet_color = low_layout.get("sheet_color", "серый")
-            
-            if not polygons_to_move:
-                continue
-                
-            logger.info(f"Пытаемся перераспределить лист #{low_layout['sheet_number']} ({low_usage:.1f}%, {len(polygons_to_move)} полигонов)")
-            
-            # Try to place all polygons from this sheet onto other sheets
-            all_moved = True
-            moved_polygons = []
-            
-            for poly_tuple in polygons_to_move:
-                moved = False
-                
-                # Try to place on compatible high-usage sheets
-                for high_idx, high_layout, high_usage in high_usage_sheets:
-                    if high_idx == low_idx:  # Don't try to move to itself
-                        continue
-                        
-                    target_color = high_layout.get("sheet_color", "серый")
-                    if target_color != sheet_color:  # Must be same color
-                        continue
-                        
-                    if high_usage >= 85:  # Skip nearly full sheets
-                        continue
-                    
-                    # Log attempt for debugging
-                    poly_order_id = poly_tuple[3] if len(poly_tuple) > 3 else "unknown"
-                    logger.info(f"    Попытка переместить {poly_order_id} на лист #{high_layout['sheet_number']} ({high_usage:.1f}%)")
-                    
-                    existing_placed = high_layout["placed_polygons"]
-                    sheet_size = high_layout["sheet_size"]
-                    
-                    try:
-                        # Try to add this polygon to the target sheet
-                        additional_placed, still_remaining = bin_packing_with_existing(
-                            [poly_tuple], existing_placed, sheet_size, verbose=False
-                        )
-                        
-                        if additional_placed:
-                            # Successfully moved to target sheet
-                            placed_layouts[high_idx]["placed_polygons"] = existing_placed + additional_placed
-                            new_usage = calculate_usage_percent(
-                                placed_layouts[high_idx]["placed_polygons"], sheet_size
-                            )
-                            placed_layouts[high_idx]["usage_percent"] = new_usage
-                            
-                            # Update orders on target sheet
-                            if "orders_on_sheet" not in placed_layouts[high_idx]:
-                                placed_layouts[high_idx]["orders_on_sheet"] = set()
-                            elif isinstance(placed_layouts[high_idx]["orders_on_sheet"], list):
-                                # Convert list to set if needed
-                                placed_layouts[high_idx]["orders_on_sheet"] = set(placed_layouts[high_idx]["orders_on_sheet"])
-                            
-                            if len(poly_tuple) > 3:
-                                placed_layouts[high_idx]["orders_on_sheet"].add(poly_tuple[3])
-                            
-                            moved_polygons.append(poly_tuple)
-                            moved = True
-                            
-                            # Update high_usage in our list for next iterations
-                            for i, (h_idx, h_layout, h_usage) in enumerate(high_usage_sheets):
-                                if h_idx == high_idx:
-                                    high_usage_sheets[i] = (h_idx, h_layout, new_usage)
-                                    break
-                            
-                            logger.info(f"      ✅ Полигон перемещен на лист #{high_layout['sheet_number']} ({high_usage:.1f}% → {new_usage:.1f}%)")
-                            break
-                        else:
-                            logger.info(f"      ❌ Не помещается на лист #{high_layout['sheet_number']}")
-                            
-                    except Exception as e:
-                        logger.info(f"      ❌ Ошибка размещения на лист #{high_layout['sheet_number']}: {e}")
-                        continue
-                
-                if not moved:
-                    all_moved = False
-                    break
-            
-            if all_moved and moved_polygons:
-                # All polygons successfully moved - mark sheet for removal
-                sheets_to_remove.append(low_idx)
-                successfully_redistributed += len(moved_polygons)
-                logger.info(f"  🎯 УСПЕХ: Лист #{low_layout['sheet_number']} полностью опустошен ({len(moved_polygons)} полигонов перемещено)")
-            else:
-                # Some polygons couldn't be moved - update the sheet with remaining polygons
-                remaining_polygons = [p for p in polygons_to_move if p not in moved_polygons]
-                placed_layouts[low_idx]["placed_polygons"] = remaining_polygons
-                placed_layouts[low_idx]["usage_percent"] = calculate_usage_percent(
-                    remaining_polygons, low_layout["sheet_size"]
-                )
-                if moved_polygons:
-                    logger.info(f"  ⚠️ ЧАСТИЧНО: Лист #{low_layout['sheet_number']} ({len(moved_polygons)} перемещено, {len(remaining_polygons)} осталось)")
-                    successfully_redistributed += len(moved_polygons)
-        
-        # Remove empty sheets (in reverse order to maintain indices)
-        for sheet_idx in sorted(sheets_to_remove, reverse=True):
-            removed_sheet = placed_layouts.pop(sheet_idx)
-            logger.info(f"🗑️ Удален пустой лист #{removed_sheet['sheet_number']}")
-        
-        logger.info(f"🎯 ПЕРЕРАСПРЕДЕЛЕНИЕ: {successfully_redistributed} полигонов перемещено, {len(sheets_to_remove)} листов удалено")
-        logger.info(f"📊 РЕЗУЛЬТАТ: {len(placed_layouts)} листов вместо {len(placed_layouts) + len(sheets_to_remove)}")
-    else:
-        logger.info("Листов с низким заполнением для перераспределения не найдено")
-
-    # Final progress update
-    if progress_callback:
-        progress_callback(100, f"Завершено: {len(placed_layouts)} листов создано")
-
     return placed_layouts, all_unplaced
 
 
@@ -2870,14 +2287,8 @@ def plot_layout(
 
         # Add file name at polygon centroid
         centroid = polygon.centroid
-        
-        # Handle case where file_name might be a float64 or other non-string type
-        display_name = str(file_name)
-        if display_name.endswith('.dxf'):
-            display_name = display_name.replace(".dxf", "")
-        
         ax.annotate(
-            display_name,
+            file_name.replace(".dxf", ""),
             (centroid.x, centroid.y),
             ha="center",
             va="center",
@@ -3014,22 +2425,15 @@ def scale_polygons_to_fit(
         )
 
     for polygon_tuple in polygons_with_names:
-        if (
-            len(polygon_tuple) >= 5
-        ):  # Extended format with color, order_id, and priority
-            polygon, name, color, order_id, priority = polygon_tuple[:5]
-        elif len(polygon_tuple) >= 4:  # Extended format with color and order_id
+        if len(polygon_tuple) >= 4:  # Extended format with color and order_id
             polygon, name, color, order_id = polygon_tuple[:4]
-            priority = 1  # Default priority
         elif len(polygon_tuple) >= 3:  # Format with color
             polygon, name, color = polygon_tuple[:3]
             order_id = "unknown"
-            priority = 1  # Default priority
         else:  # Old format without color
             polygon, name = polygon_tuple[:2]
             color = "серый"
             order_id = "unknown"
-            priority = 1  # Default priority
         bounds = polygon.bounds
         poly_width = bounds[2] - bounds[0]
         poly_height = bounds[3] - bounds[1]
@@ -3077,9 +2481,9 @@ def scale_polygons_to_fit(
                 st.info(
                     f"Масштабирован {name}: {original_width_cm:.1f}x{original_height_cm:.1f} см → {new_width_cm:.1f}x{new_height_cm:.1f} см (коэффициент: {scale_factor:.4f})"
                 )
-            scaled_polygons.append((scaled_polygon, name, color, order_id, priority))
+            scaled_polygons.append((scaled_polygon, name, color, order_id))
         else:
-            scaled_polygons.append((polygon, name, color, order_id, priority))
+            scaled_polygons.append((polygon, name, color, order_id))
 
     return scaled_polygons
 
