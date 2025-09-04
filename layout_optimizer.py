@@ -2560,9 +2560,39 @@ def bin_packing_with_inventory(
         # Add remaining priority 2 polygons to unplaced list
         all_unplaced.extend(priority2_remaining)
 
+    elif priority2_polygons and not placed_layouts:
+        logger.warning(
+            f"Нет существующих листов для размещения {len(priority2_polygons)} файлов приоритета 2"
+        )
+        if verbose:
+            st.warning(
+                f"⚠️ Нет размещенных листов для {len(priority2_polygons)} файлов приоритета 2"
+            )
+        # Add all priority 2 polygons to unplaced list since no sheets were created
+        all_unplaced.extend(priority2_polygons)
+    elif priority2_polygons and not order_groups:
+        # Special case: only priority 2 polygons exist, no priority 1 files
+        logger.info(
+            f"Только priority 2 файлы без существующих листов: {len(priority2_polygons)} файлов не размещаются"
+        )
+        if verbose:
+            st.warning(
+                f"⚠️ Только файлы приоритета 2: {len(priority2_polygons)} файлов не размещаются (новые листы не создаются)"
+            )
+        all_unplaced.extend(priority2_polygons)
+
+    # IMPROVEMENT: Try to fit remaining polygons into existing sheets before giving up
+    remaining_polygons_list = []
+    for order_id, remaining_polygons in remaining_orders.items():
+        remaining_polygons_list.extend(remaining_polygons)
+
+    logger.info(
+        f"Проверка дозаполнения: remaining_orders={len(remaining_orders)}, remaining_polygons_list={len(remaining_polygons_list)}, placed_layouts={len(placed_layouts)}"
+    )
+
     # НОВОЕ: Создание дополнительных листов для неразмещенных Excel полигонов
-    # Анализируем неразмещенные полигоны и создаем листы если есть доступные
-    remaining_excel_polygons = [p for p in all_unplaced if len(p) < 5 or p[4] != 2]  # Не приоритет 2
+    # Анализируем неразмещенные полигоны из remaining_polygons_list (Excel полигоны, не приоритет 2)
+    remaining_excel_polygons = [p for p in remaining_polygons_list if len(p) < 5 or p[4] != 2]  # Не приоритет 2
     
     if remaining_excel_polygons and any(sheet["count"] - sheet["used"] > 0 for sheet in sheet_inventory):
         logger.info(f"Создаем дополнительные листы для {len(remaining_excel_polygons)} неразмещенных Excel полигонов")
@@ -2611,9 +2641,9 @@ def bin_packing_with_inventory(
                                 sheet_type["used"] += len([l for l in new_layouts if l.get("sheet_color") == color])
                                 break
                         
-                        # Убираем размещенные полигоны из unplaced
+                        # Убираем размещенные полигоны из remaining_polygons_list
                         placed_count = sum(len(layout["placed_polygons"]) for layout in new_layouts)
-                        all_unplaced = [p for p in all_unplaced if p not in color_polygons[:placed_count]]
+                        remaining_polygons_list = [p for p in remaining_polygons_list if p not in color_polygons[:placed_count]]
                         
                         logger.info(f"Создано {len(new_layouts)} дополнительных листов цвета {color}")
                     
@@ -2622,36 +2652,6 @@ def bin_packing_with_inventory(
         
         if additional_created > 0:
             logger.info(f"✅ Создано {additional_created} дополнительных листов для Excel полигонов")
-
-    elif priority2_polygons and not placed_layouts:
-        logger.warning(
-            f"Нет существующих листов для размещения {len(priority2_polygons)} файлов приоритета 2"
-        )
-        if verbose:
-            st.warning(
-                f"⚠️ Нет размещенных листов для {len(priority2_polygons)} файлов приоритета 2"
-            )
-        # Add all priority 2 polygons to unplaced list since no sheets were created
-        all_unplaced.extend(priority2_polygons)
-    elif priority2_polygons and not order_groups:
-        # Special case: only priority 2 polygons exist, no priority 1 files
-        logger.info(
-            f"Только priority 2 файлы без существующих листов: {len(priority2_polygons)} файлов не размещаются"
-        )
-        if verbose:
-            st.warning(
-                f"⚠️ Только файлы приоритета 2: {len(priority2_polygons)} файлов не размещаются (новые листы не создаются)"
-            )
-        all_unplaced.extend(priority2_polygons)
-
-    # IMPROVEMENT: Try to fit remaining polygons into existing sheets before giving up
-    remaining_polygons_list = []
-    for order_id, remaining_polygons in remaining_orders.items():
-        remaining_polygons_list.extend(remaining_polygons)
-
-    logger.info(
-        f"Проверка дозаполнения: remaining_orders={len(remaining_orders)}, remaining_polygons_list={len(remaining_polygons_list)}, placed_layouts={len(placed_layouts)}"
-    )
 
     if remaining_polygons_list and placed_layouts:
         if verbose:
