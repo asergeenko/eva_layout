@@ -22,6 +22,7 @@ import math
 # Настройка логирования
 logger = logging.getLogger(__name__)
 
+logging.getLogger("ezdxf").setLevel(logging.ERROR)
 
 # Export list for explicit importing
 __all__ = [
@@ -1996,22 +1997,57 @@ def bin_packing_with_inventory(
                                     order_first_sheet[placed_order_id] = existing_layout['sheet_number']
                             
                             # Remove placed polygons from compatible_polygons for next iterations
-                            # Используем более точное сравнение по всем полям кортежа
-                            placed_polygons_set = set(additional_placed)
-                            compatible_polygons = [p for p in compatible_polygons if p not in placed_polygons_set]
+                            # ИСПРАВЛЕНИЕ: точечное совпадение по 3 полям вместо set-сравнения
+                            # Из-за разной длины кортежей (4 vs 7) set-сравнение всегда возвращало False
+                            placed_keys = set()
+                            for placed_poly in additional_placed:
+                                if len(placed_poly) >= 5:
+                                    # Полигон из bin_packing_with_existing: (polygon, x, y, angle, filename, color, order_id)
+                                    key = (placed_poly[4], placed_poly[5], placed_poly[6])  # filename, color, order_id
+                                else:
+                                    # Обычный полигон: (polygon, filename, color, order_id)
+                                    key = (placed_poly[1], placed_poly[2], placed_poly[3])
+                                placed_keys.add(key)
+                            
+                            # Удаляем полигоны с совпадающими ключами
+                            compatible_polygons = [
+                                p for p in compatible_polygons 
+                                if (p[1], p[2], p[3]) not in placed_keys
+                            ]
                             
                             # Update remaining orders - remove empty orders or reduce polygon counts
                             for order_id in list(remaining_orders.keys()):
                                 if order_id in additional_orders_on_sheet:
                                     # Count how many polygons from this order were placed
-                                    placed_from_order = [p for p in additional_placed if len(p) > 3 and p[3] == order_id]
+                                    # ИСПРАВЛЕНИЕ: правильно извлекаем order_id из разных форматов кортежей
+                                    placed_from_order = []
+                                    for p in additional_placed:
+                                        poly_order_id = None
+                                        if len(p) >= 5:
+                                            # Полигон из bin_packing_with_existing: (polygon, x, y, angle, filename, color, order_id)
+                                            poly_order_id = p[6] if len(p) > 6 else None
+                                        else:
+                                            # Обычный полигон: (polygon, filename, color, order_id)
+                                            poly_order_id = p[3] if len(p) > 3 else None
+                                        
+                                        if poly_order_id == order_id:
+                                            placed_from_order.append(p)
                                     
                                     # Remove exactly those polygons that were placed
+                                    # ИСПРАВЛЕНИЕ: учитываем правильный формат кортежей
                                     for placed_poly in placed_from_order:
+                                        # Извлекаем ключ из размещенного полигона
+                                        if len(placed_poly) >= 5:
+                                            # Полигон из bin_packing_with_existing: (polygon, x, y, angle, filename, color, order_id)
+                                            placed_key = (placed_poly[4], placed_poly[5], placed_poly[6])
+                                        else:
+                                            # Обычный полигон: (polygon, filename, color, order_id)
+                                            placed_key = (placed_poly[1], placed_poly[2], placed_poly[3])
+                                        
                                         for orig_tuple in remaining_orders[order_id][:]:
-                                            # Более точное сравнение: проверяем полигон, имя файла и order_id
-                                            if (len(orig_tuple) > 3 and len(placed_poly) > 3 and 
-                                                orig_tuple[1] == placed_poly[1] and orig_tuple[3] == placed_poly[3]):
+                                            # Сравниваем по ключу (filename, color, order_id)
+                                            orig_key = (orig_tuple[1], orig_tuple[2], orig_tuple[3])
+                                            if orig_key == placed_key:
                                                 remaining_orders[order_id].remove(orig_tuple)
                                                 break
                                     
@@ -2487,11 +2523,21 @@ def bin_packing_with_inventory(
                         )
 
                     # Remove placed polygons from priority2_remaining
-                    placed_names = [
-                        p[4] if len(p) >= 5 else p[1] for p in additional_placed
-                    ]  # Get filenames
+                    # ИСПРАВЛЕНИЕ: точное совпадение по 3 полям для правильного удаления
+                    placed_keys = set()
+                    for placed_poly in additional_placed:
+                        if len(placed_poly) >= 5:
+                            # Полигон из bin_packing_with_existing: (polygon, x, y, angle, filename, color, order_id)
+                            key = (placed_poly[4], placed_poly[5], placed_poly[6])  # filename, color, order_id
+                        else:
+                            # Обычный полигон: (polygon, filename, color, order_id)
+                            key = (placed_poly[1], placed_poly[2], placed_poly[3])
+                        placed_keys.add(key)
+                    
+                    # Удаляем полигоны с совпадающими ключами
                     priority2_remaining = [
-                        p for p in priority2_remaining if (p[1] not in placed_names)
+                        p for p in priority2_remaining 
+                        if (p[1], p[2], p[3]) not in placed_keys
                     ]
 
             except Exception as e:
@@ -2513,6 +2559,69 @@ def bin_packing_with_inventory(
 
         # Add remaining priority 2 polygons to unplaced list
         all_unplaced.extend(priority2_remaining)
+
+    # НОВОЕ: Создание дополнительных листов для неразмещенных Excel полигонов
+    # Анализируем неразмещенные полигоны и создаем листы если есть доступные
+    remaining_excel_polygons = [p for p in all_unplaced if len(p) < 5 or p[4] != 2]  # Не приоритет 2
+    
+    if remaining_excel_polygons and any(sheet["count"] - sheet["used"] > 0 for sheet in sheet_inventory):
+        logger.info(f"Создаем дополнительные листы для {len(remaining_excel_polygons)} неразмещенных Excel полигонов")
+        
+        # Группируем по цветам
+        polygons_by_color = {}
+        for poly in remaining_excel_polygons:
+            color = poly[2] if len(poly) >= 3 else "серый"
+            if color not in polygons_by_color:
+                polygons_by_color[color] = []
+            polygons_by_color[color].append(poly)
+        
+        # Пытаемся создать листы для каждого цвета
+        additional_created = 0
+        for color, color_polygons in polygons_by_color.items():
+            # Найти доступные листы этого цвета
+            available_count = 0
+            for sheet_type in sheet_inventory:
+                if sheet_type["color"] == color and sheet_type["used"] < sheet_type["count"]:
+                    available_count = sheet_type["count"] - sheet_type["used"]
+            
+            if available_count > 0:
+                logger.info(f"Доступно {available_count} листов цвета {color} для {len(color_polygons)} полигонов")
+                
+                # Пытаемся разместить полигоны на новых листах
+                try:
+                    new_layouts, still_unplaced = bin_packing_with_inventory(
+                        color_polygons,
+                        [sheet for sheet in sheet_inventory if sheet["color"] == color],
+                        verbose=False,
+                        max_sheets_per_order=max_sheets_per_order,
+                    )
+                    
+                    if new_layouts:
+                        # Обновляем номера листов
+                        for layout in new_layouts:
+                            sheet_counter += 1
+                            layout["sheet_number"] = sheet_counter
+                        
+                        placed_layouts.extend(new_layouts)
+                        additional_created += len(new_layouts)
+                        
+                        # Обновляем использование листов
+                        for sheet_type in sheet_inventory:
+                            if sheet_type["color"] == color:
+                                sheet_type["used"] += len([l for l in new_layouts if l.get("sheet_color") == color])
+                                break
+                        
+                        # Убираем размещенные полигоны из unplaced
+                        placed_count = sum(len(layout["placed_polygons"]) for layout in new_layouts)
+                        all_unplaced = [p for p in all_unplaced if p not in color_polygons[:placed_count]]
+                        
+                        logger.info(f"Создано {len(new_layouts)} дополнительных листов цвета {color}")
+                    
+                except Exception as e:
+                    logger.warning(f"Ошибка создания дополнительных листов для {color}: {e}")
+        
+        if additional_created > 0:
+            logger.info(f"✅ Создано {additional_created} дополнительных листов для Excel полигонов")
 
     elif priority2_polygons and not placed_layouts:
         logger.warning(

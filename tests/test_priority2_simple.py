@@ -222,10 +222,25 @@ class TestPriority2Simple:
 
         for layout in layouts:
             sheet_color = None
-            for sheet in available_sheets:
-                if sheet["name"] == layout["sheet_type"]:
-                    sheet_color = sheet["color"]
-                    break
+            
+            # Определяем тип листа с проверкой наличия ключа
+            layout_sheet_type = layout.get("sheet_type")
+            if not layout_sheet_type and "sheet_color" in layout:
+                # Если нет sheet_type, попробуем найти лист по цвету и размеру
+                layout_color = layout["sheet_color"]
+                sheet_size = layout.get("sheet_size", (0, 0))
+                for sheet in available_sheets:
+                    if (sheet.get("color", "") == layout_color and 
+                        sheet.get("width", 0) == sheet_size[0] and 
+                        sheet.get("height", 0) == sheet_size[1]):
+                        layout_sheet_type = sheet["name"]
+                        break
+            
+            if layout_sheet_type:
+                for sheet in available_sheets:
+                    if sheet["name"] == layout_sheet_type:
+                        sheet_color = sheet["color"]
+                        break
 
             for placed_tuple in layout["placed_polygons"]:
                 if len(placed_tuple) >= 5:

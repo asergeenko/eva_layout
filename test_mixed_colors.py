@@ -83,7 +83,10 @@ def test_mixed_colors():
         gray_sheets = []
         
         for layout in placed_layouts:
-            sheet_type = layout['sheet_type']
+            sheet_type = layout.get('sheet_type', 'Unknown')
+            if sheet_type == 'Unknown' and 'sheet_color' in layout:
+                sheet_type = f"Лист ({layout['sheet_color']})"
+            
             polygons_count = len(layout['placed_polygons'])
             orders = layout['orders_on_sheet']
             

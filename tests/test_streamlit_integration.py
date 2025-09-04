@@ -241,7 +241,18 @@ class TestStreamlitIntegration:
 
         # 11. ПРОВЕРЯЕМ ЧТО ЛИСТЫ ПРАВИЛЬНОГО ТИПА И ЦВЕТА
         for layout in placed_layouts:
-            sheet_type = layout["sheet_type"]
+            sheet_type = layout.get("sheet_type", "Unknown")
+            if sheet_type == "Unknown" and "sheet_color" in layout:
+                # Попробуем найти лист по цвету и размеру
+                sheet_color = layout["sheet_color"]
+                sheet_size = layout.get("sheet_size", (0, 0))
+                for sheet in available_sheets:
+                    if (sheet.get("color", "") == sheet_color and 
+                        sheet.get("width", 0) == sheet_size[0] and 
+                        sheet.get("height", 0) == sheet_size[1]):
+                        sheet_type = sheet["name"]
+                        break
+            
             # Должен быть один из наших типов листов
             sheet_names = [sheet["name"] for sheet in available_sheets]
             assert sheet_type in sheet_names, f"Неизвестный тип листа: {sheet_type}"

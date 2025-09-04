@@ -144,7 +144,9 @@ def demo_progress():
     print("Информация о листах:")
     for i, layout in enumerate(layouts, 1):
         usage = layout["usage_percent"]
-        sheet_type = layout["sheet_type"]
+        sheet_type = layout.get("sheet_type", "Unknown")
+        if sheet_type == "Unknown" and "sheet_color" in layout:
+            sheet_type = f"Лист ({layout['sheet_color']})"
         objects_count = len(layout["placed_polygons"])
         print(f"  Лист #{i}: {sheet_type}, {objects_count} объектов, заполнение {usage:.1f}%")
 

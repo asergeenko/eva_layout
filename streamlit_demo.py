@@ -949,7 +949,6 @@ if st.session_state.file_groups:
                 "Цвет": f"{color_emoji} {group['color']}",
                 "Приоритет": group.get("priority", 2),
                 "Копий на файл": group["quantity"],
-                "Всего объектов": group["total_objects"],
             }
         )
         total_objects += group["total_objects"]
@@ -1381,17 +1380,27 @@ if st.button("🚀 Оптимизировать раскрой"):
             # Find sheet color from original sheet data
             sheet_color = "не указан"
             color_suffix = "unknown"
-            for sheet in st.session_state.available_sheets:
-                if sheet["name"] == layout["sheet_type"]:
-                    sheet_color = sheet.get("color", "не указан")
-                    # Convert color name to English suffix
-                    if sheet_color == "чёрный":
-                        color_suffix = "black"
-                    elif sheet_color == "серый":
-                        color_suffix = "gray"
-                    else:
-                        color_suffix = "unknown"
-                    break
+            
+            # Try to get sheet color from layout first, then match by name
+            if "sheet_color" in layout:
+                sheet_color = layout["sheet_color"]
+            elif "sheet_type" in layout:
+                for sheet in st.session_state.available_sheets:
+                    if sheet["name"] == layout["sheet_type"]:
+                        sheet_color = sheet.get("color", "не указан")
+                        break
+            else:
+                # Fallback: use first available sheet color
+                if st.session_state.available_sheets:
+                    sheet_color = st.session_state.available_sheets[0].get("color", "не указан")
+                    
+            # Convert color name to English suffix
+            if sheet_color == "чёрный":
+                color_suffix = "black"
+            elif sheet_color == "серый":
+                color_suffix = "gray"
+            else:
+                color_suffix = "unknown"
 
             output_filename = (
                 f"{sheet_height}_{sheet_width}_{sheet_number}_{color_suffix}.dxf"
@@ -1412,10 +1421,22 @@ if st.button("🚀 Оптимизировать раскрой"):
                 f"Лист #{layout['sheet_number']}: создаем all_layouts запись с {shapes_count} размещенными полигонами"
             )
 
+            # Определяем тип листа с проверкой наличия ключа
+            if "sheet_type" in layout:
+                sheet_type = layout["sheet_type"]
+            elif "sheet_color" in layout:
+                sheet_type = layout["sheet_color"]
+            else:
+                # Fallback: используем первый доступный лист как тип
+                if st.session_state.available_sheets:
+                    sheet_type = st.session_state.available_sheets[0].get("name", "Unknown")
+                else:
+                    sheet_type = "Unknown"
+
             all_layouts.append(
                 {
                     "Sheet": layout["sheet_number"],
-                    "Sheet Type": layout["sheet_type"],
+                    "Sheet Type": sheet_type,
                     "Sheet Color": sheet_color,
                     "Sheet Size": f"{layout['sheet_size'][0]}x{layout['sheet_size'][1]} см",
                     "Output File": output_file,
@@ -1438,10 +1459,26 @@ if st.button("🚀 Оптимизировать раскрой"):
 
         # Update sheet inventory in session state
         for layout in placed_layouts:
-            for original_sheet in st.session_state.available_sheets:
-                if layout["sheet_type"] == original_sheet["name"]:
-                    original_sheet["used"] += 1
-                    break
+            # Определяем тип листа с проверкой наличия ключа
+            layout_sheet_type = None
+            if "sheet_type" in layout:
+                layout_sheet_type = layout["sheet_type"]
+            elif "sheet_color" in layout:
+                # Если нет sheet_type, попробуем найти лист по цвету и размеру
+                sheet_color = layout["sheet_color"]
+                sheet_size = layout.get("sheet_size", (0, 0))
+                for sheet in st.session_state.available_sheets:
+                    if (sheet.get("color", "") == sheet_color and 
+                        sheet.get("width", 0) == sheet_size[0] and 
+                        sheet.get("height", 0) == sheet_size[1]):
+                        layout_sheet_type = sheet["name"]
+                        break
+            
+            if layout_sheet_type:
+                for original_sheet in st.session_state.available_sheets:
+                    if layout_sheet_type == original_sheet["name"]:
+                        original_sheet["used"] += 1
+                        break
 
         # Clear progress indicators
         import time
@@ -1456,6 +1493,7 @@ if st.button("🚀 Оптимизировать раскрой"):
             "report_data": report_data,
             "unplaced_polygons": unplaced_polygons,
             "polygons_count": len(polygons),
+            "placed_layouts": placed_layouts,  # Raw results from bin_packing
             "original_dxf_data_map": original_dxf_data_map,
             "original_dimensions": original_dimensions,
         }
@@ -1476,6 +1514,7 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
     report_data = results["report_data"]
     unplaced_polygons = results["unplaced_polygons"]
     polygons_count = results["polygons_count"]
+    placed_layouts = results["placed_layouts"]
     original_dxf_data_map = results["original_dxf_data_map"]
     original_dimensions = results.get("original_dimensions", {})
 
@@ -1488,14 +1527,22 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
         with col1:
             st.metric("Всего листов", len(all_layouts))
         with col2:
-            total_placed = sum(layout["Shapes Placed"] for layout in all_layouts)
+            # Calculate correctly: actual placed polygons from bin_packing result
+            # Should equal total_input_polygons - len(unplaced_polygons)
+            total_input_polygons = polygons_count
+            actual_placed_count = total_input_polygons - len(unplaced_polygons)
+            
+            # Debug: log the calculation
+            raw_count_from_layouts = sum(len(layout["placed_polygons"]) for layout in placed_layouts)
+            logger.info(f"DEBUG подсчет: raw_from_layouts={raw_count_from_layouts}, calculated_placed={actual_placed_count}, input={total_input_polygons}, unplaced={len(unplaced_polygons)}")
+            
             logger.info(
-                f"UI подсчет: total_placed={total_placed}, polygons_count={polygons_count}"
+                f"UI подсчет: actual_placed={actual_placed_count}, total_input={total_input_polygons}, unplaced={len(unplaced_polygons)}"
             )
             logger.info(
-                f"Подробности по листам: {[(layout['Sheet'], layout['Shapes Placed']) for layout in all_layouts]}"
+                f"Подробности по листам: {[(layout['sheet_number'], len(layout['placed_polygons'])) for layout in placed_layouts]}"
             )
-            st.metric("Размещено объектов", f"{total_placed}/{polygons_count}")
+            st.metric("Размещено объектов", f"{actual_placed_count}/{total_input_polygons}")
         with col3:
             avg_usage = sum(
                 float(layout["Material Usage (%)"].replace("%", ""))
