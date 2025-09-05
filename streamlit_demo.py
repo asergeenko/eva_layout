@@ -13,6 +13,7 @@ from layout_optimizer import (
     plot_layout,
     plot_input_polygons,
     save_dxf_layout_complete,
+    Carpet,
 )
 
 # Константы
@@ -1082,7 +1083,7 @@ if st.button("🚀 Оптимизировать раскрой"):
         )
         # Parse DXF files
         st.header("📄 Обработка DXF файлов")
-        polygons = []
+        carpets = []
         original_dxf_data_map = {}  # Store original DXF data for each file
 
         # Parse loaded DXF files
@@ -1120,17 +1121,15 @@ if st.button("🚀 Оптимизировать раскрой"):
                 )
 
                 # Use the display_name for polygon identification, include priority
-                polygon_tuple = (
+                carpet = Carpet(
                     parsed_data["combined_polygon"],
                     display_name,
                     file_color,
                     file_order_id,
                     file_priority,  # Add priority as 5th element
                 )
-                polygons.append(polygon_tuple)
-                logger.info(
-                    f"ДОБАВЛЕН ПОЛИГОН: tuple длина={len(polygon_tuple)}, order_id={polygon_tuple[3] if len(polygon_tuple) > 3 else 'НЕТ'}"
-                )
+                carpets.append(carpet)
+                logger.info(f"ДОБАВЛЕН ПОЛИГОН: order_id={carpet.order_id}")
                 # Store original DXF data using display_name as key
                 original_dxf_data_map[display_name] = parsed_data
                 logger.info(
@@ -1142,19 +1141,17 @@ if st.button("🚀 Оптимизировать раскрой"):
         # Clear progress indicators
         progress_bar.empty()
         status_text.text(
-            f"✅ Обработка завершена. Загружено {len(polygons)} полигонов из {len(dxf_files)} файлов"
+            f"✅ Обработка завершена. Загружено {len(carpets)} полигонов из {len(dxf_files)} файлов"
         )
 
-        if not polygons:
+        if not carpets:
             st.error("В загруженных DXF файлах не найдено валидных полигонов")
             st.stop()
 
         # Show order distribution before optimization
         order_counts = {}
-        for polygon_tuple in polygons:
-            if len(polygon_tuple) >= 4:
-                order_id = polygon_tuple[3]
-                order_counts[order_id] = order_counts.get(order_id, 0) + 1
+        for carpet in carpets:
+            order_counts[carpet.order_id] = order_counts.get(carpet.order_id, 0) + 1
 
         logger.info(f"Анализ заказов: найдено {len(order_counts)} уникальных заказов")
         for order_id, count in order_counts.items():
@@ -1163,24 +1160,20 @@ if st.button("🚀 Оптимизировать раскрой"):
         # Optional input visualization (button-triggered)
         if st.button("📊 Показать исходные файлы", key="show_input_visualization"):
             st.subheader("🔍 Визуализация входных файлов")
-            input_plots = plot_input_polygons(polygons)
+            input_plots = plot_input_polygons(carpets)
             if input_plots:
                 # Show color legend
                 with st.expander("🎨 Цветовая схема файлов", expanded=False):
-                    legend_cols = st.columns(min(5, len(polygons)))
-                    for i, polygon_tuple in enumerate(polygons):
-                        if len(polygon_tuple) >= 3:  # New format with color
-                            _, file_name, _ = polygon_tuple[:3]
-                        else:  # Old format without color
-                            _, file_name = polygon_tuple[:2]
+                    legend_cols = st.columns(min(5, len(carpets)))
+                    for i, carpet in enumerate(carpets):
                         with legend_cols[i % len(legend_cols)]:
                             from layout_optimizer import get_color_for_file
 
-                            color = get_color_for_file(file_name)
+                            color = get_color_for_file(carpet.filename)
                             # Convert RGB to hex for HTML
                             color_hex = f"#{int(color[0]*255):02x}{int(color[1]*255):02x}{int(color[2]*255):02x}"
                             st.markdown(
-                                f'<div style="background-color: {color_hex}; padding: 10px; border-radius: 5px; text-align: center; margin: 2px;"><b>{file_name}</b></div>',
+                                f'<div style="background-color: {color_hex}; padding: 10px; border-radius: 5px; text-align: center; margin: 2px;"><b>{carpet.filename}</b></div>',
                                 unsafe_allow_html=True,
                             )
 
@@ -1197,16 +1190,8 @@ if st.button("🚀 Оптимизировать раскрой"):
         # Create a summary table with proper unit conversion
         summary_data = []
         total_area_cm2 = 0
-        for polygon_tuple in polygons:
-            if len(polygon_tuple) >= 4:  # Extended format with color and order_id
-                poly, filename, color, order_id = polygon_tuple[:4]
-            elif len(polygon_tuple) >= 3:  # Format with color
-                poly, filename, color = polygon_tuple[:3]
-                order_id = "unknown"
-            else:  # Old format without color
-                poly, filename = polygon_tuple[:2]
-                color = "серый"
-                order_id = "unknown"
+        for carpet in carpets:
+            poly = carpet.polygon
             bounds = poly.bounds
             width_mm = bounds[2] - bounds[0]
             height_mm = bounds[3] - bounds[1]
@@ -1218,7 +1203,7 @@ if st.button("🚀 Оптимизировать раскрой"):
             area_cm2 = area_mm2 / 100.0
 
             # Store original dimensions
-            original_dimensions[filename] = {
+            original_dimensions[carpet.filename] = {
                 "width_cm": width_cm,
                 "height_cm": height_cm,
                 "area_cm2": area_cm2,
@@ -1233,7 +1218,7 @@ if st.button("🚀 Оптимизировать раскрой"):
 
             summary_data.append(
                 {
-                    "Файл": filename,
+                    "Файл": carpet.filename,
                     "Ширина (см)": f"{width_cm:.1f}",
                     "Высота (см)": f"{height_cm:.1f}",
                     "Площадь (см²)": f"{area_cm2:.2f}",
@@ -1257,7 +1242,9 @@ if st.button("🚀 Оптимизировать раскрой"):
                 reference_sheet_size = (sheet["width"], sheet["height"])
 
         # Полигоны остаются в исходном масштабе (не масштабируются)
-        logger.info(f"✅ Полигоны сохранены в исходном масштабе: {len(polygons)} объектов")
+        logger.info(
+            f"✅ Полигоны сохранены в исходном масштабе: {len(carpets)} объектов"
+        )
 
         st.header("🔄 Процесс оптимизации")
         try:
@@ -1278,7 +1265,7 @@ if st.button("🚀 Оптимизировать раскрой"):
                 f"Вызываем bin_packing_with_inventory с MAX_SHEETS_PER_ORDER={MAX_SHEETS_PER_ORDER}"
             )
             logger.info(
-                f"Входные параметры: {len(polygons)} полигонов, {len(st.session_state.available_sheets)} типов листов"
+                f"Входные параметры: {len(carpets)} полигонов, {len(st.session_state.available_sheets)} типов листов"
             )
 
             # DEBUG: Log what polygons we're sending
@@ -1286,15 +1273,10 @@ if st.button("🚀 Оптимизировать раскрой"):
             optimization_status.text("Анализ входных полигонов...")
 
             logger.info("ПОЛИГОНЫ ПЕРЕД ОТПРАВКОЙ В bin_packing_with_inventory:")
-            for i, polygon_tuple in enumerate(polygons):
-                if len(polygon_tuple) >= 4:
-                    logger.info(
-                        f"  Полигон {i}: файл={polygon_tuple[1]}, order_id={polygon_tuple[3]}"
-                    )
-                else:
-                    logger.warning(
-                        f"  Полигон {i}: неполный tuple (длина={len(polygon_tuple)})"
-                    )
+            for i, carpet in enumerate(carpets):
+                logger.info(
+                    f"  Полигон {i}: файл={carpet.filename}, order_id={carpet.order_id}"
+                )
 
             # Main optimization step
             optimization_progress.progress(50)
@@ -1306,7 +1288,7 @@ if st.button("🚀 Оптимизировать раскрой"):
                 optimization_status.text(status_text)
 
             placed_layouts, unplaced_polygons = bin_packing_with_inventory(
-                polygons,
+                carpets,
                 st.session_state.available_sheets,
                 verbose=False,
                 max_sheets_per_order=MAX_SHEETS_PER_ORDER,
@@ -1371,7 +1353,7 @@ if st.button("🚀 Оптимизировать раскрой"):
             # Find sheet color from original sheet data
             sheet_color = "не указан"
             color_suffix = "unknown"
-            
+
             # Try to get sheet color from layout first, then match by name
             if "sheet_color" in layout:
                 sheet_color = layout["sheet_color"]
@@ -1383,8 +1365,10 @@ if st.button("🚀 Оптимизировать раскрой"):
             else:
                 # Fallback: use first available sheet color
                 if st.session_state.available_sheets:
-                    sheet_color = st.session_state.available_sheets[0].get("color", "не указан")
-                    
+                    sheet_color = st.session_state.available_sheets[0].get(
+                        "color", "не указан"
+                    )
+
             # Convert color name to English suffix
             if sheet_color == "чёрный":
                 color_suffix = "black"
@@ -1420,7 +1404,9 @@ if st.button("🚀 Оптимизировать раскрой"):
             else:
                 # Fallback: используем первый доступный лист как тип
                 if st.session_state.available_sheets:
-                    sheet_type = st.session_state.available_sheets[0].get("name", "Unknown")
+                    sheet_type = st.session_state.available_sheets[0].get(
+                        "name", "Unknown"
+                    )
                 else:
                     sheet_type = "Unknown"
 
@@ -1459,12 +1445,14 @@ if st.button("🚀 Оптимизировать раскрой"):
                 sheet_color = layout["sheet_color"]
                 sheet_size = layout.get("sheet_size", (0, 0))
                 for sheet in st.session_state.available_sheets:
-                    if (sheet.get("color", "") == sheet_color and 
-                        sheet.get("width", 0) == sheet_size[0] and 
-                        sheet.get("height", 0) == sheet_size[1]):
+                    if (
+                        sheet.get("color", "") == sheet_color
+                        and sheet.get("width", 0) == sheet_size[0]
+                        and sheet.get("height", 0) == sheet_size[1]
+                    ):
                         layout_sheet_type = sheet["name"]
                         break
-            
+
             if layout_sheet_type:
                 for original_sheet in st.session_state.available_sheets:
                     if layout_sheet_type == original_sheet["name"]:
@@ -1483,7 +1471,7 @@ if st.button("🚀 Оптимизировать раскрой"):
             "all_layouts": all_layouts,
             "report_data": report_data,
             "unplaced_polygons": unplaced_polygons,
-            "polygons_count": len(polygons),
+            "polygons_count": len(carpets),
             "placed_layouts": placed_layouts,  # Raw results from bin_packing
             "original_dxf_data_map": original_dxf_data_map,
             "original_dimensions": original_dimensions,
@@ -1522,18 +1510,24 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
             # Should equal total_input_polygons - len(unplaced_polygons)
             total_input_polygons = polygons_count
             actual_placed_count = total_input_polygons - len(unplaced_polygons)
-            
+
             # Debug: log the calculation
-            raw_count_from_layouts = sum(len(layout["placed_polygons"]) for layout in placed_layouts)
-            logger.info(f"DEBUG подсчет: raw_from_layouts={raw_count_from_layouts}, calculated_placed={actual_placed_count}, input={total_input_polygons}, unplaced={len(unplaced_polygons)}")
-            
+            raw_count_from_layouts = sum(
+                len(layout["placed_polygons"]) for layout in placed_layouts
+            )
+            logger.info(
+                f"DEBUG подсчет: raw_from_layouts={raw_count_from_layouts}, calculated_placed={actual_placed_count}, input={total_input_polygons}, unplaced={len(unplaced_polygons)}"
+            )
+
             logger.info(
                 f"UI подсчет: actual_placed={actual_placed_count}, total_input={total_input_polygons}, unplaced={len(unplaced_polygons)}"
             )
             logger.info(
                 f"Подробности по листам: {[(layout['sheet_number'], len(layout['placed_polygons'])) for layout in placed_layouts]}"
             )
-            st.metric("Размещено объектов", f"{actual_placed_count}/{total_input_polygons}")
+            st.metric(
+                "Размещено объектов", f"{actual_placed_count}/{total_input_polygons}"
+            )
         with col3:
             avg_usage = sum(
                 float(layout["Material Usage (%)"].replace("%", ""))
@@ -1612,8 +1606,8 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
                     {
                         "DXF файл": file_name,
                         "Номер листа": layout["Sheet"],
-                        #"Размер (см)": size_comparison,
-                        #"Площадь (см²)": f"{area_cm2:.2f}",
+                        # "Размер (см)": size_comparison,
+                        # "Площадь (см²)": f"{area_cm2:.2f}",
                         "Поворот (°)": f"{angle:.0f}",
                         "Выходной файл": layout["Output File"],
                     }
@@ -1679,13 +1673,10 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
         st.warning(f"⚠️ {len(unplaced_polygons)} объектов не удалось разместить.")
         st.subheader("🚫 Неразмещенные объекты")
         unplaced_data = []
-        for polygon_tuple in unplaced_polygons:
-            if len(polygon_tuple) >= 3:  # New format with color
-                poly, name, color = polygon_tuple[:3]
-            else:  # Old format without color
-                poly, name = polygon_tuple[:2]
-                color = "серый"
-            unplaced_data.append((name, f"{poly.area/100:.2f}", color))
+        for carpet in unplaced_polygons:
+            unplaced_data.append(
+                (carpet.filename, f"{carpet.polygon.area/100:.2f}", carpet.color)
+            )
 
         unplaced_df = pd.DataFrame(
             unplaced_data, columns=["Файл", "Площадь (см²)", "Цвет"]
@@ -1748,6 +1739,3 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
                     file_name=zip_filename,
                     mime="application/zip",
                 )
-
-# Footer
-# st.write("Примечание: Приложение использует простой алгоритм упаковки. Для лучшей оптимизации рассмотрите продвинутые методы, такие как BL-NFP.")

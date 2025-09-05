@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from layout_optimizer import (
     bin_packing_with_inventory,
     parse_dxf_complete,
+    Carpet,
 )
 
 # Настройка логирования
@@ -76,7 +77,7 @@ def process_real_excel_orders(df):
                     if polygon_data and polygon_data[0]:
                         polygon = polygon_data[0]
                         filename = f"{product_name}_{i+1}.dxf"  # Стандартизируем имена
-                        polygons.append((polygon, filename, color, order_id))
+                        polygons.append(Carpet(polygon, filename, color, order_id))
                         
                         # Специальная проверка для проблемных заказов
                         if product_name == "SUZUKI XBEE":
@@ -95,7 +96,7 @@ def process_real_excel_orders(df):
                 size = 150 + i * 20
                 poly = Polygon([(0, 0), (size, 0), (size, size-30), (0, size-30)])
                 filename = f"{product_name}_{i+1}.dxf"
-                polygons.append((poly, filename, color, order_id))
+                polygons.append(Carpet(poly, filename, color, order_id))
                 
                 # Специальная проверка для проблемных заказов
                 if product_name == "SUZUKI XBEE":
@@ -128,12 +129,12 @@ def create_real_priority2_polygons():
     # 20 черных полигонов приоритета 2
     for i in range(20):
         filename = f"ДЕКА_KUGOO_M4_PRO_JILONG_черный_{i+1}.dxf"
-        priority2_polygons.append((base_polygon, filename, "чёрный", f"PRIORITY2_BLACK_{i+1}", 2))
+        priority2_polygons.append(Carpet(base_polygon, filename, "чёрный", f"PRIORITY2_BLACK_{i+1}", 2))
     
     # 20 серых полигонов приоритета 2
     for i in range(20):
         filename = f"ДЕКА_KUGOO_M4_PRO_JILONG_серый_{i+1}.dxf"
-        priority2_polygons.append((base_polygon, filename, "серый", f"PRIORITY2_GRAY_{i+1}", 2))
+        priority2_polygons.append(Carpet(base_polygon, filename, "серый", f"PRIORITY2_GRAY_{i+1}", 2))
     
     return priority2_polygons
 

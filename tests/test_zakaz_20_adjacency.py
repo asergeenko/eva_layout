@@ -10,7 +10,7 @@ from shapely.geometry import Polygon
 # Добавляем корневую директорию в путь для импорта модулей
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from layout_optimizer import bin_packing_with_inventory
+from layout_optimizer import bin_packing_with_inventory, Carpet
 
 
 def test_zakaz_20_strict_adjacency():
@@ -44,7 +44,7 @@ def test_zakaz_20_strict_adjacency():
     zakaz_20_sizes = [(60, 40), (80, 30), (70, 50), (50, 60)]  # Разные размеры
     for i, (w, h) in enumerate(zakaz_20_sizes):
         poly = Polygon([(0, 0), (w, 0), (w, h), (0, h)])
-        polygons.append((poly, f"zakaz20_file_{i}.dxf", "чёрный", "ZAKAZ_row_20"))
+        polygons.append(Carpet(poly, f"zakaz20_file_{i}.dxf", "чёрный", "ZAKAZ_row_20"))
     
     # МНОГО других заказов с БОЛЬШИМИ полигонами чтобы создать реальную конкуренцию
     # Это заставляет алгоритм делать сложные выборы размещения
@@ -68,7 +68,7 @@ def test_zakaz_20_strict_adjacency():
                 
             poly = Polygon([(0, 0), (w, 0), (w, h), (0, h)])
             color = "чёрный" if order_num % 3 == 0 else "серый"
-            polygons.append((poly, f"order_{order_num}_file_{i}.dxf", color, f"ZAKAZ_row_{order_num}"))
+            polygons.append(Carpet(poly, f"order_{order_num}_file_{i}.dxf", color, f"ZAKAZ_row_{order_num}"))
     
     print(f"Создано {len(polygons)} полигонов")
     print("Заказ ZAKAZ_row_20 содержит 4 полигона")

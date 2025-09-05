@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from layout_optimizer import (
     bin_packing_with_inventory,
+    Carpet,
 )
 
 
@@ -39,7 +40,7 @@ class TestProgressCallback:
         # Priority 1 полигоны (создадут листы)
         for i in range(5):
             polygon = Polygon([(0, 0), (300, 0), (300, 300), (0, 300)])  # 30x30 мм
-            polygons.append((
+            polygons.append(Carpet(
                 polygon,
                 f"priority1_file_{i}.dxf",
                 "чёрный",
@@ -103,7 +104,7 @@ class TestProgressCallback:
         # Priority 1 полигоны
         for i in range(2):
             polygon = Polygon([(0, 0), (300, 0), (300, 300), (0, 300)])
-            polygons.append((
+            polygons.append(Carpet(
                 polygon,
                 f"priority1_file_{i}.dxf",
                 "чёрный",
@@ -114,7 +115,7 @@ class TestProgressCallback:
         # Priority 2 полигоны
         for i in range(2):
             polygon = Polygon([(0, 0), (200, 0), (200, 200), (0, 200)])
-            polygons.append((
+            polygons.append(Carpet(
                 polygon,
                 f"priority2_file_{i}.dxf",
                 "чёрный",
@@ -144,7 +145,7 @@ class TestProgressCallback:
         
         # Проверяем что есть сообщения о priority 2
         priority2_messages = [call[1] for call in progress_calls if "приоритета 2" in call[1]]
-        if len([p for p in polygons if len(p) >= 5 and p[4] == 2]) > 0:  # If there are priority 2 files
+        if len([p for p in polygons if p.priority==2]) > 0:  # If there are priority 2 files
             assert len(priority2_messages) > 0, "Должно быть сообщение о приоритете 2"
         
         # Проверяем финальный прогресс
@@ -177,7 +178,7 @@ class TestProgressCallback:
         # Priority 1 полигоны
         for i in range(2):
             polygon = Polygon([(0, 0), (300, 0), (300, 300), (0, 300)])
-            polygons.append((
+            polygons.append(Carpet(
                 polygon,
                 f"priority1_file_{i}.dxf",
                 "чёрный",

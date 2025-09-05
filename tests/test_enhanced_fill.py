@@ -8,7 +8,8 @@ Test the enhanced fill optimization to verify that:
 """
 
 from shapely.geometry import Polygon
-from layout_optimizer import bin_packing_with_inventory
+from layout_optimizer import bin_packing_with_inventory, Carpet
+
 
 def test_enhanced_fill_optimization():
     """Test enhanced fill optimization"""
@@ -50,7 +51,7 @@ def test_enhanced_fill_optimization():
             height = 50  
             polygon = Polygon([(0, 0), (width, 0), (width, height), (0, height)])
             priority = 1
-            polygons.append((polygon, filename, color, order_id, priority))
+            polygons.append(Carpet(polygon, filename, color, order_id, priority))
     
     # Single-file orders that should fill gaps
     for order_num in range(8):
@@ -63,7 +64,7 @@ def test_enhanced_fill_optimization():
         height = 25 + order_num * 2
         polygon = Polygon([(0, 0), (width, 0), (width, height), (0, height)])
         priority = 1
-        polygons.append((polygon, filename, color, order_id, priority))
+        polygons.append(Carpet(polygon, filename, color, order_id, priority))
     
     print(f"Создано {len(polygons)} полигонов:")
     print("- Multi-file orders: 4 заказа × 2 файла = 8 полигонов")

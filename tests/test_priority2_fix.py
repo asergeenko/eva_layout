@@ -11,7 +11,7 @@ from shapely.geometry import Polygon
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from layout_optimizer import bin_packing_with_inventory
+from layout_optimizer import bin_packing_with_inventory, Carpet
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -63,7 +63,7 @@ def create_test_data():
         for poly_idx in range(poly_count):
             poly = Polygon(coords)
             filename = f"{product_name}_{poly_idx + 1}.dxf"
-            polygons.append((poly, filename, color, order_id))
+            polygons.append(Carpet(poly, filename, color, order_id))
     
     print(f"Создано {len(polygons)} полигонов из {len(excel_orders)} заказов Excel")
     
@@ -74,13 +74,13 @@ def create_test_data():
     for i in range(20):
         poly = Polygon([(0, 0), (60, 0), (60, 40), (0, 40)])  # Размер как у ДЕКА KUGOO
         filename = f"ДЕКА_KUGOO_M4_PRO_JILONG_черный_{i+1}.dxf"
-        priority2_polygons.append((poly, filename, "чёрный", f"PRIORITY2_BLACK_{i+1}", 2))  # priority=2!
+        priority2_polygons.append(Carpet(poly, filename, "чёрный", f"PRIORITY2_BLACK_{i+1}", 2))  # priority=2!
     
     # 20 серых дополнительных файлов приоритета 2
     for i in range(20):
         poly = Polygon([(0, 0), (60, 0), (60, 40), (0, 40)])  # Размер как у ДЕКА KUGOO
         filename = f"ДЕКА_KUGOO_M4_PRO_JILONG_серый_{i+1}.dxf"
-        priority2_polygons.append((poly, filename, "серый", f"PRIORITY2_GRAY_{i+1}", 2))  # priority=2!
+        priority2_polygons.append(Carpet(poly, filename, "серый", f"PRIORITY2_GRAY_{i+1}", 2))  # priority=2!
     
     print(f"Создано {len(priority2_polygons)} полигонов приоритета 2 (20 черных + 20 серых)")
     

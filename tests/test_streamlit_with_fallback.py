@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from layout_optimizer import (
     bin_packing_with_inventory,
     parse_dxf_complete,
+    Carpet,
 )
 
 # Настройка логирования
@@ -80,7 +81,7 @@ def process_real_excel_orders_with_fallback(df):
                     if polygon_data and polygon_data[0] and polygon_data[0] != 0:
                         polygon = polygon_data[0]
                         filename = f"{product_name}_{i+1}.dxf"
-                        created_polygons.append((polygon, filename, color, order_id))
+                        created_polygons.append(Carpet(polygon, filename, color, order_id))
                     else:
                         raise Exception("DXF вернул пустой или нулевой полигон")
                         
@@ -89,7 +90,7 @@ def process_real_excel_orders_with_fallback(df):
                     size = 80 + i * 10  # Вариативные размеры
                     poly = Polygon([(0, 0), (size, 0), (size, size-20), (0, size-20)])
                     filename = f"{product_name}_{i+1}.dxf"
-                    created_polygons.append((poly, filename, color, order_id))
+                    created_polygons.append(Carpet(poly, filename, color, order_id))
                     
         else:
             # Создаем синтетические полигоны если DXF не найдены
@@ -99,7 +100,7 @@ def process_real_excel_orders_with_fallback(df):
                 size = 80 + i * 15  # Больше вариативности
                 poly = Polygon([(0, 0), (size, 0), (size, size-30), (0, size-30)])
                 filename = f"{product_name}_{i+1}.dxf"
-                created_polygons.append((poly, filename, color, order_id))
+                created_polygons.append(Carpet(poly, filename, color, order_id))
         
         # Добавляем созданные полигоны
         polygons.extend(created_polygons)
@@ -136,12 +137,12 @@ def create_real_priority2_polygons():
     # 20 черных полигонов приоритета 2
     for i in range(20):
         filename = f"ДЕКА_KUGOO_M4_PRO_JILONG_черный_{i+1}.dxf"
-        priority2_polygons.append((base_polygon, filename, "чёрный", f"PRIORITY2_BLACK_{i+1}", 2))
+        priority2_polygons.append(Carpet(base_polygon, filename, "чёрный", f"PRIORITY2_BLACK_{i+1}", 2))
     
     # 20 серых полигонов приоритета 2
     for i in range(20):
         filename = f"ДЕКА_KUGOO_M4_PRO_JILONG_серый_{i+1}.dxf"
-        priority2_polygons.append((base_polygon, filename, "серый", f"PRIORITY2_GRAY_{i+1}", 2))
+        priority2_polygons.append(Carpet(base_polygon, filename, "серый", f"PRIORITY2_GRAY_{i+1}", 2))
     
     return priority2_polygons
 

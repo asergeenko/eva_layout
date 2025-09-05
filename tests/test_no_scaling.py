@@ -7,6 +7,8 @@ Test that polygons are NOT scaled and remain in original scale
 import sys
 import importlib
 
+from layout_optimizer import Carpet
+
 # Force reload of the module to ensure we get the latest version
 if 'layout_optimizer' in sys.modules:
     importlib.reload(sys.modules['layout_optimizer'])
@@ -21,11 +23,11 @@ def test_no_scaling():
     
     # Small polygon 
     small_poly = Polygon([(0, 0), (100, 0), (100, 100), (0, 100)])  # 10mm x 10mm (1cm x 1cm)
-    original_polygons.append((small_poly, "small.dxf", "черный", "ORDER_1", 1))
+    original_polygons.append(Carpet(small_poly, "small.dxf", "черный", "ORDER_1", 1))
     
     # Large polygon (remains unchanged)
     large_poly = Polygon([(0, 0), (2000, 0), (2000, 3000), (0, 3000)])  # 200mm x 300mm (20cm x 30cm)
-    original_polygons.append((large_poly, "large.dxf", "черный", "ORDER_2", 1))
+    original_polygons.append(Carpet(large_poly, "large.dxf", "черный", "ORDER_2", 1))
     
     # Reference sheet size: 15cm x 20cm (smaller than large polygon)
     reference_sheet_size = (15, 20)  
@@ -35,9 +37,9 @@ def test_no_scaling():
     print("Полигоны остаются в исходном масштабе:")
     
     # Show original dimensions
-    for poly_tuple in original_polygons:
-        polygon = poly_tuple[0]
-        name = poly_tuple[1]
+    for carpet in original_polygons:
+        polygon = carpet.polygon
+        name = carpet.filename
         bounds = polygon.bounds
         width_mm = bounds[2] - bounds[0]
         height_mm = bounds[3] - bounds[1]
@@ -58,11 +60,11 @@ def test_no_scaling():
     success = True
     
     for i, (original_tuple, result_tuple) in enumerate(zip(original_polygons, result_polygons)):
-        name = result_tuple[1]        
+        name = result_tuple.filename
         print(f"  ✅ {name}: остался в исходном масштабе")
     
     # Check that large polygon is still larger than sheet
-    large_result = result_polygons[1][0]  # Second polygon (large one)
+    large_result = result_polygons[1].polygon  # Second polygon (large one)
     large_bounds = large_result.bounds
     large_width_cm = (large_bounds[2] - large_bounds[0]) / 10.0
     large_height_cm = (large_bounds[3] - large_bounds[1]) / 10.0

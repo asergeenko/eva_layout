@@ -10,9 +10,9 @@ import importlib
 
 # Force reload of the module to ensure we get the latest version
 if 'layout_optimizer' in sys.modules:
-    importlib.reload(sys.modules['layout_optimizer'])
+    importlib.reload(sys.modules["layout_optimizer"])
 
-from layout_optimizer import bin_packing_with_inventory
+from layout_optimizer import bin_packing_with_inventory, Carpet
 from shapely.geometry import Polygon
 
 def test_direct_algorithm():
@@ -51,7 +51,7 @@ def test_direct_algorithm():
         height = 80
         polygon = Polygon([(0, 0), (width, 0), (width, height), (0, height)])
         priority = 1
-        polygons.append((polygon, filename, color, order_id, priority))
+        polygons.append(Carpet(polygon, filename, color, order_id, priority))
     
     # Second batch - different color, should also partially fill
     for i in range(4):
@@ -62,7 +62,7 @@ def test_direct_algorithm():
         height = 70
         polygon = Polygon([(0, 0), (width, 0), (width, height), (0, height)])
         priority = 1
-        polygons.append((polygon, filename, color, order_id, priority))
+        polygons.append(Carpet(polygon, filename, color, order_id, priority))
     
     # Third batch - should fill gaps if our algorithm works
     for i in range(6):
@@ -73,7 +73,7 @@ def test_direct_algorithm():
         height = 40 + i * 3
         polygon = Polygon([(0, 0), (width, 0), (width, height), (0, height)])
         priority = 1
-        polygons.append((polygon, filename, color, order_id, priority))
+        polygons.append(Carpet(polygon, filename, color, order_id, priority))
     
     print(f"Создано {len(polygons)} полигонов для прямого тестирования")
     print("Запуск алгоритма с verbose=True для детального анализа...")

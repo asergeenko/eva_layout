@@ -9,9 +9,9 @@ import importlib
 
 # Force reload of the module to ensure we get the latest version
 if 'layout_optimizer' in sys.modules:
-    importlib.reload(sys.modules['layout_optimizer'])
+    importlib.reload(sys.modules["layout_optimizer"])
 
-from layout_optimizer import bin_packing_with_inventory
+from layout_optimizer import bin_packing_with_inventory, Carpet
 from shapely.geometry import Polygon
 
 def test_mixed_colors():
@@ -46,7 +46,7 @@ def test_mixed_colors():
         height = 400
         polygon = Polygon([(0, 0), (width, 0), (width, height), (0, height)])
         priority = 1
-        polygons.append((polygon, filename, "чёрный", f"BLACK_ORDER_{i}", priority))
+        polygons.append(Carpet(polygon, filename, "чёрный", f"BLACK_ORDER_{i}", priority))
     
     # Gray polygons (should go on gray sheets)
     for i in range(3):
@@ -55,7 +55,7 @@ def test_mixed_colors():
         height = 400
         polygon = Polygon([(0, 0), (width, 0), (width, height), (0, height)])
         priority = 1
-        polygons.append((polygon, filename, "серый", f"GRAY_ORDER_{i}", priority))
+        polygons.append(Carpet(polygon, filename, "серый", f"GRAY_ORDER_{i}", priority))
     
     print("=== ТЕСТ СМЕШАННЫХ ЦВЕТОВ ===")
     print(f"Полигонов: {len(polygons)}")

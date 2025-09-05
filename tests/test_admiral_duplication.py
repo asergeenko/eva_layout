@@ -10,7 +10,7 @@ from shapely.geometry import Polygon
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from layout_optimizer import bin_packing_with_inventory
+from layout_optimizer import bin_packing_with_inventory, Carpet
 
 # Set up logging to see detailed algorithm behavior
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -24,7 +24,7 @@ def create_admiral_test_scenario():
         size = 90 + i * 15
         poly = Polygon([(0, 0), (size, 0), (size, size-25), (0, size-25)])
         filename = f"Лодка ADMIRAL 335_{i+1}.dxf"
-        admiral_polygons.append((poly, filename, "чёрный", "ZAKAZ_row_29"))
+        admiral_polygons.append(Carpet(poly, filename, "чёрный", "ZAKAZ_row_29"))
     
     # Add some other polygons to make it realistic
     other_polygons = []
@@ -34,14 +34,14 @@ def create_admiral_test_scenario():
         size = 80 + i * 10
         poly = Polygon([(0, 0), (size, 0), (size, size-20), (0, size-20)])
         filename = f"SUZUKI XBEE_{i+1}.dxf"
-        other_polygons.append((poly, filename, "чёрный", "ZAKAZ_row_7"))
+        other_polygons.append(Carpet(poly, filename, "чёрный", "ZAKAZ_row_7"))
     
     # Some random other order
     for i in range(2):
         size = 70 + i * 8
         poly = Polygon([(0, 0), (size, 0), (size, size-15), (0, size-15)])
         filename = f"Random_Product_{i+1}.dxf"
-        other_polygons.append((poly, filename, "чёрный", "ZAKAZ_row_5"))
+        other_polygons.append(Carpet(poly, filename, "чёрный", "ZAKAZ_row_5"))
     
     all_polygons = admiral_polygons + other_polygons
     

@@ -5,7 +5,8 @@ Test script to specifically test single-file order processing logic
 """
 
 from shapely.geometry import Polygon
-from layout_optimizer import bin_packing_with_inventory
+from layout_optimizer import bin_packing_with_inventory, Carpet
+
 
 def test_single_file_order_processing():
     """Test that single-file orders are processed correctly"""
@@ -44,7 +45,7 @@ def test_single_file_order_processing():
             height = 60 + file_num * 5
             polygon = Polygon([(0, 0), (width, 0), (width, height), (0, height)])
             priority = 1
-            polygons.append((polygon, filename, color, order_id, priority))
+            polygons.append(Carpet(polygon, filename, color, order_id, priority))
     
     # Create 10 single-file orders  
     for order_num in range(10):
@@ -57,7 +58,7 @@ def test_single_file_order_processing():
         height = 30 + order_num * 3
         polygon = Polygon([(0, 0), (width, 0), (width, height), (0, height)])
         priority = 1
-        polygons.append((polygon, filename, color, order_id, priority))
+        polygons.append(Carpet(polygon, filename, color, order_id, priority))
     
     print(f"Создано {len(polygons)} полигонов:")
     print("- Multi-file orders: 3 заказа × 3 файла = 9 полигонов")

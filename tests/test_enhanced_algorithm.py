@@ -7,7 +7,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from layout_optimizer import bin_packing_with_inventory
+from layout_optimizer import bin_packing_with_inventory, Carpet
 from shapely.geometry import Polygon
 import logging
 
@@ -24,12 +24,12 @@ def create_test_data():
     for order_id in range(1, 6):  # 5 больших заказов  
         for poly_id in range(4):  # 4 полигона в каждом заказе
             poly = Polygon([(0, 0), (80, 0), (80, 60), (0, 60)])  # Увеличенные размеры
-            polygons.append((poly, f"big_order_{order_id}_{poly_id}.dxf", "чёрный", f"BIG_ORDER_{order_id}"))
+            polygons.append(Carpet(poly, f"big_order_{order_id}_{poly_id}.dxf", "чёрный", f"BIG_ORDER_{order_id}"))
     
     # Маленькие заказы (по 1 полигону каждый)
     for order_id in range(1, 16):  # 15 маленьких заказов
         poly = Polygon([(0, 0), (40, 0), (40, 30), (0, 30)])  # Чуть крупнее
-        polygons.append((poly, f"small_order_{order_id}.dxf", "чёрный", f"SMALL_ORDER_{order_id}"))
+        polygons.append(Carpet(poly, f"small_order_{order_id}.dxf", "чёрный", f"SMALL_ORDER_{order_id}"))
     
     return polygons
 

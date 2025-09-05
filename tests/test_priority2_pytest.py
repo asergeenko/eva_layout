@@ -13,7 +13,7 @@ from shapely.geometry import Polygon
 # Добавляем корневую директорию в путь для импорта модулей
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from layout_optimizer import bin_packing_with_inventory
+from layout_optimizer import bin_packing_with_inventory, Carpet
 
 # Настройка логирования для pytest
 logging.basicConfig(level=logging.WARNING)  # Минимум логов для чистого вывода
@@ -34,7 +34,7 @@ def sample_data():
             size = 80 + i * 5
             poly = Polygon([(0, 0), (size, 0), (size, size-20), (0, size-20)])
             filename = f"order_{i+1}_{j+1}.dxf"
-            excel_polygons.append((poly, filename, color, order_id))
+            excel_polygons.append(Carpet(poly, filename, color, order_id))
     
     # Полигоны приоритета 2
     priority2_polygons = []
@@ -43,13 +43,13 @@ def sample_data():
     for i in range(10):
         poly = Polygon([(0, 0), (50, 0), (50, 30), (0, 30)])  # Маленькие
         filename = f"priority2_black_{i+1}.dxf"
-        priority2_polygons.append((poly, filename, "чёрный", f"P2_BLACK_{i+1}", 2))
+        priority2_polygons.append(Carpet(poly, filename, "чёрный", f"P2_BLACK_{i+1}", 2))
     
     # 10 серых приоритета 2
     for i in range(10):
         poly = Polygon([(0, 0), (50, 0), (50, 30), (0, 30)])  # Маленькие
         filename = f"priority2_gray_{i+1}.dxf"
-        priority2_polygons.append((poly, filename, "серый", f"P2_GRAY_{i+1}", 2))
+        priority2_polygons.append(Carpet(poly, filename, "серый", f"P2_GRAY_{i+1}", 2))
     
     return excel_polygons, priority2_polygons
 
@@ -143,7 +143,7 @@ def test_priority2_color_compatibility(sample_data, available_sheets):
             # Обрабатываем разные форматы полигонов
             poly_color = "серый"  # default
             order_id = ""
-            
+
             if len(poly) >= 7:  # bin_packing_with_existing формат
                 order_id = str(poly[6]) if poly[6] is not None else ""
                 # В 7-элементном формате цвет может быть в разных местах
@@ -196,7 +196,7 @@ def test_priority2_efficiency(sample_data, available_sheets):
                 order_id = str(poly[6]) if poly[6] is not None else ""
             elif len(poly) >= 4:
                 order_id = str(poly[3]) if poly[3] is not None else ""
-            
+
             if order_id.startswith('P2_'):
                 has_priority2 = True
                 break
@@ -214,8 +214,8 @@ def test_priority2_threshold_behavior():
     small_priority2 = Polygon([(0, 0), (30, 0), (30, 20), (0, 20)])  # Маленький приоритет 2
     
     polygons = [
-        (large_poly, "large.dxf", "чёрный", "LARGE_ORDER"),  # Заполнит лист почти полностью
-        (small_priority2, "small_p2.dxf", "чёрный", "P2_TEST", 2)  # Приоритет 2
+        Carpet(large_poly, "large.dxf", "чёрный", "LARGE_ORDER"),  # Заполнит лист почти полностью
+        Carpet(small_priority2, "small_p2.dxf", "чёрный", "P2_TEST", 2)  # Приоритет 2
     ]
     
     sheets = [{
@@ -250,7 +250,7 @@ def test_priority2_threshold_behavior():
                     order_id = str(poly[6]) if poly[6] is not None else ""
                 elif len(poly) >= 4:
                     order_id = str(poly[3]) if poly[3] is not None else ""
-                
+
                 if order_id.startswith('P2_'):
                     priority2_found = True
                     break

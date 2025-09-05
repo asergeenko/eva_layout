@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from layout_optimizer import (
     bin_packing_with_inventory,
     parse_dxf_complete,
+    Carpet,
 )
 
 # Настройка логирования
@@ -105,7 +106,7 @@ def process_orders_from_excel(df):
                         filename = os.path.basename(dxf_file)
                         # Добавляем уникальный суффикс для различения файлов
                         unique_filename = f"{product_name}_{os.path.splitext(filename)[0]}.dxf"
-                        polygons.append((polygon, unique_filename, color, order_id))
+                        polygons.append(Carpet(polygon, unique_filename, color, order_id))
                 except Exception as e:
                     print(f"⚠️ Ошибка обработки {dxf_file}: {e}")
                     continue
@@ -126,12 +127,12 @@ def create_priority2_polygons():
         # 20 черных полигонов приоритета 2
         for i in range(20):
             filename = f"ДЕКА_KUGOO_M4_PRO_JILONG_черный_{i+1}.dxf"
-            priority2_polygons.append((base_polygon, filename, "чёрный", f"PRIORITY2_BLACK_{i+1}"))
+            priority2_polygons.append(Carpet(base_polygon, filename, "чёрный", f"PRIORITY2_BLACK_{i+1}"))
         
         # 20 серых полигонов приоритета 2
         for i in range(20):
             filename = f"ДЕКА_KUGOO_M4_PRO_JILONG_серый_{i+1}.dxf"
-            priority2_polygons.append((base_polygon, filename, "серый", f"PRIORITY2_GRAY_{i+1}"))
+            priority2_polygons.append(Carpet(base_polygon, filename, "серый", f"PRIORITY2_GRAY_{i+1}"))
     else:
         try:
             polygon_data = parse_dxf_complete(dxf_file)
@@ -141,12 +142,12 @@ def create_priority2_polygons():
                 # 20 черных полигонов приоритета 2
                 for i in range(20):
                     filename = f"ДЕКА_KUGOO_M4_PRO_JILONG_черный_{i+1}.dxf"
-                    priority2_polygons.append((base_polygon, filename, "чёрный", f"PRIORITY2_BLACK_{i+1}"))
+                    priority2_polygons.append(Carpet(base_polygon, filename, "чёрный", f"PRIORITY2_BLACK_{i+1}"))
                 
                 # 20 серых полигонов приоритета 2
                 for i in range(20):
                     filename = f"ДЕКА_KUGOO_M4_PRO_JILONG_серый_{i+1}.dxf"
-                    priority2_polygons.append((base_polygon, filename, "серый", f"PRIORITY2_GRAY_{i+1}"))
+                    priority2_polygons.append(Carpet(base_polygon, filename, "серый", f"PRIORITY2_GRAY_{i+1}"))
         except Exception as e:
             print(f"⚠️ Ошибка загрузки {dxf_file}: {e}")
             return []

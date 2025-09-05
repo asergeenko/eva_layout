@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from layout_optimizer import (
     bin_packing_with_inventory,
+    Carpet,
 )
 
 
@@ -182,7 +183,7 @@ class TestStreamlitIntegration:
             polygon = Polygon([(0, 0), (width, 0), (width, height), (0, height)])
 
             dxf_files.append(
-                (polygon, mock_file.name, mock_file.color, mock_file.order_id)
+                Carpet(polygon, mock_file.name, mock_file.color, mock_file.order_id)
             )
 
         # Проверяем что создали файлы для всех заказов

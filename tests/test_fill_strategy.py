@@ -9,7 +9,7 @@ import os
 # Добавляем корневую директорию в путь для импорта модулей
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from layout_optimizer import bin_packing_with_inventory
+from layout_optimizer import bin_packing_with_inventory, Carpet
 from shapely.geometry import Polygon
 import logging
 
@@ -28,14 +28,14 @@ def create_test_polygons():
         for poly_num in range(5):
             # Большие полигоны
             poly = Polygon([(0, 0), (300, 0), (300, 200), (0, 200)])
-            polygons.append((poly, f"big_order_{order_num}_{poly_num}.dxf", "чёрный", f"ZAKAZ_row_{order_num}"))
+            polygons.append(Carpet(poly, f"big_order_{order_num}_{poly_num}.dxf", "чёрный", f"ZAKAZ_row_{order_num}"))
     
     # Заказы с 1 полигоном (маленькие - должны дозаполнять листы)
     for order_num in range(21, 28):  # ZAKAZ_row_21 to ZAKAZ_row_27
         # Маленькие полигоны
         poly = Polygon([(0, 0), (100, 0), (100, 80), (0, 80)])
         color = "чёрный" if order_num % 2 == 0 else "серый"
-        polygons.append((poly, f"small_order_{order_num}.dxf", color, f"ZAKAZ_row_{order_num}"))
+        polygons.append(Carpet(poly, f"small_order_{order_num}.dxf", color, f"ZAKAZ_row_{order_num}"))
     
     return polygons
 

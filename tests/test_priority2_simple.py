@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from layout_optimizer import (
     bin_packing_with_inventory,
+    Carpet,
 )
 
 
@@ -42,7 +43,7 @@ class TestPriority2Simple:
             polygon = Polygon(
                 [(0, 0), (300, 0), (300, 300), (0, 300)]
             )  # 30x30 мм (3x3 см)
-            polygons.append(
+            polygons.append(Carpet
                 (
                     polygon,
                     f"priority1_file_{i}.dxf",
@@ -57,7 +58,7 @@ class TestPriority2Simple:
             polygon = Polygon(
                 [(0, 0), (200, 0), (200, 200), (0, 200)]
             )  # 20x20 мм (2x2 см)
-            polygons.append(
+            polygons.append(Carpet
                 (
                     polygon,
                     f"priority2_file_{i}.dxf",
@@ -68,7 +69,7 @@ class TestPriority2Simple:
             )
 
         # Тест только с priority 1
-        priority1_polygons = [p for p in polygons if len(p) < 5 or p[4] != 2]
+        priority1_polygons = [p for p in polygons if p.priority == 1]
         priority1_layouts, _ = bin_packing_with_inventory(
             priority1_polygons,
             [sheet.copy() for sheet in available_sheets],
@@ -103,11 +104,9 @@ class TestPriority2Simple:
                     if "priority2" in filename:
                         priority2_placed += 1
 
-        for unplaced_tuple in unplaced:
-            if len(unplaced_tuple) >= 2:
-                filename = unplaced_tuple[1]
-                if "priority2" in filename:
-                    priority2_unplaced += 1
+        for unplaced_carpet in unplaced:
+            if "priority2" in unplaced_carpet.filename:
+                priority2_unplaced += 1
 
         total_priority2 = priority2_placed + priority2_unplaced
         assert (
@@ -147,7 +146,7 @@ class TestPriority2Simple:
 
         # Priority 1 черный полигон (создаст черный лист)
         polygon = Polygon([(0, 0), (300, 0), (300, 300), (0, 300)])  # 30x30 мм
-        polygons.append(
+        polygons.append(Carpet
             (
                 polygon,
                 "priority1_black.dxf",
@@ -159,7 +158,7 @@ class TestPriority2Simple:
 
         # Priority 1 серый полигон (создаст серый лист)
         polygon = Polygon([(0, 0), (300, 0), (300, 300), (0, 300)])  # 30x30 мм
-        polygons.append(
+        polygons.append(Carpet
             (
                 polygon,
                 "priority1_gray.dxf",
@@ -172,7 +171,7 @@ class TestPriority2Simple:
         # Priority 2 черные полигоны (должны размещаться только на черном листе)
         for i in range(2):
             polygon = Polygon([(0, 0), (200, 0), (200, 200), (0, 200)])  # 20x20 мм
-            polygons.append(
+            polygons.append(Carpet
                 (
                     polygon,
                     f"priority2_black_{i}.dxf",
@@ -185,7 +184,7 @@ class TestPriority2Simple:
         # Priority 2 серые полигоны (должны размещаться только на сером листе)
         for i in range(2):
             polygon = Polygon([(0, 0), (200, 0), (200, 200), (0, 200)])  # 20x20 мм
-            polygons.append(
+            polygons.append(Carpet
                 (
                     polygon,
                     f"priority2_gray_{i}.dxf",
@@ -283,7 +282,7 @@ class TestPriority2Simple:
         polygons = []
         for i in range(3):
             polygon = Polygon([(0, 0), (200, 0), (200, 200), (0, 200)])  # 20x20 мм
-            polygons.append(
+            polygons.append(Carpet
                 (
                     polygon,
                     f"priority2_file_{i}.dxf",

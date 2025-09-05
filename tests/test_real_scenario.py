@@ -6,7 +6,8 @@ to see if sheet filling is improved
 """
 
 from shapely.geometry import Polygon
-from layout_optimizer import bin_packing_with_inventory
+from layout_optimizer import bin_packing_with_inventory, Carpet
+
 
 def test_real_streamlit_scenario():
     """Test realistic scenario with bigger polygons"""
@@ -52,7 +53,7 @@ def test_real_streamlit_scenario():
             height = 60 + i * 10  # 60-100mm range
             polygon = Polygon([(0, 0), (width, 0), (width, height), (0, height)])
             priority = 1
-            polygons.append((polygon, filename, color, order_id, priority))
+            polygons.append(Carpet(polygon, filename, color, order_id, priority))
     
     # Single-file orders (like individual items)
     for i in range(20):  # 20 individual orders
@@ -65,7 +66,7 @@ def test_real_streamlit_scenario():
         height = 30 + i * 2  # 30-68mm range
         polygon = Polygon([(0, 0), (width, 0), (width, height), (0, height)])
         priority = 1
-        polygons.append((polygon, filename, color, order_id, priority))
+        polygons.append(Carpet(polygon, filename, color, order_id, priority))
     
     print(f"Создано {len(polygons)} полигонов:")
     print(f"- Multi-file orders: 4 заказа, всего {sum(fc for _, _, fc in car_orders)} файлов")

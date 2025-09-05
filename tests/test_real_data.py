@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from layout_optimizer import (
     parse_dxf_complete,
     bin_packing_with_inventory,
+    Carpet,
 )
 import logging
 
@@ -105,7 +106,7 @@ def main():
                     from shapely.geometry import Polygon
                     poly = Polygon([(0, 0), (200, 0), (200, 150), (0, 150)])
                     filename = f"{product_name}_{i+1}.dxf"
-                    polygons.append((poly, filename, color, order_id))
+                    polygons.append(Carpet(poly, filename, color, order_id))
                 
                 orders_info.append({
                     'order_id': order_id,
@@ -121,7 +122,7 @@ def main():
                         if polygon_data and polygon_data[0]:  # Проверяем что полигон создан
                             polygon = polygon_data[0]
                             filename = os.path.basename(dxf_file)
-                            polygons.append((polygon, filename, color, order_id))
+                            polygons.append(Carpet(polygon, filename, color, order_id))
                     except Exception as e:
                         print(f"⚠️ Ошибка обработки {dxf_file}: {e}")
                         continue
