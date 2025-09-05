@@ -36,13 +36,13 @@ jobs:
         pip install -r requirements.txt
         pip install pytest pytest-cov
     
-    - name: Verify sample_input.xlsx exists
+    - name: Verify sample_input_test.xlsx exists
       run: |
-        if [ ! -f "sample_input.xlsx" ]; then
-          echo "Error: sample_input.xlsx not found"
+        if [ ! -f "tests/sample_input_test.xlsx" ]; then
+          echo "Error: tests/sample_input_test.xlsx not found"
           exit 1
         fi
-        echo "✅ sample_input.xlsx found"
+        echo "✅ tests/sample_input_test.xlsx found"
     
     - name: Run integration tests
       run: |
