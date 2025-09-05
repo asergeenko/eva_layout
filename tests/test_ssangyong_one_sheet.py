@@ -15,7 +15,6 @@ correct behavior is maintained.
 import pytest
 import os
 import sys
-sys.path.append('/home/sasha/proj/2025/eva_layout')
 from layout_optimizer import parse_dxf_complete, bin_packing_with_inventory, Carpet
 
 
@@ -24,7 +23,7 @@ class TestSSANGYONGOneSheet:
     
     def setup_method(self):
         """Setup test data before each test method."""
-        self.dxf_dir = "/home/sasha/proj/2025/eva_layout/dxf_samples/SSANG YONG REXTON 4"
+        self.dxf_dir = "dxf_samples/SSANG YONG REXTON 4"
         self.dxf_files = [
             os.path.join(self.dxf_dir, "1.dxf"),
             os.path.join(self.dxf_dir, "2.dxf"),
