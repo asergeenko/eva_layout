@@ -3,7 +3,6 @@
 Проверяет базовые сценарии без зависимости от внешних файлов.
 """
 
-import pytest
 import sys
 import os
 from shapely.geometry import Polygon
@@ -13,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from layout_optimizer import (
     bin_packing_with_inventory,
-    scale_polygons_to_fit,
+    Carpet,
 )
 
 
@@ -44,7 +43,7 @@ class TestPriority2Simple:
             polygon = Polygon(
                 [(0, 0), (300, 0), (300, 300), (0, 300)]
             )  # 30x30 мм (3x3 см)
-            polygons.append(
+            polygons.append(Carpet
                 (
                     polygon,
                     f"priority1_file_{i}.dxf",
@@ -59,7 +58,7 @@ class TestPriority2Simple:
             polygon = Polygon(
                 [(0, 0), (200, 0), (200, 200), (0, 200)]
             )  # 20x20 мм (2x2 см)
-            polygons.append(
+            polygons.append(Carpet
                 (
                     polygon,
                     f"priority2_file_{i}.dxf",
@@ -69,14 +68,8 @@ class TestPriority2Simple:
                 )
             )
 
-        # Масштабирование
-        reference_sheet_size = (100, 100)
-        scaled_polygons = scale_polygons_to_fit(
-            polygons, reference_sheet_size, verbose=False
-        )
-
         # Тест только с priority 1
-        priority1_polygons = [p for p in scaled_polygons if len(p) < 5 or p[4] != 2]
+        priority1_polygons = [p for p in polygons if p.priority == 1]
         priority1_layouts, _ = bin_packing_with_inventory(
             priority1_polygons,
             [sheet.copy() for sheet in available_sheets],
@@ -85,7 +78,7 @@ class TestPriority2Simple:
 
         # Тест с priority 1 + priority 2
         all_layouts, unplaced = bin_packing_with_inventory(
-            scaled_polygons, [sheet.copy() for sheet in available_sheets], verbose=False
+            polygons, [sheet.copy() for sheet in available_sheets], verbose=False
         )
 
         # Проверки
@@ -111,11 +104,9 @@ class TestPriority2Simple:
                     if "priority2" in filename:
                         priority2_placed += 1
 
-        for unplaced_tuple in unplaced:
-            if len(unplaced_tuple) >= 2:
-                filename = unplaced_tuple[1]
-                if "priority2" in filename:
-                    priority2_unplaced += 1
+        for unplaced_carpet in unplaced:
+            if "priority2" in unplaced_carpet.filename:
+                priority2_unplaced += 1
 
         total_priority2 = priority2_placed + priority2_unplaced
         assert (
@@ -155,7 +146,7 @@ class TestPriority2Simple:
 
         # Priority 1 черный полигон (создаст черный лист)
         polygon = Polygon([(0, 0), (300, 0), (300, 300), (0, 300)])  # 30x30 мм
-        polygons.append(
+        polygons.append(Carpet
             (
                 polygon,
                 "priority1_black.dxf",
@@ -167,7 +158,7 @@ class TestPriority2Simple:
 
         # Priority 1 серый полигон (создаст серый лист)
         polygon = Polygon([(0, 0), (300, 0), (300, 300), (0, 300)])  # 30x30 мм
-        polygons.append(
+        polygons.append(Carpet
             (
                 polygon,
                 "priority1_gray.dxf",
@@ -180,7 +171,7 @@ class TestPriority2Simple:
         # Priority 2 черные полигоны (должны размещаться только на черном листе)
         for i in range(2):
             polygon = Polygon([(0, 0), (200, 0), (200, 200), (0, 200)])  # 20x20 мм
-            polygons.append(
+            polygons.append(Carpet
                 (
                     polygon,
                     f"priority2_black_{i}.dxf",
@@ -193,7 +184,7 @@ class TestPriority2Simple:
         # Priority 2 серые полигоны (должны размещаться только на сером листе)
         for i in range(2):
             polygon = Polygon([(0, 0), (200, 0), (200, 200), (0, 200)])  # 20x20 мм
-            polygons.append(
+            polygons.append(Carpet
                 (
                     polygon,
                     f"priority2_gray_{i}.dxf",
@@ -203,14 +194,9 @@ class TestPriority2Simple:
                 )
             )
 
-        # Масштабирование и оптимизация
-        reference_sheet_size = (100, 100)
-        scaled_polygons = scale_polygons_to_fit(
-            polygons, reference_sheet_size, verbose=False
-        )
-
+        # Оптимизация без масштабирования
         layouts, unplaced = bin_packing_with_inventory(
-            scaled_polygons, available_sheets, verbose=False
+            polygons, available_sheets, verbose=False
         )
 
         # Проверки
@@ -222,10 +208,25 @@ class TestPriority2Simple:
 
         for layout in layouts:
             sheet_color = None
-            for sheet in available_sheets:
-                if sheet["name"] == layout["sheet_type"]:
-                    sheet_color = sheet["color"]
-                    break
+            
+            # Определяем тип листа с проверкой наличия ключа
+            layout_sheet_type = layout.get("sheet_type")
+            if not layout_sheet_type and "sheet_color" in layout:
+                # Если нет sheet_type, попробуем найти лист по цвету и размеру
+                layout_color = layout["sheet_color"]
+                sheet_size = layout.get("sheet_size", (0, 0))
+                for sheet in available_sheets:
+                    if (sheet.get("color", "") == layout_color and 
+                        sheet.get("width", 0) == sheet_size[0] and 
+                        sheet.get("height", 0) == sheet_size[1]):
+                        layout_sheet_type = sheet["name"]
+                        break
+            
+            if layout_sheet_type:
+                for sheet in available_sheets:
+                    if sheet["name"] == layout_sheet_type:
+                        sheet_color = sheet["color"]
+                        break
 
             for placed_tuple in layout["placed_polygons"]:
                 if len(placed_tuple) >= 5:
@@ -281,7 +282,7 @@ class TestPriority2Simple:
         polygons = []
         for i in range(3):
             polygon = Polygon([(0, 0), (200, 0), (200, 200), (0, 200)])  # 20x20 мм
-            polygons.append(
+            polygons.append(Carpet
                 (
                     polygon,
                     f"priority2_file_{i}.dxf",
@@ -291,14 +292,9 @@ class TestPriority2Simple:
                 )
             )
 
-        # Масштабирование и оптимизация
-        reference_sheet_size = (100, 100)
-        scaled_polygons = scale_polygons_to_fit(
-            polygons, reference_sheet_size, verbose=False
-        )
-
+        # Оптимизация без масштабирования
         layouts, unplaced = bin_packing_with_inventory(
-            scaled_polygons, available_sheets, verbose=False
+            polygons, available_sheets, verbose=False
         )
 
         # Проверки
