@@ -1621,8 +1621,8 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
                     {
                         "DXF файл": file_name,
                         "Номер листа": layout["Sheet"],
-                        "Размер (см)": size_comparison,
-                        "Площадь (см²)": f"{area_cm2:.2f}",
+                        #"Размер (см)": size_comparison,
+                        #"Площадь (см²)": f"{area_cm2:.2f}",
                         "Поворот (°)": f"{angle:.0f}",
                         "Выходной файл": layout["Output File"],
                     }

@@ -3031,110 +3031,57 @@ def scale_polygons_to_fit(
     sheet_size: tuple[float, float],
     verbose: bool = True,
 ) -> list[tuple]:
-    """Scale polygons to fit better on the sheet if they are too large."""
+    """НЕ масштабирует полигоны - возвращает их в исходном масштабе.
+    
+    ВАЖНО: По требованию пользователя полигоны должны оставаться в точно таком же 
+    масштабе, как в исходных DXF файлах. Эта функция теперь только проверяет и 
+    предупреждает о полигонах, которые могут не поместиться на листе.
+    """
     if not polygons_with_names:
         return polygons_with_names
 
     # Convert sheet size from cm to mm to match DXF units
     sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
-    scaled_polygons = []
-
-    # First, find the overall scale factor needed (all in mm)
-    max_width = max(
-        (poly_tuple[0].bounds[2] - poly_tuple[0].bounds[0])
-        for poly_tuple in polygons_with_names
-    )
-    max_height = max(
-        (poly_tuple[0].bounds[3] - poly_tuple[0].bounds[1])
-        for poly_tuple in polygons_with_names
-    )
-
-    # Calculate a global scale factor only if polygons are too large for the sheet
-    # Only scale if polygons are larger than 90% of sheet size
-    global_scale_x = (
-        (sheet_width_mm * 0.9) / max_width if max_width > sheet_width_mm * 0.9 else 1.0
-    )
-    global_scale_y = (
-        (sheet_height_mm * 0.9) / max_height
-        if max_height > sheet_height_mm * 0.9
-        else 1.0
-    )
-    global_scale = min(global_scale_x, global_scale_y, 1.0)
-
-    if global_scale < 1.0 and verbose:
-        st.info(
-            f"Применяем глобальный масштабный коэффициент {global_scale:.4f} ко всем полигонам"
-        )
-
+    
+    # Проверяем, есть ли полигоны, которые больше листа (только для предупреждения)
+    oversized_polygons = []
+    
     for polygon_tuple in polygons_with_names:
-        if (
-            len(polygon_tuple) >= 5
-        ):  # Extended format with color, order_id, and priority
-            polygon, name, color, order_id, priority = polygon_tuple[:5]
-        elif len(polygon_tuple) >= 4:  # Extended format with color and order_id
-            polygon, name, color, order_id = polygon_tuple[:4]
-            priority = 1  # Default priority
-        elif len(polygon_tuple) >= 3:  # Format with color
-            polygon, name, color = polygon_tuple[:3]
-            order_id = "unknown"
-            priority = 1  # Default priority
-        else:  # Old format without color
-            polygon, name = polygon_tuple[:2]
-            color = "серый"
-            order_id = "unknown"
-            priority = 1  # Default priority
+        polygon = polygon_tuple[0]
+        name = polygon_tuple[1] if len(polygon_tuple) > 1 else "unnamed"
+        
         bounds = polygon.bounds
         poly_width = bounds[2] - bounds[0]
         poly_height = bounds[3] - bounds[1]
-
-        # Apply global scale first
-        scale_factor = global_scale
-
-        # Then check if individual scaling is needed (all in mm)
-        # Only scale individual polygons if they don't fit on the sheet
+        
         if poly_width > sheet_width_mm or poly_height > sheet_height_mm:
-            scale_x = (sheet_width_mm * 0.95) / poly_width
-            scale_y = (sheet_height_mm * 0.95) / poly_height
-            individual_scale = min(scale_x, scale_y)
-            scale_factor = min(scale_factor, individual_scale)
+            oversized_polygons.append({
+                'name': name,
+                'width': poly_width / 10.0,  # Convert to cm for display
+                'height': poly_height / 10.0,
+                'sheet_width': sheet_size[0],
+                'sheet_height': sheet_size[1]
+            })
+    
+    # Предупреждаем о полигонах, которые больше листа
+    if oversized_polygons and verbose:
+        st.warning(
+            f"⚠️ Найдено {len(oversized_polygons)} полигонов, которые больше листа "
+            f"({sheet_size[0]}x{sheet_size[1]} см). Полигоны сохранены в исходном масштабе:"
+        )
+        for poly_info in oversized_polygons[:5]:  # Show first 5 only
+            st.text(f"  • {poly_info['name']}: {poly_info['width']:.1f}x{poly_info['height']:.1f} см")
+        if len(oversized_polygons) > 5:
+            st.text(f"  ... и еще {len(oversized_polygons) - 5} полигонов")
+    
+    # ИСПРАВЛЕНИЕ: НЕ масштабируем полигоны - возвращаем как есть
+    if verbose and not oversized_polygons:
+        st.success(
+            f"✅ Все {len(polygons_with_names)} полигонов сохранены в исходном масштабе"
+        )
 
-        if scale_factor < 0.99:  # Only scale if significant change
-            # Scale the polygon around its centroid
-            centroid = polygon.centroid
-            scaled_polygon = affinity.scale(
-                polygon,
-                xfact=scale_factor,
-                yfact=scale_factor,
-                origin=(centroid.x, centroid.y),
-            )
-
-            # Also translate to origin area to avoid negative coordinates
-            scaled_bounds = scaled_polygon.bounds
-            if scaled_bounds[0] < 0 or scaled_bounds[1] < 0:
-                translate_x = -scaled_bounds[0] if scaled_bounds[0] < 0 else 0
-                translate_y = -scaled_bounds[1] if scaled_bounds[1] < 0 else 0
-                scaled_polygon = affinity.translate(
-                    scaled_polygon, xoff=translate_x, yoff=translate_y
-                )
-
-            if verbose:
-                # Show dimensions in cm for user-friendly display
-                original_width_cm = poly_width / 10.0
-                original_height_cm = poly_height / 10.0
-                new_width_cm = (
-                    scaled_polygon.bounds[2] - scaled_polygon.bounds[0]
-                ) / 10.0
-                new_height_cm = (
-                    scaled_polygon.bounds[3] - scaled_polygon.bounds[1]
-                ) / 10.0
-                st.info(
-                    f"Масштабирован {name}: {original_width_cm:.1f}x{original_height_cm:.1f} см → {new_width_cm:.1f}x{new_height_cm:.1f} см (коэффициент: {scale_factor:.4f})"
-                )
-            scaled_polygons.append((scaled_polygon, name, color, order_id, priority))
-        else:
-            scaled_polygons.append((polygon, name, color, order_id, priority))
-
-    return scaled_polygons
+    # Возвращаем все полигоны в исходном виде без изменений
+    return polygons_with_names
 
 
 # Verification that all functions are properly defined
