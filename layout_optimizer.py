@@ -2633,163 +2633,9 @@ def bin_packing_with_inventory(
                     )
                     st.info(f"  {status} Заказ {order_id}: {sheet_count} листов")
 
-    # ======= POST-PROCESSING: AGGRESSIVE REDISTRIBUTION ======
-    logger.info("🔧 ФИНАЛЬНОЕ АГРЕССИВНОЕ ПЕРЕРАСПРЕДЕЛЕНИЕ ЛИСТОВ")
-    
-    # Find low-usage sheets (less than 50% filled) that we can redistribute
-    low_usage_sheets = []
-    high_usage_sheets = []
-    
-    for idx, layout in enumerate(placed_layouts):
-        usage = layout.get("usage_percent", 0)
-        poly_count = len(layout.get("placed_polygons", []))
-        
-        if usage < 50 and poly_count <= 3:  # Low usage and few polygons
-            low_usage_sheets.append((idx, layout, usage))
-        elif usage < 85:  # Can potentially accept more polygons
-            high_usage_sheets.append((idx, layout, usage))
-    
-    if low_usage_sheets:
-        logger.info(f"Найдено {len(low_usage_sheets)} листов с низким заполнением для перераспределения")
-        logger.info(f"Доступно {len(high_usage_sheets)} листов-получателей")
-        
-        successfully_redistributed = 0
-        sheets_to_remove = []
-        
-        # Sort and limit sheets for faster processing
-        low_usage_sheets.sort(key=lambda x: x[2])  # Sort by usage (lowest first)
-        high_usage_sheets.sort(key=lambda x: x[2])  # Sort by usage (lowest first) 
-        
-        # Limit processing to first 5 low-usage sheets and first 10 high-usage sheets for speed
-        low_usage_sheets = low_usage_sheets[:5]
-        high_usage_sheets = high_usage_sheets[:10]
-        
-        for low_idx, low_layout, low_usage in low_usage_sheets:
-            polygons_to_move = low_layout["placed_polygons"]
-            sheet_color = low_layout.get("sheet_color", "серый")
-            
-            if not polygons_to_move:
-                continue
-                
-            logger.info(f"Пытаемся перераспределить лист #{low_layout['sheet_number']} ({low_usage:.1f}%, {len(polygons_to_move)} полигонов)")
-            
-            # Try to place all polygons from this sheet onto other sheets
-            all_moved = True
-            moved_polygons = []
-            failed_attempts = 0
-            
-            for poly_tuple in polygons_to_move:
-                # Early exit if too many failures
-                if failed_attempts >= 5:
-                    all_moved = False
-                    break
-                moved = False
-                
-                # Try to place on compatible high-usage sheets
-                for high_idx, high_layout, high_usage in high_usage_sheets:
-                    if high_idx == low_idx:  # Don't try to move to itself
-                        continue
-                        
-                    target_color = high_layout.get("sheet_color", "серый")
-                    if target_color != sheet_color:  # Must be same color
-                        continue
-                        
-                    if high_usage >= 85:  # Skip nearly full sheets
-                        continue
-                    
-                    # Log attempt for debugging  
-                    # Handle different tuple structures: (polygon, file_name, color, order_id) vs (polygon, x, y, angle, file_name, color, order_id)
-                    if len(poly_tuple) == 7:
-                        # Extended format from bin_packing_with_existing: (polygon, x, y, angle, file_name, color, order_id)
-                        poly_order_id = poly_tuple[6]
-                        poly_filename = poly_tuple[4]
-                    else:
-                        # Standard format: (polygon, file_name, color, order_id) 
-                        poly_order_id = poly_tuple[3] if len(poly_tuple) > 3 else "unknown"
-                        poly_filename = poly_tuple[1] if len(poly_tuple) > 1 else "unknown"
-                    
-                    logger.info(f"    Попытка переместить {poly_order_id} ({poly_filename}) на лист #{high_layout['sheet_number']} ({high_usage:.1f}%)")
-                    
-                    existing_placed = high_layout["placed_polygons"]
-                    sheet_size = high_layout["sheet_size"]
-                    
-                    try:
-                        # Try to add this polygon to the target sheet (fast attempt)
-                        additional_placed, still_remaining = bin_packing_with_existing(
-                            [poly_tuple], existing_placed, sheet_size, max_attempts=20, verbose=False
-                        )
-                        
-                        if additional_placed:
-                            # Successfully moved to target sheet
-                            placed_layouts[high_idx]["placed_polygons"] = existing_placed + additional_placed
-                            new_usage = calculate_usage_percent(
-                                placed_layouts[high_idx]["placed_polygons"], sheet_size
-                            )
-                            placed_layouts[high_idx]["usage_percent"] = new_usage
-                            
-                            # Update orders on target sheet
-                            if "orders_on_sheet" not in placed_layouts[high_idx]:
-                                placed_layouts[high_idx]["orders_on_sheet"] = set()
-                            elif isinstance(placed_layouts[high_idx]["orders_on_sheet"], list):
-                                # Convert list to set if needed
-                                placed_layouts[high_idx]["orders_on_sheet"] = set(placed_layouts[high_idx]["orders_on_sheet"])
-                            
-                            # Add the order_id with correct indexing based on tuple structure
-                            if len(poly_tuple) == 7:
-                                # Extended format: order_id is at index 6
-                                placed_layouts[high_idx]["orders_on_sheet"].add(poly_tuple[6])
-                            elif len(poly_tuple) > 3:
-                                # Standard format: order_id is at index 3
-                                placed_layouts[high_idx]["orders_on_sheet"].add(poly_tuple[3])
-                            
-                            moved_polygons.append(poly_tuple)
-                            moved = True
-                            
-                            # Update high_usage in our list for next iterations
-                            for i, (h_idx, h_layout, h_usage) in enumerate(high_usage_sheets):
-                                if h_idx == high_idx:
-                                    high_usage_sheets[i] = (h_idx, h_layout, new_usage)
-                                    break
-                            
-                            logger.info(f"      ✅ Полигон перемещен на лист #{high_layout['sheet_number']} ({high_usage:.1f}% → {new_usage:.1f}%)")
-                            break
-                        else:
-                            logger.info(f"      ❌ Не помещается на лист #{high_layout['sheet_number']}")
-                            
-                    except Exception as e:
-                        logger.info(f"      ❌ Ошибка размещения на лист #{high_layout['sheet_number']}: {e}")
-                        continue
-                
-                if not moved:
-                    failed_attempts += 1
-                    all_moved = False
-                    break
-            
-            if all_moved and moved_polygons:
-                # All polygons successfully moved - mark sheet for removal
-                sheets_to_remove.append(low_idx)
-                successfully_redistributed += len(moved_polygons)
-                logger.info(f"  🎯 УСПЕХ: Лист #{low_layout['sheet_number']} полностью опустошен ({len(moved_polygons)} полигонов перемещено)")
-            else:
-                # Some polygons couldn't be moved - update the sheet with remaining polygons
-                remaining_polygons = [p for p in polygons_to_move if p not in moved_polygons]
-                placed_layouts[low_idx]["placed_polygons"] = remaining_polygons
-                placed_layouts[low_idx]["usage_percent"] = calculate_usage_percent(
-                    remaining_polygons, low_layout["sheet_size"]
-                )
-                if moved_polygons:
-                    logger.info(f"  ⚠️ ЧАСТИЧНО: Лист #{low_layout['sheet_number']} ({len(moved_polygons)} перемещено, {len(remaining_polygons)} осталось)")
-                    successfully_redistributed += len(moved_polygons)
-        
-        # Remove empty sheets (in reverse order to maintain indices)
-        for sheet_idx in sorted(sheets_to_remove, reverse=True):
-            removed_sheet = placed_layouts.pop(sheet_idx)
-            logger.info(f"🗑️ Удален пустой лист #{removed_sheet['sheet_number']}")
-        
-        logger.info(f"🎯 ПЕРЕРАСПРЕДЕЛЕНИЕ: {successfully_redistributed} полигонов перемещено, {len(sheets_to_remove)} листов удалено")
-        logger.info(f"📊 РЕЗУЛЬТАТ: {len(placed_layouts)} листов вместо {len(placed_layouts) + len(sheets_to_remove)}")
-    else:
-        logger.info("Листов с низким заполнением для перераспределения не найдено")
+    # ИСПРАВЛЕНИЕ: Убираем финальное агрессивное перераспределение листов 
+    # (по запросу пользователя - это лишнее)
+    logger.info("🔧 Пропускаем агрессивное перераспределение листов")
 
     # PRIORITY 2 PROCESSING: Try to fit priority 2 polygons into existing sheets only
     # Размещаем приоритет 2 В САМУЮ ПОСЛЕДНЮЮ ОЧЕРЕДЬ после всех операций
@@ -2932,6 +2778,48 @@ def bin_packing_with_inventory(
                 f"⚠️ Только файлы приоритета 2: {len(priority2_polygons)} файлов не размещаются (новые листы не создаются)"
             )
         all_unplaced.extend(priority2_polygons)
+
+    # ИСПРАВЛЕНИЕ: Перенумеровываем листы для группировки по цветам
+    # Листы должны идти подряд по цветам: 1-N чёрные, N+1-M серые, M+1-K остальные
+    if placed_layouts:
+        logger.info(f"Перенумеровываем {len(placed_layouts)} листов для группировки по цветам")
+        
+        # Группируем листы по цветам
+        sheets_by_color = {"чёрный": [], "серый": [], "other": []}
+        
+        for layout in placed_layouts:
+            sheet_color = layout.get("sheet_color", "серый")
+            if sheet_color == "чёрный":
+                sheets_by_color["чёрный"].append(layout)
+            elif sheet_color == "серый":
+                sheets_by_color["серый"].append(layout)
+            else:
+                sheets_by_color["other"].append(layout)
+        
+        # Перенумеровываем листы по группам
+        new_sheet_number = 1
+        renumbered_layouts = []
+        
+        # Сначала черные листы
+        for layout in sheets_by_color["чёрный"]:
+            layout["sheet_number"] = new_sheet_number
+            renumbered_layouts.append(layout)
+            new_sheet_number += 1
+            
+        # Потом серые листы  
+        for layout in sheets_by_color["серый"]:
+            layout["sheet_number"] = new_sheet_number
+            renumbered_layouts.append(layout)
+            new_sheet_number += 1
+            
+        # Потом остальные листы
+        for layout in sheets_by_color["other"]:
+            layout["sheet_number"] = new_sheet_number
+            renumbered_layouts.append(layout)
+            new_sheet_number += 1
+            
+        placed_layouts = renumbered_layouts
+        logger.info(f"Листы перенумерованы: чёрных {len(sheets_by_color['чёрный'])}, серых {len(sheets_by_color['серый'])}, других {len(sheets_by_color['other'])}")
 
     # Final progress update
     if progress_callback:
