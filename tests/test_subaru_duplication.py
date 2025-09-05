@@ -5,7 +5,11 @@ Test specifically for SUBARU FORESTER duplication issue
 """
 
 import sys
+import os
 import importlib
+
+# Добавляем корневую директорию в путь для импорта модулей
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Force reload of the module to ensure we get the latest version
 if 'layout_optimizer' in sys.modules:

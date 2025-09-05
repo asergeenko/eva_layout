@@ -8,7 +8,7 @@ import os
 import pandas as pd
 
 # Добавляем корневую директорию в путь для импорта модулей
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from layout_optimizer import (
     parse_dxf_complete,

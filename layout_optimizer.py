@@ -1727,8 +1727,6 @@ def bin_packing_with_inventory(
         for order_id, carpets in remaining_orders.items():
             logger.info(f"  {order_id}: {len(carpets)} полигонов")
 
-        # ENHANCED STRATEGY: Try to fill existing sheets FIRST before creating new ones
-        # ОТКЛЮЧЕНО: старая логика дозаполнения - теперь используем новый алгоритм выше
         if False and placed_layouts:  # Only if we have existing sheets
             logger.info("🔄 ПРОВЕРЯЕМ ДОЗАПОЛНЕНИЕ СУЩЕСТВУЮЩИХ ЛИСТОВ")
 
@@ -2052,7 +2050,7 @@ def bin_packing_with_inventory(
                             compatible_polygons = [
                                 p
                                 for p in compatible_polygons
-                                if (p[1], p[2], p[3]) not in placed_keys
+                                if (p.filename, p.color, p.order_id) not in placed_keys
                             ]
 
                             # Update remaining orders - remove empty orders or reduce polygon counts
@@ -2092,16 +2090,16 @@ def bin_packing_with_inventory(
                                                 placed_poly[3],
                                             )
 
-                                        for orig_tuple in remaining_orders[order_id][:]:
+                                        for orig_carpet in remaining_orders[order_id][:]:
                                             # Сравниваем по ключу (filename, color, order_id)
                                             orig_key = (
-                                                orig_tuple[1],
-                                                orig_tuple[2],
-                                                orig_tuple[3],
+                                                orig_carpet.filename,
+                                                orig_carpet.color,
+                                                orig_carpet.order_id,
                                             )
                                             if orig_key == placed_key:
                                                 remaining_orders[order_id].remove(
-                                                    orig_tuple
+                                                    orig_carpet
                                                 )
                                                 break
 
@@ -2249,13 +2247,13 @@ def bin_packing_with_inventory(
 
                 # Remove placed polygons from remaining orders
                 # We need to match polygons by both filename AND order_id
-                placed_polygon_map = {}  # Maps (filename, order_id) -> True
+                placed_polygon_keys = set()  # Maps (filename, order_id) -> True
                 for carpet in placed:
                     if len(carpet) >= 5:
                         filename = carpet[4]  # file_name is at index 4
                         if len(carpet) >= 7:
                             order_id = carpet[6]  # order_id is at index 6
-                            placed_polygon_map[(filename, order_id)] = True
+                            placed_polygon_keys.add((filename, order_id))
                             logger.debug(
                                 f"  Размещен полигон: файл='{filename}', заказ='{order_id}'"
                             )
@@ -2263,14 +2261,16 @@ def bin_packing_with_inventory(
                 total_removed = 0
                 for order_id in list(remaining_orders.keys()):
                     original_count = len(remaining_orders[order_id])
+                    
                     # Only remove polygons that were actually placed from this specific order
-                    remaining_orders[order_id] = [
-                        p
-                        for p in remaining_orders[order_id]
-                        # !!!!!!!!!!!!!!!!!!!!!!!!!
-                        # if len(p) < 2 or (p[1], order_id) not in placed_polygon_map
-                        if (p.filename, p.order_id) not in placed_polygon_map
-                    ]
+                    new_order_list = []
+                    for carpet in remaining_orders[order_id]:
+                        # Check if this carpet was placed
+                        carpet_key = (carpet.filename, carpet.order_id)
+                        if carpet_key not in placed_polygon_keys:
+                            new_order_list.append(carpet)
+                    
+                    remaining_orders[order_id] = new_order_list
                     removed_count = original_count - len(remaining_orders[order_id])
                     total_removed += removed_count
 
