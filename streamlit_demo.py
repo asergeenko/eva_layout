@@ -62,6 +62,7 @@ try:
 except FileNotFoundError:
     pass  # Skip logo if file not found
 
+
 # Sheet Inventory Section
 st.header("📋 Настройка доступных листов")
 st.write("Укажите какие листы у вас есть в наличии и их количество.")
