@@ -16,6 +16,7 @@ from layout_optimizer import (
     bin_packing_with_inventory,
     save_dxf_layout_complete,
     plot_layout,
+    Carpet,
 )
 
 
@@ -172,7 +173,7 @@ class TestBinPackingWithInventory:
 
     def test_bin_packing_single_polygon(self, simple_polygon):
         """Test bin packing with a single polygon."""
-        polygons = [(simple_polygon, "test_polygon", "серый", "test_order")]
+        polygons = [Carpet(simple_polygon, "test_polygon", "серый", "test_order")]
 
         # Create available sheets list
         available_sheets = [
@@ -200,7 +201,7 @@ class TestBinPackingWithInventory:
         polygons = []
         for i in range(5):
             poly = Polygon([(i * 2, 0), (i * 2 + 1, 0), (i * 2 + 1, 1), (i * 2, 1)])
-            polygons.append((poly, f"poly_{i}", "серый", f"order_{i}"))
+            polygons.append(Carpet(poly, f"poly_{i}", "серый", f"order_{i}"))
 
         available_sheets = [
             {
@@ -228,7 +229,7 @@ class TestBinPackingWithInventory:
         large_polygon = Polygon(
             [(0, 0), (2000, 0), (2000, 3000), (0, 3000)]
         )  # Much larger
-        polygons = [(large_polygon, "large_polygon", "серый", "large_order")]
+        polygons = [Carpet(large_polygon, "large_polygon", "серый", "large_order")]
 
         available_sheets = [
             {
@@ -313,8 +314,6 @@ class TestSaveDxfLayoutComplete:
 
             # Verify the file can be read back
             doc = ezdxf.readfile(output_path)
-            msp = doc.modelspace()
-            entities = list(msp)
             # File should exist and be readable, entities count may vary based on implementation
             assert doc is not None
 
@@ -389,7 +388,7 @@ class TestIntegration:
                 parsed_data = parse_dxf_complete(file_bytes, verbose=False)
                 if parsed_data and parsed_data.get("combined_polygon"):
                     polygon = parsed_data["combined_polygon"]
-                    all_polygons.append(
+                    all_polygons.append(Carpet
                         (polygon, dxf_file.name, "серый", f"order_{dxf_file.name}")
                     )
 

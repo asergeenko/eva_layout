@@ -2,7 +2,6 @@
 Тест функции прогресса в bin_packing_with_inventory.
 """
 
-import pytest
 import sys
 import os
 from shapely.geometry import Polygon
@@ -12,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from layout_optimizer import (
     bin_packing_with_inventory,
-    scale_polygons_to_fit,
+    Carpet,
 )
 
 
@@ -41,7 +40,7 @@ class TestProgressCallback:
         # Priority 1 полигоны (создадут листы)
         for i in range(5):
             polygon = Polygon([(0, 0), (300, 0), (300, 300), (0, 300)])  # 30x30 мм
-            polygons.append((
+            polygons.append(Carpet(
                 polygon,
                 f"priority1_file_{i}.dxf",
                 "чёрный",
@@ -49,9 +48,7 @@ class TestProgressCallback:
                 1  # Priority 1
             ))
         
-        # Масштабирование
-        reference_sheet_size = (100, 100)
-        scaled_polygons = scale_polygons_to_fit(polygons, reference_sheet_size, verbose=False)
+
         
         # Отслеживание вызовов прогресса
         progress_calls = []
@@ -62,7 +59,7 @@ class TestProgressCallback:
         
         # Тестируем с колбеком
         layouts, unplaced = bin_packing_with_inventory(
-            scaled_polygons,
+            polygons,
             available_sheets,
             verbose=False,
             progress_callback=track_progress
@@ -107,7 +104,7 @@ class TestProgressCallback:
         # Priority 1 полигоны
         for i in range(2):
             polygon = Polygon([(0, 0), (300, 0), (300, 300), (0, 300)])
-            polygons.append((
+            polygons.append(Carpet(
                 polygon,
                 f"priority1_file_{i}.dxf",
                 "чёрный",
@@ -118,7 +115,7 @@ class TestProgressCallback:
         # Priority 2 полигоны
         for i in range(2):
             polygon = Polygon([(0, 0), (200, 0), (200, 200), (0, 200)])
-            polygons.append((
+            polygons.append(Carpet(
                 polygon,
                 f"priority2_file_{i}.dxf",
                 "чёрный",
@@ -126,10 +123,7 @@ class TestProgressCallback:
                 2  # Priority 2
             ))
         
-        # Масштабирование
-        reference_sheet_size = (100, 100)
-        scaled_polygons = scale_polygons_to_fit(polygons, reference_sheet_size, verbose=False)
-        
+
         # Отслеживание вызовов прогресса
         progress_calls = []
         
@@ -139,7 +133,7 @@ class TestProgressCallback:
         
         # Тестируем с колбеком
         layouts, unplaced = bin_packing_with_inventory(
-            scaled_polygons,
+            polygons,
             available_sheets,
             verbose=False,
             progress_callback=track_progress
@@ -151,12 +145,12 @@ class TestProgressCallback:
         
         # Проверяем что есть сообщения о priority 2
         priority2_messages = [call[1] for call in progress_calls if "приоритета 2" in call[1]]
-        if len([p for p in scaled_polygons if len(p) >= 5 and p[4] == 2]) > 0:  # If there are priority 2 files
+        if len([p for p in polygons if p.priority==2]) > 0:  # If there are priority 2 files
             assert len(priority2_messages) > 0, "Должно быть сообщение о приоритете 2"
         
         # Проверяем финальный прогресс
         final_call = progress_calls[-1]
-        assert final_call[0] == 100, f"Финальный прогресс должен быть 100%"
+        assert final_call[0] == 100, "Финальный прогресс должен быть 100%"
         
         print(f"✅ Прогресс с priority 2: {len(progress_calls)} вызовов")
         if priority2_messages:
@@ -184,7 +178,7 @@ class TestProgressCallback:
         # Priority 1 полигоны
         for i in range(2):
             polygon = Polygon([(0, 0), (300, 0), (300, 300), (0, 300)])
-            polygons.append((
+            polygons.append(Carpet(
                 polygon,
                 f"priority1_file_{i}.dxf",
                 "чёрный",
@@ -192,13 +186,10 @@ class TestProgressCallback:
                 1  # Priority 1
             ))
         
-        # Масштабирование
-        reference_sheet_size = (100, 100)
-        scaled_polygons = scale_polygons_to_fit(polygons, reference_sheet_size, verbose=False)
-        
+
         # Тестируем БЕЗ колбека
         layouts, unplaced = bin_packing_with_inventory(
-            scaled_polygons,
+            polygons,
             available_sheets,
             verbose=False
             # progress_callback НЕ передается

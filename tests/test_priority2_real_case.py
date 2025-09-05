@@ -11,7 +11,6 @@ import sys
 import tempfile
 import shutil
 from io import BytesIO
-from unittest.mock import Mock, patch, MagicMock
 from shapely.geometry import Polygon
 
 # Добавляем корневую директорию в путь для импорта модулей
@@ -20,8 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from layout_optimizer import (
     parse_dxf_complete,
     bin_packing_with_inventory,
-    scale_polygons_to_fit,
-    save_dxf_layout_complete,
+    Carpet,
 )
 
 
@@ -35,11 +33,11 @@ class TestPriority2RealCase:
         self.output_dir = tempfile.mkdtemp()
         self.original_cwd = os.getcwd()
 
-        # Убеждаемся что sample_input.xlsx существует
-        self.sample_excel_path = os.path.join(self.original_cwd, "sample_input.xlsx")
+        # Убеждаемся что sample_input_.xlsx существует
+        self.sample_excel_path = os.path.join(self.original_cwd, "tests/sample_input_test.xlsx")
         assert os.path.exists(
             self.sample_excel_path
-        ), "Файл sample_input.xlsx не найден"
+        ), "Файл tests/sample_input_test.xlsx не найден"
 
         # Проверяем наличие тестового DXF файла
         self.test_dxf_path = os.path.join(
@@ -158,7 +156,7 @@ class TestPriority2RealCase:
             polygon = Polygon([(0, 0), (width, 0), (width, height), (0, height)])
 
             dxf_files.append(
-                (
+                Carpet(
                     polygon,
                     f"{order['product']}_test_{i}.dxf",
                     order.get("color", "серый"),
@@ -184,7 +182,7 @@ class TestPriority2RealCase:
         # Создаем 20 копий файла с приоритетом 2 и черным цветом
         priority2_count = 20
         for i in range(priority2_count):
-            priority2_file = (
+            priority2_file = Carpet(
                 parsed_data["combined_polygon"],
                 f"ДЕКА_KUGOO_M4_PRO_JILONG_1_копия_{i+1}.dxf",
                 "чёрный",  # черный цвет как указано в условии
@@ -197,11 +195,6 @@ class TestPriority2RealCase:
             f"Создано {len(dxf_files)} полигонов: {len(all_orders)} из Excel + {priority2_count} приоритета 2"
         )
 
-        # 6. МАСШТАБИРОВАНИЕ
-        reference_sheet_size = (140, 200)
-        scaled_polygons = scale_polygons_to_fit(
-            dxf_files, reference_sheet_size, verbose=False
-        )
 
         # 7. ПОДСЧЕТ ЛИСТОВ ДО ОПТИМИЗАЦИИ
         initial_sheets_count = sum(
@@ -212,7 +205,7 @@ class TestPriority2RealCase:
         MAX_SHEETS_PER_ORDER = 5
 
         placed_layouts, unplaced_polygons = bin_packing_with_inventory(
-            scaled_polygons,
+            dxf_files,
             available_sheets,
             verbose=True,
             max_sheets_per_order=MAX_SHEETS_PER_ORDER,
@@ -227,7 +220,7 @@ class TestPriority2RealCase:
         sheets_used = len(placed_layouts)
 
         # Запускаем тест без priority 2 файлов для сравнения
-        excel_only_polygons = [p for p in scaled_polygons if len(p) < 5 or p[4] != 2]
+        excel_only_polygons = [p for p in dxf_files if p.priority != 2]
         excel_only_layouts, _ = bin_packing_with_inventory(
             excel_only_polygons,
             [sheet.copy() for sheet in available_sheets],  # Fresh copy
@@ -258,10 +251,9 @@ class TestPriority2RealCase:
 
         # В неразмещенных
         for unplaced_tuple in unplaced_polygons:
-            if len(unplaced_tuple) >= 2:
-                filename = unplaced_tuple[1]
-                if "priority2" in filename or "ДЕКА_KUGOO" in filename:
-                    priority2_unplaced_count += 1
+            filename = unplaced_tuple.filename
+            if "priority2" in filename or "ДЕКА_KUGOO" in filename:
+                priority2_unplaced_count += 1
 
         print(
             f"Priority 2 файлы: размещено {priority2_placed_count}, не размещено {priority2_unplaced_count}"
@@ -284,7 +276,7 @@ class TestPriority2RealCase:
         ), f"Excel файлы размещены плохо: {excel_placement_rate*100:.1f}%"
 
         # 10. РЕЗУЛЬТАТЫ ТЕСТА
-        print(f"\n=== РЕЗУЛЬТАТЫ ТЕСТА ПРИОРИТЕТА 2 ===")
+        print("\n=== РЕЗУЛЬТАТЫ ТЕСТА ПРИОРИТЕТА 2 ===")
         print(f"Всего листов доступно: {initial_sheets_count}")
         print(f"Excel заказов: {len(all_orders)}")
         print(f"Priority 2 файлов: {priority2_count}")

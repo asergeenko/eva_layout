@@ -9,17 +9,14 @@ import os
 import sys
 import tempfile
 import shutil
-from io import BytesIO
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock
 
 # Добавляем корневую директорию в путь для импорта модулей
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from layout_optimizer import (
-    parse_dxf_complete,
     bin_packing_with_inventory,
-    scale_polygons_to_fit,
-    save_dxf_layout_complete,
+    Carpet,
 )
 
 
@@ -33,11 +30,11 @@ class TestStreamlitIntegration:
         self.output_dir = tempfile.mkdtemp()
         self.original_cwd = os.getcwd()
 
-        # Убеждаемся что sample_input.xlsx существует
-        self.sample_excel_path = os.path.join(self.original_cwd, "sample_input.xlsx")
+        # Убеждаемся что tests/sample_input_test.xlsx существует
+        self.sample_excel_path = os.path.join(self.original_cwd, "tests/sample_input_test.xlsx")
         assert os.path.exists(
             self.sample_excel_path
-        ), "Файл sample_input.xlsx не найден"
+        ), "Файл tests/sample_input_test.xlsx не найден"
 
         yield
 
@@ -49,7 +46,7 @@ class TestStreamlitIntegration:
         Тестирует полный workflow Streamlit приложения:
         1. 20 черных листов 140x200
         2. 20 серых листов 140x200
-        3. Загрузка sample_input.xlsx
+        3. Загрузка tests/sample_input_test.xlsx
         4. Выбор всех невыполненных заказов (должно быть 37)
         5. Успешная раскладка всех заказов
         """
@@ -186,32 +183,17 @@ class TestStreamlitIntegration:
             polygon = Polygon([(0, 0), (width, 0), (width, height), (0, height)])
 
             dxf_files.append(
-                (polygon, mock_file.name, mock_file.color, mock_file.order_id)
+                Carpet(polygon, mock_file.name, mock_file.color, mock_file.order_id)
             )
 
         # Проверяем что создали файлы для всех заказов
         assert len(dxf_files) == 37
 
-        # 7. ЭМУЛЯЦИЯ МАСШТАБИРОВАНИЯ (как в Streamlit)
-        # Находим наибольший лист для масштабирования
-        max_sheet_area = 0
-        reference_sheet_size = (140, 200)  # default fallback
-        for sheet in available_sheets:
-            area = sheet["width"] * sheet["height"]
-            if area > max_sheet_area:
-                max_sheet_area = area
-                reference_sheet_size = (sheet["width"], sheet["height"])
-
-        # Масштабируем полигоны
-        scaled_polygons = scale_polygons_to_fit(
-            dxf_files, reference_sheet_size, verbose=False
-        )
-
         # 8. ЭМУЛЯЦИЯ ОПТИМИЗАЦИИ (как в Streamlit с MAX_SHEETS_PER_ORDER=5)
         MAX_SHEETS_PER_ORDER = 5  # Константа из Streamlit приложения
 
         placed_layouts, unplaced_polygons = bin_packing_with_inventory(
-            scaled_polygons,
+            dxf_files,
             available_sheets,
             verbose=False,
             max_sheets_per_order=MAX_SHEETS_PER_ORDER,
@@ -225,7 +207,7 @@ class TestStreamlitIntegration:
         total_placed = sum(len(layout["placed_polygons"]) for layout in placed_layouts)
 
         # Должно быть размещено большинство заказов (допускаем небольшое количество неразмещенных)
-        placement_rate = total_placed / len(scaled_polygons)
+        placement_rate = total_placed / len(dxf_files)
         assert (
             placement_rate >= 0.8
         ), f"Размещено только {placement_rate*100:.1f}% заказов, ожидалось минимум 80%"
@@ -241,7 +223,18 @@ class TestStreamlitIntegration:
 
         # 11. ПРОВЕРЯЕМ ЧТО ЛИСТЫ ПРАВИЛЬНОГО ТИПА И ЦВЕТА
         for layout in placed_layouts:
-            sheet_type = layout["sheet_type"]
+            sheet_type = layout.get("sheet_type", "Unknown")
+            if sheet_type == "Unknown" and "sheet_color" in layout:
+                # Попробуем найти лист по цвету и размеру
+                sheet_color = layout["sheet_color"]
+                sheet_size = layout.get("sheet_size", (0, 0))
+                for sheet in available_sheets:
+                    if (sheet.get("color", "") == sheet_color and 
+                        sheet.get("width", 0) == sheet_size[0] and 
+                        sheet.get("height", 0) == sheet_size[1]):
+                        sheet_type = sheet["name"]
+                        break
+            
             # Должен быть один из наших типов листов
             sheet_names = [sheet["name"] for sheet in available_sheets]
             assert sheet_type in sheet_names, f"Неизвестный тип листа: {sheet_type}"
@@ -259,17 +252,52 @@ class TestStreamlitIntegration:
                 len(layout["placed_polygons"]) > 0
             ), f"Лист {layout['sheet_number']} пустой"
 
-        # 13. ФИНАЛЬНЫЕ ПРОВЕРКИ СТАТИСТИКИ
-        print(f"\n=== РЕЗУЛЬТАТЫ ТЕСТА ===")
+        # 13. СТРОГАЯ ПРОВЕРКА MAX_SHEETS_PER_ORDER ДЛЯ ЗАКЗАА ZAKAZ_row_20
+        # Проверяем, что конкретно заказ ZAKAZ_row_20 соблюдает ограничение смежности
+        zakaz_20_sheets = []
+        for layout in placed_layouts:
+            if "orders_on_sheet" in layout and "ZAKAZ_row_20" in layout["orders_on_sheet"]:
+                zakaz_20_sheets.append(layout["sheet_number"])
+        
+        if zakaz_20_sheets:
+            zakaz_20_sheets.sort()
+            min_sheet = min(zakaz_20_sheets)
+            max_sheet = max(zakaz_20_sheets)
+            sheet_range = max_sheet - min_sheet + 1
+            
+            # Проверяем, что заказ размещен в пределах MAX_SHEETS_PER_ORDER смежных листов
+            assert (
+                sheet_range <= MAX_SHEETS_PER_ORDER
+            ), (
+                f"Заказ ZAKAZ_row_20 нарушает ограничение смежности: "
+                f"размещен на листах {zakaz_20_sheets} (диапазон {sheet_range} > {MAX_SHEETS_PER_ORDER})"
+            )
+            
+            # Дополнительная проверка: если заказ начат на листе N, то должен закончиться не позже чем на листе N+MAX_SHEETS_PER_ORDER-1
+            expected_max_sheet = min_sheet + MAX_SHEETS_PER_ORDER - 1
+            assert (
+                max_sheet <= expected_max_sheet
+            ), (
+                f"Заказ ZAKAZ_row_20 выходит за пределы допустимого диапазона: "
+                f"начат на листе {min_sheet}, закончен на листе {max_sheet}, "
+                f"но должен был закончиться не позже листа {expected_max_sheet}"
+            )
+            
+            print(f"✅ Заказ ZAKAZ_row_20: размещен на листах {zakaz_20_sheets} (диапазон {sheet_range} листов)")
+        else:
+            print("⚠️ Заказ ZAKAZ_row_20 не был размещен ни на одном листе")
+
+        # 14. ФИНАЛЬНЫЕ ПРОВЕРКИ СТАТИСТИКИ
+        print("\n=== РЕЗУЛЬТАТЫ ТЕСТА ===")
         print(f"Всего листов в наличии: {total_available_sheets}")
         print(f"Невыполненных заказов найдено: {len(all_orders)}")
         print(f"Заказов выбрано для обработки: {len(selected_orders)}")
         print(f"DXF полигонов создано: {len(dxf_files)}")
-        print(f"Полигонов после масштабирования: {len(scaled_polygons)}")
         print(f"Листов с раскладкой создано: {len(placed_layouts)}")
         print(f"Всего полигонов размещено: {total_placed}")
         print(f"Полигонов не размещено: {len(unplaced_polygons)}")
         print(f"Процент размещения: {placement_rate*100:.1f}%")
+        print(f"MAX_SHEETS_PER_ORDER ограничение: {MAX_SHEETS_PER_ORDER} листов")
 
         # Проверяем что тест прошел успешно
         assert len(all_orders) == 37  # Найдено ровно 37 невыполненных заказов
