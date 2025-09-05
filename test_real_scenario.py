@@ -6,7 +6,7 @@ to see if sheet filling is improved
 """
 
 from shapely.geometry import Polygon
-from layout_optimizer import bin_packing_with_inventory, scale_polygons_to_fit
+from layout_optimizer import bin_packing_with_inventory
 
 def test_real_streamlit_scenario():
     """Test realistic scenario with bigger polygons"""
@@ -71,16 +71,14 @@ def test_real_streamlit_scenario():
     print(f"- Multi-file orders: 4 заказа, всего {sum(fc for _, _, fc in car_orders)} файлов")
     print(f"- Single-file orders: 20 заказов")
     
-    # Scale polygons (this is crucial - affects filling efficiency)
-    scaled_polygons = scale_polygons_to_fit(polygons, (140, 200), verbose=True)
-    
+
     # Run optimization with MAX_SHEETS_PER_ORDER=5 (like in real Streamlit)
     MAX_SHEETS_PER_ORDER = 5
     
     print(f"\n=== ЗАПУСК С MAX_SHEETS_PER_ORDER={MAX_SHEETS_PER_ORDER} ===")
     
     placed_layouts, unplaced_polygons = bin_packing_with_inventory(
-        scaled_polygons,
+        polygons,
         available_sheets,
         verbose=False,  # Set to True to see detailed logs
         max_sheets_per_order=MAX_SHEETS_PER_ORDER,
@@ -92,7 +90,7 @@ def test_real_streamlit_scenario():
     print(f"Неразмещенных полигонов: {len(unplaced_polygons)}")
     
     total_placed = sum(len(layout["placed_polygons"]) for layout in placed_layouts)
-    print(f"Всего размещено: {total_placed}/{len(scaled_polygons)}")
+    print(f"Всего размещено: {total_placed}/{len(polygons)}")
     
     if placed_layouts:
         print(f"\nДетали по листам:")
@@ -123,7 +121,7 @@ def test_real_streamlit_scenario():
                 print(f"  [{idx+1}] {name} (цвет: {color}, заказ: {order_id})")
     
     # Success metrics
-    placement_rate = total_placed / len(scaled_polygons)
+    placement_rate = total_placed / len(polygons)
     avg_usage = sum(layout['usage_percent'] for layout in placed_layouts) / len(placed_layouts) if placed_layouts else 0
     
     print(f"\n=== ИТОГОВЫЕ МЕТРИКИ ===")

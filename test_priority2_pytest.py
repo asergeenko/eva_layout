@@ -13,7 +13,7 @@ from shapely.geometry import Polygon
 # Добавляем корневую директорию в путь для импорта модулей
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from layout_optimizer import bin_packing_with_inventory, scale_polygons_to_fit
+from layout_optimizer import bin_packing_with_inventory
 
 # Настройка логирования для pytest
 logging.basicConfig(level=logging.WARNING)  # Минимум логов для чистого вывода
@@ -87,12 +87,9 @@ def test_priority2_recognition(sample_data, available_sheets):
     excel_polygons, priority2_polygons = sample_data
     all_polygons = excel_polygons + priority2_polygons
     
-    # Масштабируем полигоны
-    scaled_polygons = scale_polygons_to_fit(all_polygons, (130, 190))
-    
     # Запуск оптимизации
     placed_layouts, unplaced = bin_packing_with_inventory(
-        scaled_polygons,
+        all_polygons,
         available_sheets,
         verbose=False,
         max_sheets_per_order=5,
@@ -129,12 +126,10 @@ def test_priority2_color_compatibility(sample_data, available_sheets):
     excel_polygons, priority2_polygons = sample_data
     all_polygons = excel_polygons + priority2_polygons
     
-    # Масштабируем полигоны
-    scaled_polygons = scale_polygons_to_fit(all_polygons, (130, 190))
-    
+
     # Запуск оптимизации
     placed_layouts, unplaced = bin_packing_with_inventory(
-        scaled_polygons,
+        all_polygons,
         available_sheets,
         verbose=False,
         max_sheets_per_order=5,
@@ -172,12 +167,10 @@ def test_priority2_efficiency(sample_data, available_sheets):
     excel_polygons, priority2_polygons = sample_data
     all_polygons = excel_polygons + priority2_polygons
     
-    # Масштабируем полигоны
-    scaled_polygons = scale_polygons_to_fit(all_polygons, (130, 190))
-    
+
     # Запуск оптимизации
     placed_layouts, unplaced = bin_packing_with_inventory(
-        scaled_polygons,
+        all_polygons,
         available_sheets,
         verbose=False,
         max_sheets_per_order=5,
@@ -234,12 +227,10 @@ def test_priority2_threshold_behavior():
         "used": 0
     }]
     
-    # Масштабируем полигоны
-    scaled_polygons = scale_polygons_to_fit(polygons, (130, 190))
-    
+
     # Запуск оптимизации
     placed_layouts, unplaced = bin_packing_with_inventory(
-        scaled_polygons,
+        polygons,
         sheets,
         verbose=False,
         max_sheets_per_order=5,

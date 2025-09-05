@@ -11,7 +11,7 @@ from shapely.geometry import Polygon
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from layout_optimizer import bin_packing_with_inventory, scale_polygons_to_fit
+from layout_optimizer import bin_packing_with_inventory
 
 # Set up logging to see detailed algorithm behavior
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -138,15 +138,11 @@ def main():
     test_polygons = create_admiral_test_scenario()
     test_sheets = create_test_sheets()
     
-    # Scale polygons
-    max_size_cm = (130, 190)
-    scaled_polygons = scale_polygons_to_fit(test_polygons, max_size_cm)
-    print(f"✓ Полигоны масштабированы")
-    
+
     # Run algorithm
     print(f"\n=== ЗАПУСК АЛГОРИТМА ===")
     placed_layouts, unplaced = bin_packing_with_inventory(
-        scaled_polygons,
+        test_polygons,
         test_sheets,
         verbose=True,
         max_sheets_per_order=5,

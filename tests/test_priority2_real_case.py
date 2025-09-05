@@ -20,7 +20,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from layout_optimizer import (
     parse_dxf_complete,
     bin_packing_with_inventory,
-    scale_polygons_to_fit,
     save_dxf_layout_complete,
 )
 
@@ -197,11 +196,6 @@ class TestPriority2RealCase:
             f"Создано {len(dxf_files)} полигонов: {len(all_orders)} из Excel + {priority2_count} приоритета 2"
         )
 
-        # 6. МАСШТАБИРОВАНИЕ
-        reference_sheet_size = (140, 200)
-        scaled_polygons = scale_polygons_to_fit(
-            dxf_files, reference_sheet_size, verbose=False
-        )
 
         # 7. ПОДСЧЕТ ЛИСТОВ ДО ОПТИМИЗАЦИИ
         initial_sheets_count = sum(
@@ -212,7 +206,7 @@ class TestPriority2RealCase:
         MAX_SHEETS_PER_ORDER = 5
 
         placed_layouts, unplaced_polygons = bin_packing_with_inventory(
-            scaled_polygons,
+            dxf_files,
             available_sheets,
             verbose=True,
             max_sheets_per_order=MAX_SHEETS_PER_ORDER,
@@ -227,7 +221,7 @@ class TestPriority2RealCase:
         sheets_used = len(placed_layouts)
 
         # Запускаем тест без priority 2 файлов для сравнения
-        excel_only_polygons = [p for p in scaled_polygons if len(p) < 5 or p[4] != 2]
+        excel_only_polygons = [p for p in dxf_files if len(p) < 5 or p[4] != 2]
         excel_only_layouts, _ = bin_packing_with_inventory(
             excel_only_polygons,
             [sheet.copy() for sheet in available_sheets],  # Fresh copy

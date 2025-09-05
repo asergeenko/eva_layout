@@ -5,7 +5,7 @@ Test script to specifically test single-file order processing logic
 """
 
 from shapely.geometry import Polygon
-from layout_optimizer import bin_packing_with_inventory, scale_polygons_to_fit
+from layout_optimizer import bin_packing_with_inventory
 
 def test_single_file_order_processing():
     """Test that single-file orders are processed correctly"""
@@ -63,14 +63,12 @@ def test_single_file_order_processing():
     print(f"- Multi-file orders: 3 заказа × 3 файла = 9 полигонов")
     print(f"- Single-file orders: 10 заказов × 1 файл = 10 полигонов")
     
-    # Scale polygons
-    scaled_polygons = scale_polygons_to_fit(polygons, (140, 200), verbose=False)
-    
+
     # Run optimization  
     MAX_SHEETS_PER_ORDER = 3  # Smaller limit to force single-file optimization
     
     placed_layouts, unplaced_polygons = bin_packing_with_inventory(
-        scaled_polygons,
+        polygons,
         available_sheets,
         verbose=False,
         max_sheets_per_order=MAX_SHEETS_PER_ORDER,
@@ -82,7 +80,7 @@ def test_single_file_order_processing():
     print(f"Неразмещенных полигонов: {len(unplaced_polygons)}")
     
     total_placed = sum(len(layout["placed_polygons"]) for layout in placed_layouts)
-    print(f"Всего размещено: {total_placed}/{len(scaled_polygons)}")
+    print(f"Всего размещено: {total_placed}/{len(polygons)}")
     
     if placed_layouts:
         print(f"\nДетали по листам:")
@@ -90,7 +88,7 @@ def test_single_file_order_processing():
             print(f"  Лист {layout['sheet_number']}: {len(layout['placed_polygons'])} полигонов, {layout['usage_percent']:.1f}% заполнение")
     
     # Verify that most orders are placed
-    placement_rate = total_placed / len(scaled_polygons)
+    placement_rate = total_placed / len(polygons)
     print(f"\nПроцент размещения: {placement_rate*100:.1f}%")
     
     # Should place most orders

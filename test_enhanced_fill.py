@@ -8,7 +8,7 @@ Test the enhanced fill optimization to verify that:
 """
 
 from shapely.geometry import Polygon
-from layout_optimizer import bin_packing_with_inventory, scale_polygons_to_fit
+from layout_optimizer import bin_packing_with_inventory
 
 def test_enhanced_fill_optimization():
     """Test enhanced fill optimization"""
@@ -69,14 +69,12 @@ def test_enhanced_fill_optimization():
     print(f"- Multi-file orders: 4 заказа × 2 файла = 8 полигонов")
     print(f"- Single-file orders: 8 заказов × 1 файл = 8 полигонов")
     
-    # Scale polygons
-    scaled_polygons = scale_polygons_to_fit(polygons, (140, 200), verbose=False)
-    
+
     # Run optimization with MAX_SHEETS_PER_ORDER constraint
     MAX_SHEETS_PER_ORDER = 3
     
     placed_layouts, unplaced_polygons = bin_packing_with_inventory(
-        scaled_polygons,
+        polygons,
         available_sheets,
         verbose=False,
         max_sheets_per_order=MAX_SHEETS_PER_ORDER,
@@ -89,7 +87,7 @@ def test_enhanced_fill_optimization():
     print(f"Неразмещенных полигонов: {len(unplaced_polygons)}")
     
     total_placed = sum(len(layout["placed_polygons"]) for layout in placed_layouts)
-    print(f"Всего размещено: {total_placed}/{len(scaled_polygons)}")
+    print(f"Всего размещено: {total_placed}/{len(polygons)}")
     
     if placed_layouts:
         print(f"\nЗаполнение по листам:")
@@ -104,7 +102,7 @@ def test_enhanced_fill_optimization():
                 print(f"  [{idx+1}] {name} (цвет: {color}, заказ: {order_id})")
     
     # Calculate metrics
-    placement_rate = total_placed / len(scaled_polygons)
+    placement_rate = total_placed / len(polygons)
     average_usage = sum(layout['usage_percent'] for layout in placed_layouts) / len(placed_layouts) if placed_layouts else 0
     
     print(f"\n=== МЕТРИКИ ===")

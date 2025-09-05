@@ -12,7 +12,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from layout_optimizer import (
     bin_packing_with_inventory,
-    scale_polygons_to_fit,
 )
 
 
@@ -84,10 +83,9 @@ def demo_progress():
     print(f"  - Priority 2 (дополнительные): {priority2_count}")
     print()
     
-    # Масштабирование
-    print("Масштабирование полигонов...")
+    # Полигоны остаются в исходном масштабе
+    print("Полигоны остаются в исходном масштабе (не масштабируются)...")
     reference_sheet_size = (150, 200)
-    scaled_polygons = scale_polygons_to_fit(polygons, reference_sheet_size, verbose=False)
     print()
     
     # Колбек прогресса с визуализацией
@@ -104,7 +102,7 @@ def demo_progress():
     
     # Запускаем оптимизацию
     layouts, unplaced = bin_packing_with_inventory(
-        scaled_polygons,
+        polygons,  # Используем исходные полигоны без масштабирования
         available_sheets,
         verbose=False,
         progress_callback=show_progress

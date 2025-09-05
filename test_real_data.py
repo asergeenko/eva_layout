@@ -13,7 +13,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from layout_optimizer import (
     parse_dxf_complete,
     bin_packing_with_inventory,
-    scale_polygons_to_fit,
 )
 import logging
 
@@ -145,21 +144,13 @@ def main():
         synthetic_mark = " (синтетический)" if order_info['synthetic'] else ""
         print(f"  {order_info['order_id']}: {order_info['files_count']} файлов, цвет {order_info['color']}{synthetic_mark}")
     
-    # Масштабируем полигоны
-    if polygons:
-        max_size_cm = (130, 190)  # Чуть меньше листа для отступов
-        scaled_polygons = scale_polygons_to_fit(polygons, max_size_cm)
-        print(f"🔧 Полигоны масштабированы под размер {max_size_cm} см")
-    else:
-        print("❌ Нет полигонов для обработки")
-        return
-    
+
     # Запуск оптимизации
     print(f"\n=== ЗАПУСК ОПТИМИЗАЦИИ (MAX_SHEETS_PER_ORDER=5) ===")
     MAX_SHEETS_PER_ORDER = 5
     
     placed_layouts, unplaced = bin_packing_with_inventory(
-        scaled_polygons,
+        polygons,
         available_sheets,
         verbose=False,
         max_sheets_per_order=MAX_SHEETS_PER_ORDER,
@@ -181,7 +172,7 @@ def main():
             single_polygon_sheets += 1
     
     # Оценка эффективности
-    total_polygons = len(scaled_polygons) - len(unplaced)
+    total_polygons = len(polygons) - len(unplaced)
     efficiency_ok = single_polygon_sheets <= 2  # Максимум 2 листа с малым количеством полигонов
     
     if efficiency_ok:

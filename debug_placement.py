@@ -13,7 +13,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from layout_optimizer import (
     bin_packing_with_inventory,
-    scale_polygons_to_fit
 )
 
 # Настройка логирования для детальной отладки
@@ -83,15 +82,11 @@ def track_volkswagen_placement():
     print(f"📋 Входные VOLKSWAGEN файлы: {input_volkswagen}")
     print(f"📋 Входные PRIORITY2 файлы: {input_priority2}")
     
-    # Масштабируем
-    max_size_cm = (130, 190)
-    scaled_polygons = scale_polygons_to_fit(test_polygons, max_size_cm)
-    print(f"🔧 Полигоны масштабированы")
-    
+
     # Запуск алгоритма с включенным verbose
     print(f"\n=== ЗАПУСК АЛГОРИТМА ===")
     placed_layouts, unplaced = bin_packing_with_inventory(
-        scaled_polygons,
+        test_polygons,
         test_sheets,
         verbose=True,
         max_sheets_per_order=5,

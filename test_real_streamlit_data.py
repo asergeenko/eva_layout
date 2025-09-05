@@ -17,7 +17,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from layout_optimizer import (
     bin_packing_with_inventory,
     parse_dxf_complete,
-    scale_polygons_to_fit
 )
 
 # Настройка логирования
@@ -194,17 +193,13 @@ def main():
     total_polygons = len(all_polygons)
     print(f"📊 ВСЕГО полигонов для размещения: {total_polygons}")
     
-    # Масштабируем полигоны
-    max_size_cm = (130, 190)  # Как в Streamlit
-    scaled_polygons = scale_polygons_to_fit(all_polygons, max_size_cm)
-    print(f"🔧 Полигоны масштабированы под размер {max_size_cm} см")
-    
+
     # Запуск оптимизации с теми же параметрами что в Streamlit
     print(f"\n=== ЗАПУСК ОПТИМИЗАЦИИ ===")
     MAX_SHEETS_PER_ORDER = 5
     
     placed_layouts, unplaced = bin_packing_with_inventory(
-        scaled_polygons,
+        all_polygons,
         sheets,
         verbose=True,  # Включаем логи для отладки
         max_sheets_per_order=MAX_SHEETS_PER_ORDER,

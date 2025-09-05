@@ -13,7 +13,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from layout_optimizer import (
     bin_packing_with_inventory,
-    scale_polygons_to_fit,
 )
 
 
@@ -69,14 +68,11 @@ class TestPriority2Simple:
                 )
             )
 
-        # Масштабирование
+        # Полигоны остаются в исходном масштабе
         reference_sheet_size = (100, 100)
-        scaled_polygons = scale_polygons_to_fit(
-            polygons, reference_sheet_size, verbose=False
-        )
 
         # Тест только с priority 1
-        priority1_polygons = [p for p in scaled_polygons if len(p) < 5 or p[4] != 2]
+        priority1_polygons = [p for p in polygons if len(p) < 5 or p[4] != 2]
         priority1_layouts, _ = bin_packing_with_inventory(
             priority1_polygons,
             [sheet.copy() for sheet in available_sheets],
@@ -85,7 +81,7 @@ class TestPriority2Simple:
 
         # Тест с priority 1 + priority 2
         all_layouts, unplaced = bin_packing_with_inventory(
-            scaled_polygons, [sheet.copy() for sheet in available_sheets], verbose=False
+            polygons, [sheet.copy() for sheet in available_sheets], verbose=False
         )
 
         # Проверки
@@ -203,14 +199,11 @@ class TestPriority2Simple:
                 )
             )
 
-        # Масштабирование и оптимизация
+        # Оптимизация без масштабирования
         reference_sheet_size = (100, 100)
-        scaled_polygons = scale_polygons_to_fit(
-            polygons, reference_sheet_size, verbose=False
-        )
 
         layouts, unplaced = bin_packing_with_inventory(
-            scaled_polygons, available_sheets, verbose=False
+            polygons, available_sheets, verbose=False
         )
 
         # Проверки
@@ -306,14 +299,11 @@ class TestPriority2Simple:
                 )
             )
 
-        # Масштабирование и оптимизация
+        # Оптимизация без масштабирования
         reference_sheet_size = (100, 100)
-        scaled_polygons = scale_polygons_to_fit(
-            polygons, reference_sheet_size, verbose=False
-        )
 
         layouts, unplaced = bin_packing_with_inventory(
-            scaled_polygons, available_sheets, verbose=False
+            polygons, available_sheets, verbose=False
         )
 
         # Проверки

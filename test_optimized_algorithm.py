@@ -11,7 +11,6 @@ from unittest.mock import Mock
 
 from layout_optimizer import (
     bin_packing_with_inventory,
-    scale_polygons_to_fit,
 )
 
 def create_test_data():
@@ -55,10 +54,8 @@ def create_test_data():
         priority = 1  # Default priority for all test orders
         dxf_files.append((polygon, filename, color, order_id, priority))
     
-    # 3. Scale polygons
-    scaled_polygons = scale_polygons_to_fit(dxf_files, (140, 200), verbose=True)
-    
-    return available_sheets, scaled_polygons
+
+    return available_sheets, dxf_files
 
 def main():
     print("=== ТЕСТ ОПТИМИЗИРОВАННОГО АЛГОРИТМА ===")

@@ -11,7 +11,7 @@ from shapely.geometry import Polygon
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from layout_optimizer import bin_packing_with_inventory, scale_polygons_to_fit
+from layout_optimizer import bin_packing_with_inventory
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -128,17 +128,13 @@ def main():
     print(f"📊 Всего для размещения: {total_polygons} полигонов")
     print(f"📄 Доступно листов: {len(sheets)} (20 черных + 20 серых)")
     
-    # Масштабируем полигоны
-    max_size_cm = (130, 190)  # Чуть меньше листа для отступов
-    scaled_polygons = scale_polygons_to_fit(all_polygons, max_size_cm)
-    print(f"🔧 Полигоны масштабированы под размер {max_size_cm} см")
-    
+
     # Запуск оптимизации
     print(f"\n=== ЗАПУСК ОПТИМИЗАЦИИ ===")
     MAX_SHEETS_PER_ORDER = 5
     
     placed_layouts, unplaced = bin_packing_with_inventory(
-        scaled_polygons,
+        all_polygons,
         sheets,
         verbose=True,
         max_sheets_per_order=MAX_SHEETS_PER_ORDER,

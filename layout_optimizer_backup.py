@@ -40,7 +40,6 @@ __all__ = [
     "plot_layout",
     "plot_single_polygon",
     "plot_input_polygons",
-    "scale_polygons_to_fit",
 ]
 
 

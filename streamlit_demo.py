@@ -16,7 +16,6 @@ from layout_optimizer import (
     bin_packing_with_inventory,
     plot_layout,
     plot_input_polygons,
-    scale_polygons_to_fit,
     save_dxf_layout_complete,
 )
 
@@ -1261,12 +1260,8 @@ if st.button("🚀 Оптимизировать раскрой"):
                 max_sheet_area = area
                 reference_sheet_size = (sheet["width"], sheet["height"])
 
-        # Scale quietly first
-        scaled_polygons = scale_polygons_to_fit(
-            polygons, reference_sheet_size, verbose=False
-        )
-
-        polygons = scaled_polygons
+        # Полигоны остаются в исходном масштабе (не масштабируются)
+        logger.info(f"✅ Полигоны сохранены в исходном масштабе: {len(polygons)} объектов")
 
         st.header("🔄 Процесс оптимизации")
         try:

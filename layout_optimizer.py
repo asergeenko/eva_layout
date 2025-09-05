@@ -41,7 +41,6 @@ __all__ = [
     "plot_layout",
     "plot_single_polygon",
     "plot_input_polygons",
-    "scale_polygons_to_fit",
 ]
 
 
@@ -2462,11 +2461,6 @@ def bin_packing_with_inventory(
             if verbose:
                 st.info(f"📊 Дозаполнение: {filled_orders} однокомпонентных заказов размещено")
 
-    # ПРИОРИТЕТ 2 ПЕРЕМЕЩЕН В КОНЕЦ ПОСЛЕ СОЗДАНИЯ НОВЫХ ЛИСТОВ
-
-    # Обработка приоритета 2 перемещена в конец
-
-    # IMPROVEMENT: Try to fit remaining polygons into existing sheets before giving up
     remaining_polygons_list = []
     for order_id, remaining_polygons in remaining_orders.items():
         remaining_polygons_list.extend(remaining_polygons)
@@ -3026,62 +3020,6 @@ def plot_input_polygons(
     return plots
 
 
-def scale_polygons_to_fit(
-    polygons_with_names: list[tuple],
-    sheet_size: tuple[float, float],
-    verbose: bool = True,
-) -> list[tuple]:
-    """НЕ масштабирует полигоны - возвращает их в исходном масштабе.
-    
-    ВАЖНО: По требованию пользователя полигоны должны оставаться в точно таком же 
-    масштабе, как в исходных DXF файлах. Эта функция теперь только проверяет и 
-    предупреждает о полигонах, которые могут не поместиться на листе.
-    """
-    if not polygons_with_names:
-        return polygons_with_names
-
-    # Convert sheet size from cm to mm to match DXF units
-    sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
-    
-    # Проверяем, есть ли полигоны, которые больше листа (только для предупреждения)
-    oversized_polygons = []
-    
-    for polygon_tuple in polygons_with_names:
-        polygon = polygon_tuple[0]
-        name = polygon_tuple[1] if len(polygon_tuple) > 1 else "unnamed"
-        
-        bounds = polygon.bounds
-        poly_width = bounds[2] - bounds[0]
-        poly_height = bounds[3] - bounds[1]
-        
-        if poly_width > sheet_width_mm or poly_height > sheet_height_mm:
-            oversized_polygons.append({
-                'name': name,
-                'width': poly_width / 10.0,  # Convert to cm for display
-                'height': poly_height / 10.0,
-                'sheet_width': sheet_size[0],
-                'sheet_height': sheet_size[1]
-            })
-    
-    # Предупреждаем о полигонах, которые больше листа
-    if oversized_polygons and verbose:
-        st.warning(
-            f"⚠️ Найдено {len(oversized_polygons)} полигонов, которые больше листа "
-            f"({sheet_size[0]}x{sheet_size[1]} см). Полигоны сохранены в исходном масштабе:"
-        )
-        for poly_info in oversized_polygons[:5]:  # Show first 5 only
-            st.text(f"  • {poly_info['name']}: {poly_info['width']:.1f}x{poly_info['height']:.1f} см")
-        if len(oversized_polygons) > 5:
-            st.text(f"  ... и еще {len(oversized_polygons) - 5} полигонов")
-    
-    # ИСПРАВЛЕНИЕ: НЕ масштабируем полигоны - возвращаем как есть
-    if verbose and not oversized_polygons:
-        st.success(
-            f"✅ Все {len(polygons_with_names)} полигонов сохранены в исходном масштабе"
-        )
-
-    # Возвращаем все полигоны в исходном виде без изменений
-    return polygons_with_names
 
 
 # Verification that all functions are properly defined
@@ -3101,8 +3039,7 @@ def _verify_functions():
         "plot_layout",
         "plot_single_polygon",
         "plot_input_polygons",
-        "scale_polygons_to_fit",
-    ]
+        ]
 
     import sys
 

@@ -12,7 +12,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from layout_optimizer import (
     bin_packing_with_inventory,
-    scale_polygons_to_fit,
 )
 
 
@@ -49,9 +48,7 @@ class TestProgressCallback:
                 1  # Priority 1
             ))
         
-        # Масштабирование
-        reference_sheet_size = (100, 100)
-        scaled_polygons = scale_polygons_to_fit(polygons, reference_sheet_size, verbose=False)
+
         
         # Отслеживание вызовов прогресса
         progress_calls = []
@@ -62,7 +59,7 @@ class TestProgressCallback:
         
         # Тестируем с колбеком
         layouts, unplaced = bin_packing_with_inventory(
-            scaled_polygons,
+            polygons,
             available_sheets,
             verbose=False,
             progress_callback=track_progress
@@ -126,10 +123,7 @@ class TestProgressCallback:
                 2  # Priority 2
             ))
         
-        # Масштабирование
-        reference_sheet_size = (100, 100)
-        scaled_polygons = scale_polygons_to_fit(polygons, reference_sheet_size, verbose=False)
-        
+
         # Отслеживание вызовов прогресса
         progress_calls = []
         
@@ -139,7 +133,7 @@ class TestProgressCallback:
         
         # Тестируем с колбеком
         layouts, unplaced = bin_packing_with_inventory(
-            scaled_polygons,
+            polygons,
             available_sheets,
             verbose=False,
             progress_callback=track_progress
@@ -151,7 +145,7 @@ class TestProgressCallback:
         
         # Проверяем что есть сообщения о priority 2
         priority2_messages = [call[1] for call in progress_calls if "приоритета 2" in call[1]]
-        if len([p for p in scaled_polygons if len(p) >= 5 and p[4] == 2]) > 0:  # If there are priority 2 files
+        if len([p for p in polygons if len(p) >= 5 and p[4] == 2]) > 0:  # If there are priority 2 files
             assert len(priority2_messages) > 0, "Должно быть сообщение о приоритете 2"
         
         # Проверяем финальный прогресс
@@ -192,13 +186,10 @@ class TestProgressCallback:
                 1  # Priority 1
             ))
         
-        # Масштабирование
-        reference_sheet_size = (100, 100)
-        scaled_polygons = scale_polygons_to_fit(polygons, reference_sheet_size, verbose=False)
-        
+
         # Тестируем БЕЗ колбека
         layouts, unplaced = bin_packing_with_inventory(
-            scaled_polygons,
+            polygons,
             available_sheets,
             verbose=False
             # progress_callback НЕ передается

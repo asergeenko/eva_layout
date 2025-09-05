@@ -18,7 +18,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from layout_optimizer import (
     parse_dxf_complete,
     bin_packing_with_inventory,
-    scale_polygons_to_fit,
     save_dxf_layout_complete,
 )
 
@@ -192,26 +191,11 @@ class TestStreamlitIntegration:
         # Проверяем что создали файлы для всех заказов
         assert len(dxf_files) == 37
 
-        # 7. ЭМУЛЯЦИЯ МАСШТАБИРОВАНИЯ (как в Streamlit)
-        # Находим наибольший лист для масштабирования
-        max_sheet_area = 0
-        reference_sheet_size = (140, 200)  # default fallback
-        for sheet in available_sheets:
-            area = sheet["width"] * sheet["height"]
-            if area > max_sheet_area:
-                max_sheet_area = area
-                reference_sheet_size = (sheet["width"], sheet["height"])
-
-        # Масштабируем полигоны
-        scaled_polygons = scale_polygons_to_fit(
-            dxf_files, reference_sheet_size, verbose=False
-        )
-
         # 8. ЭМУЛЯЦИЯ ОПТИМИЗАЦИИ (как в Streamlit с MAX_SHEETS_PER_ORDER=5)
         MAX_SHEETS_PER_ORDER = 5  # Константа из Streamlit приложения
 
         placed_layouts, unplaced_polygons = bin_packing_with_inventory(
-            scaled_polygons,
+            dxf_files,
             available_sheets,
             verbose=False,
             max_sheets_per_order=MAX_SHEETS_PER_ORDER,
@@ -225,7 +209,7 @@ class TestStreamlitIntegration:
         total_placed = sum(len(layout["placed_polygons"]) for layout in placed_layouts)
 
         # Должно быть размещено большинство заказов (допускаем небольшое количество неразмещенных)
-        placement_rate = total_placed / len(scaled_polygons)
+        placement_rate = total_placed / len(dxf_files)
         assert (
             placement_rate >= 0.8
         ), f"Размещено только {placement_rate*100:.1f}% заказов, ожидалось минимум 80%"
@@ -311,7 +295,6 @@ class TestStreamlitIntegration:
         print(f"Невыполненных заказов найдено: {len(all_orders)}")
         print(f"Заказов выбрано для обработки: {len(selected_orders)}")
         print(f"DXF полигонов создано: {len(dxf_files)}")
-        print(f"Полигонов после масштабирования: {len(scaled_polygons)}")
         print(f"Листов с раскладкой создано: {len(placed_layouts)}")
         print(f"Всего полигонов размещено: {total_placed}")
         print(f"Полигонов не размещено: {len(unplaced_polygons)}")
