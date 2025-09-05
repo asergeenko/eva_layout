@@ -9,16 +9,13 @@ import os
 import sys
 import tempfile
 import shutil
-from io import BytesIO
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock
 
 # Добавляем корневую директорию в путь для импорта модулей
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from layout_optimizer import (
-    parse_dxf_complete,
     bin_packing_with_inventory,
-    save_dxf_layout_complete,
 )
 
 
@@ -32,11 +29,11 @@ class TestStreamlitIntegration:
         self.output_dir = tempfile.mkdtemp()
         self.original_cwd = os.getcwd()
 
-        # Убеждаемся что sample_input.xlsx существует
-        self.sample_excel_path = os.path.join(self.original_cwd, "sample_input.xlsx")
+        # Убеждаемся что tests/sample_input_test.xlsx существует
+        self.sample_excel_path = os.path.join(self.original_cwd, "tests/sample_input_test.xlsx")
         assert os.path.exists(
             self.sample_excel_path
-        ), "Файл sample_input.xlsx не найден"
+        ), "Файл tests/sample_input_test.xlsx не найден"
 
         yield
 
@@ -48,7 +45,7 @@ class TestStreamlitIntegration:
         Тестирует полный workflow Streamlit приложения:
         1. 20 черных листов 140x200
         2. 20 серых листов 140x200
-        3. Загрузка sample_input.xlsx
+        3. Загрузка tests/sample_input_test.xlsx
         4. Выбор всех невыполненных заказов (должно быть 37)
         5. Успешная раскладка всех заказов
         """
@@ -287,10 +284,10 @@ class TestStreamlitIntegration:
             
             print(f"✅ Заказ ZAKAZ_row_20: размещен на листах {zakaz_20_sheets} (диапазон {sheet_range} листов)")
         else:
-            print(f"⚠️ Заказ ZAKAZ_row_20 не был размещен ни на одном листе")
+            print("⚠️ Заказ ZAKAZ_row_20 не был размещен ни на одном листе")
 
         # 14. ФИНАЛЬНЫЕ ПРОВЕРКИ СТАТИСТИКИ
-        print(f"\n=== РЕЗУЛЬТАТЫ ТЕСТА ===")
+        print("\n=== РЕЗУЛЬТАТЫ ТЕСТА ===")
         print(f"Всего листов в наличии: {total_available_sheets}")
         print(f"Невыполненных заказов найдено: {len(all_orders)}")
         print(f"Заказов выбрано для обработки: {len(selected_orders)}")

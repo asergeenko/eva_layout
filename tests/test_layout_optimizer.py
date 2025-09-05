@@ -313,8 +313,6 @@ class TestSaveDxfLayoutComplete:
 
             # Verify the file can be read back
             doc = ezdxf.readfile(output_path)
-            msp = doc.modelspace()
-            entities = list(msp)
             # File should exist and be readable, entities count may vary based on implementation
             assert doc is not None
 

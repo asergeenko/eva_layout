@@ -11,7 +11,6 @@ import sys
 import tempfile
 import shutil
 from io import BytesIO
-from unittest.mock import Mock, patch, MagicMock
 from shapely.geometry import Polygon
 
 # Добавляем корневую директорию в путь для импорта модулей
@@ -20,7 +19,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from layout_optimizer import (
     parse_dxf_complete,
     bin_packing_with_inventory,
-    save_dxf_layout_complete,
 )
 
 
@@ -34,11 +32,11 @@ class TestPriority2RealCase:
         self.output_dir = tempfile.mkdtemp()
         self.original_cwd = os.getcwd()
 
-        # Убеждаемся что sample_input.xlsx существует
-        self.sample_excel_path = os.path.join(self.original_cwd, "sample_input.xlsx")
+        # Убеждаемся что sample_input_.xlsx существует
+        self.sample_excel_path = os.path.join(self.original_cwd, "tests/sample_input_test.xlsx")
         assert os.path.exists(
             self.sample_excel_path
-        ), "Файл sample_input.xlsx не найден"
+        ), "Файл tests/sample_input_test.xlsx не найден"
 
         # Проверяем наличие тестового DXF файла
         self.test_dxf_path = os.path.join(
@@ -278,7 +276,7 @@ class TestPriority2RealCase:
         ), f"Excel файлы размещены плохо: {excel_placement_rate*100:.1f}%"
 
         # 10. РЕЗУЛЬТАТЫ ТЕСТА
-        print(f"\n=== РЕЗУЛЬТАТЫ ТЕСТА ПРИОРИТЕТА 2 ===")
+        print("\n=== РЕЗУЛЬТАТЫ ТЕСТА ПРИОРИТЕТА 2 ===")
         print(f"Всего листов доступно: {initial_sheets_count}")
         print(f"Excel заказов: {len(all_orders)}")
         print(f"Priority 2 файлов: {priority2_count}")

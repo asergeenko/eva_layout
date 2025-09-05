@@ -2,7 +2,6 @@
 Тест функции прогресса в bin_packing_with_inventory.
 """
 
-import pytest
 import sys
 import os
 from shapely.geometry import Polygon
@@ -150,7 +149,7 @@ class TestProgressCallback:
         
         # Проверяем финальный прогресс
         final_call = progress_calls[-1]
-        assert final_call[0] == 100, f"Финальный прогресс должен быть 100%"
+        assert final_call[0] == 100, "Финальный прогресс должен быть 100%"
         
         print(f"✅ Прогресс с priority 2: {len(progress_calls)} вызовов")
         if priority2_messages:

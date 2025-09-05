@@ -3,7 +3,6 @@
 Проверяет базовые сценарии без зависимости от внешних файлов.
 """
 
-import pytest
 import sys
 import os
 from shapely.geometry import Polygon
@@ -67,9 +66,6 @@ class TestPriority2Simple:
                     2,  # Priority 2
                 )
             )
-
-        # Полигоны остаются в исходном масштабе
-        reference_sheet_size = (100, 100)
 
         # Тест только с priority 1
         priority1_polygons = [p for p in polygons if len(p) < 5 or p[4] != 2]
@@ -200,8 +196,6 @@ class TestPriority2Simple:
             )
 
         # Оптимизация без масштабирования
-        reference_sheet_size = (100, 100)
-
         layouts, unplaced = bin_packing_with_inventory(
             polygons, available_sheets, verbose=False
         )
@@ -300,8 +294,6 @@ class TestPriority2Simple:
             )
 
         # Оптимизация без масштабирования
-        reference_sheet_size = (100, 100)
-
         layouts, unplaced = bin_packing_with_inventory(
             polygons, available_sheets, verbose=False
         )

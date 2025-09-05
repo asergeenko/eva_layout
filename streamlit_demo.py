@@ -6,10 +6,6 @@ from io import BytesIO
 import zipfile
 import logging
 
-import importlib
-import layout_optimizer
-# Force reload the module to pick up latest changes
-importlib.reload(layout_optimizer)
 
 from layout_optimizer import (
     parse_dxf_complete,
