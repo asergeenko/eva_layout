@@ -1287,6 +1287,7 @@ if st.button("🚀 Оптимизировать раскрой"):
                 optimization_progress.progress(int(percent))
                 optimization_status.text(status_text)
 
+
             placed_layouts, unplaced_polygons = bin_packing_with_inventory(
                 carpets,
                 st.session_state.available_sheets,

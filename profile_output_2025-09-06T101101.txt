@@ -1,0 +1,1556 @@
+Timer unit: 1e-09 s
+
+Total time: 4.57412 s
+File: /home/sasha/proj/2025/eva_layout/layout_optimizer.py
+Function: bin_packing at line 1187
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+  1187                                           @profile
+  1188                                           def bin_packing(
+  1189                                               polygons: list[tuple],
+  1190                                               sheet_size: tuple[float, float],
+  1191                                               verbose: bool = True,
+  1192                                           ) -> tuple[list[tuple], list[tuple]]:
+  1193                                               """Optimize placement of complex polygons on a sheet with improved algorithm."""
+  1194                                               # Convert sheet size from cm to mm to match DXF polygon units
+  1195     25406   42500557.0   1672.9      0.9      sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
+  1196                                           
+  1197     25406   36972535.0   1455.3      0.8      placed = []
+  1198     25406   36656682.0   1442.8      0.8      unplaced = []
+  1199                                           
+  1200     25406   37291223.0   1467.8      0.8      if verbose:
+  1201                                                   st.info(
+  1202                                                       f"Начинаем улучшенную упаковку {len(polygons)} полигонов на листе {sheet_size[0]}x{sheet_size[1]} см"
+  1203                                                   )
+  1204                                           
+  1205                                               # IMPROVEMENT 1: Sort polygons by area and perimeter for better packing
+  1206     25406   43250650.0   1702.4      0.9      def get_polygon_priority(carpet: Carpet):
+  1207                                                   polygon = carpet.polygon
+  1208                                                   # Combine area and perimeter for better sorting (larger, more complex shapes first)
+  1209                                                   area = polygon.area
+  1210                                                   bounds = polygon.bounds
+  1211                                                   perimeter_approx = 2 * ((bounds[2] - bounds[0]) + (bounds[3] - bounds[1]))
+  1212                                                   return area + perimeter_approx * 0.1
+  1213                                           
+  1214     25406 1529230638.0  60191.7     33.4      sorted_polygons = sorted(polygons, key=get_polygon_priority, reverse=True)
+  1215     25406   40124613.0   1579.3      0.9      if verbose:
+  1216                                                   st.info("✨ Сортировка полигонов по площади (сначала крупные)")
+  1217                                           
+  1218     51134  182676244.0   3572.5      4.0      for i, carpet in enumerate(sorted_polygons):
+  1219     25728   37349559.0   1451.7      0.8          placed_successfully = False
+  1220     25728   38573857.0   1499.3      0.8          if verbose:
+  1221                                                       st.info(
+  1222                                                           f"Обрабатываем полигон {i+1}/{len(sorted_polygons)} из файла {carpet.filename}, площадь: {carpet.polygon.area:.2f}"
+  1223                                                       )
+  1224                                           
+  1225                                                   # Check if polygon is too large for the sheet
+  1226     25728  364956574.0  14185.2      8.0          bounds = carpet.polygon.bounds
+  1227     25728   39422071.0   1532.3      0.9          poly_width = bounds[2] - bounds[0]
+  1228     25728   38044626.0   1478.7      0.8          poly_height = bounds[3] - bounds[1]
+  1229                                           
+  1230     25728   44409583.0   1726.1      1.0          if poly_width > sheet_width_mm or poly_height > sheet_height_mm:
+  1231     25381   37180897.0   1464.9      0.8              if verbose:
+  1232                                                           st.warning(
+  1233                                                               f"Полигон из {carpet.filename} слишком большой: {poly_width/10:.1f}x{poly_height/10:.1f} см > {sheet_size[0]}x{sheet_size[1]} см"
+  1234                                                           )
+  1235     25381   38962128.0   1535.1      0.9              unplaced.append(carpet)
+  1236     25381   35185788.0   1386.3      0.8              continue
+  1237                                           
+  1238                                                   # IMPROVEMENT 2: Try all allowed orientations (0°, 90°, 180°, 270°) with better placement
+  1239       347     622736.0   1794.6      0.0          best_placement = None
+  1240       347    1017825.0   2933.2      0.0          best_waste = float("inf")
+  1241                                           
+  1242                                                   # Only allowed rotation angles for cutting machines
+  1243       347     688663.0   1984.6      0.0          rotation_angles = [0, 90, 180, 270]
+  1244                                           
+  1245      1735    3005274.0   1732.1      0.1          for angle in rotation_angles:
+  1246      1388    2822918.0   2033.8      0.1              rotated = (
+  1247      1388  205564664.0 148101.3      4.5                  rotate_polygon(carpet.polygon, angle) if angle != 0 else carpet.polygon
+  1248                                                       )
+  1249      1388   19800149.0  14265.2      0.4              rotated_bounds = rotated.bounds
+  1250      1388    2427320.0   1748.8      0.1              rotated_width = rotated_bounds[2] - rotated_bounds[0]
+  1251      1388    2117467.0   1525.6      0.0              rotated_height = rotated_bounds[3] - rotated_bounds[1]
+  1252                                           
+  1253                                                       # Skip if doesn't fit
+  1254      1388    2482933.0   1788.9      0.1              if rotated_width > sheet_width_mm or rotated_height > sheet_height_mm:
+  1255        34      51547.0   1516.1      0.0                  continue
+  1256                                           
+  1257                                                       # IMPROVEMENT 3: Bottom-Left Fill algorithm for better placement
+  1258      2708  388170284.0 143342.1      8.5              best_x, best_y = find_bottom_left_position(
+  1259      1354    1971390.0   1456.0      0.0                  rotated, placed, sheet_width_mm, sheet_height_mm
+  1260                                                       )
+  1261                                           
+  1262      1354    2391138.0   1766.0      0.1              if best_x is not None and best_y is not None:
+  1263                                                           # Calculate waste for this placement
+  1264       564   23665268.0  41959.7      0.5                  translated = translate_polygon(
+  1265       282     518028.0   1837.0      0.0                      rotated, best_x - rotated_bounds[0], best_y - rotated_bounds[1]
+  1266                                                           )
+  1267       564   11691448.0  20729.5      0.3                  waste = calculate_placement_waste(
+  1268       282     439312.0   1557.8      0.0                      translated, placed, sheet_width_mm, sheet_height_mm
+  1269                                                           )
+  1270                                           
+  1271       282     494070.0   1752.0      0.0                  if waste < best_waste:
+  1272       103     172303.0   1672.8      0.0                      best_waste = waste
+  1273       103     235374.0   2285.2      0.0                      best_placement = {
+  1274       103     162453.0   1577.2      0.0                          "polygon": translated,
+  1275       103     180973.0   1757.0      0.0                          "x_offset": best_x - rotated_bounds[0],
+  1276       103     171179.0   1661.9      0.0                          "y_offset": best_y - rotated_bounds[1],
+  1277       103     160363.0   1556.9      0.0                          "angle": angle,
+  1278                                                               }
+  1279                                           
+  1280                                                   # Apply best placement if found
+  1281       347     621949.0   1792.4      0.0          if best_placement:
+  1282       170     333086.0   1959.3      0.0              placed.append(
+  1283        85     131449.0   1546.5      0.0                  (
+  1284        85     156659.0   1843.0      0.0                      best_placement["polygon"],
+  1285        85     143322.0   1686.1      0.0                      best_placement["x_offset"],
+  1286        85     153028.0   1800.3      0.0                      best_placement["y_offset"],
+  1287        85     144233.0   1696.9      0.0                      best_placement["angle"],
+  1288        85     185149.0   2178.2      0.0                      carpet.filename,
+  1289        85     148771.0   1750.2      0.0                      carpet.color,
+  1290        85     156805.0   1844.8      0.0                      carpet.order_id,
+  1291                                                           )
+  1292                                                       )
+  1293        85     151004.0   1776.5      0.0              placed_successfully = True
+  1294        85     445878.0   5245.6      0.0              if verbose:
+  1295                                                           st.success(
+  1296                                                               f"✅ Размещен {carpet.filename} (угол: {best_placement['angle']}°, waste: {best_waste:.1f})"
+  1297                                                           )
+  1298                                                   else:
+  1299                                                       # Fallback to original grid method if no bottom-left position found
+  1300       262    3523599.0  13448.9      0.1              simple_bounds = carpet.polygon.bounds
+  1301       262     442813.0   1690.1      0.0              simple_width = simple_bounds[2] - simple_bounds[0]
+  1302       262     375337.0   1432.6      0.0              simple_height = simple_bounds[3] - simple_bounds[1]
+  1303                                           
+  1304                                                       # Optimized grid placement as fallback
+  1305       262     387695.0   1479.8      0.0              max_grid_attempts = 10  # Reduced for better performance
+  1306       262     437636.0   1670.4      0.0              if sheet_width_mm > simple_width:
+  1307       524   11437632.0  21827.5      0.3                  x_positions = np.linspace(
+  1308       262     419483.0   1601.1      0.0                      0, sheet_width_mm - simple_width, max_grid_attempts
+  1309                                                           )
+  1310                                                       else:
+  1311                                                           x_positions = [0]
+  1312                                           
+  1313       262     481292.0   1837.0      0.0              if sheet_height_mm > simple_height:
+  1314       524    7335785.0  13999.6      0.2                  y_positions = np.linspace(
+  1315       262     407816.0   1556.5      0.0                      0, sheet_height_mm - simple_height, max_grid_attempts
+  1316                                                           )
+  1317                                                       else:
+  1318                                                           y_positions = [0]
+  1319                                           
+  1320                                                       # PERFORMANCE: Pre-compute placed polygon bounds for faster collision checking
+  1321       262    7753116.0  29592.0      0.2              placed_bounds_cache = [placed_poly.bounds for placed_poly, *_ in placed]
+  1322                                           
+  1323      2881    5172120.0   1795.3      0.1              for grid_x in x_positions:
+  1324     28817   51767699.0   1796.4      1.1                  for grid_y in y_positions:
+  1325     26198   50973561.0   1945.7      1.1                      x_offset = grid_x - simple_bounds[0]
+  1326     26198   39094413.0   1492.3      0.9                      y_offset = grid_y - simple_bounds[1]
+  1327                                           
+  1328                                                               # Fast bounds check
+  1329     26198   38851207.0   1483.0      0.8                      test_bounds = (
+  1330     26198   39321771.0   1500.9      0.9                          simple_bounds[0] + x_offset,
+  1331     26198   38881457.0   1484.1      0.9                          simple_bounds[1] + y_offset,
+  1332     26198   46785117.0   1785.8      1.0                          simple_bounds[2] + x_offset,
+  1333     26198   38734975.0   1478.5      0.8                          simple_bounds[3] + y_offset,
+  1334                                                               )
+  1335                                           
+  1336                                                               if not (
+  1337     26198   40183189.0   1533.8      0.9                          test_bounds[0] >= -0.1
+  1338     26198   38442649.0   1467.4      0.8                          and test_bounds[1] >= -0.1
+  1339     26198   40254674.0   1536.6      0.9                          and test_bounds[2] <= sheet_width_mm + 0.1
+  1340     26198   39586910.0   1511.1      0.9                          and test_bounds[3] <= sheet_height_mm + 0.1
+  1341                                                               ):
+  1342                                                                   continue
+  1343                                           
+  1344                                                               # OPTIMIZATION: Fast bounding box collision check first
+  1345     26198   38002961.0   1450.6      0.8                      bbox_collision = False
+  1346     37151   81956787.0   2206.0      1.8                      for placed_bounds in placed_bounds_cache:
+  1347                                                                   if not (
+  1348     37150   59991172.0   1614.8      1.3                              test_bounds[2] + 2.0 <= placed_bounds[0]
+  1349     36911   57024484.0   1544.9      1.2                              or test_bounds[0] >= placed_bounds[2] + 2.0
+  1350     34668   66553326.0   1919.7      1.5                              or test_bounds[3] + 2.0 <= placed_bounds[1]
+  1351     34646   52283422.0   1509.1      1.1                              or test_bounds[1] >= placed_bounds[3] + 2.0
+  1352                                                                   ):
+  1353     26197   37924135.0   1447.7      0.8                              bbox_collision = True
+  1354     26197   37864824.0   1445.4      0.8                              break
+  1355                                           
+  1356     26198   37597391.0   1435.1      0.8                      if bbox_collision:
+  1357     26197   37868270.0   1445.5      0.8                          continue
+  1358                                           
+  1359                                                               # Only create polygon if bounding box check passes
+  1360         1      67678.0  67678.0      0.0                      translated = translate_polygon(carpet.polygon, x_offset, y_offset)
+  1361                                           
+  1362                                                               # Final precise collision check
+  1363         1       1397.0   1397.0      0.0                      collision = False
+  1364         3       5308.0   1769.3      0.0                      for placed_poly, *_ in placed:
+  1365         2     525083.0 262541.5      0.0                          if check_collision(translated, placed_poly):
+  1366                                                                       collision = True
+  1367                                                                       break
+  1368                                           
+  1369         1        978.0    978.0      0.0                      if not collision:
+  1370         2       2794.0   1397.0      0.0                          placed.append(
+  1371         1       1467.0   1467.0      0.0                              (
+  1372         1        977.0    977.0      0.0                                  translated,
+  1373         1        978.0    978.0      0.0                                  x_offset,
+  1374         1        977.0    977.0      0.0                                  y_offset,
+  1375         1        978.0    978.0      0.0                                  0,
+  1376         1       2305.0   2305.0      0.0                                  carpet.filename,
+  1377         1       1885.0   1885.0      0.0                                  carpet.color,
+  1378         1        908.0    908.0      0.0                                  carpet.order_id,
+  1379                                                                       )
+  1380                                                                   )
+  1381         1       1467.0   1467.0      0.0                          placed_successfully = True
+  1382         1       3841.0   3841.0      0.0                          if verbose:
+  1383                                                                       st.success(
+  1384                                                                           f"✅ Размещен {carpet.filename} (сетчатое размещение)"
+  1385                                                                       )
+  1386         1       4819.0   4819.0      0.0                          break
+  1387                                           
+  1388      2620    8075544.0   3082.3      0.2                  if placed_successfully:
+  1389         1       4330.0   4330.0      0.0                      break
+  1390                                           
+  1391       347    1529023.0   4406.4      0.0          if not placed_successfully:
+  1392       261    1212001.0   4643.7      0.0              if verbose:
+  1393                                                           st.warning(f"❌ Не удалось разместить полигон из {carpet.filename}")
+  1394       261     935630.0   3584.8      0.0              unplaced.append(carpet)
+  1395                                           
+  1396     25406  137420805.0   5409.0      3.0      if verbose:
+  1397                                                   usage_percent = calculate_usage_percent(placed, sheet_size)
+  1398                                                   st.info(
+  1399                                                       f"🏁 Упаковка завершена: {len(placed)} размещено, {len(unplaced)} не размещено, использование: {usage_percent:.1f}%"
+  1400                                                   )
+  1401     25406   79619402.0   3133.9      1.7      return placed, unplaced
+
+Total time: 498.075 s
+File: /home/sasha/proj/2025/eva_layout/layout_optimizer.py
+Function: bin_packing_with_existing at line 1072
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+  1072                                           @profile
+  1073                                           def bin_packing_with_existing(
+  1074                                               polygons: list[Carpet],
+  1075                                               existing_placed: list[tuple],
+  1076                                               sheet_size: tuple[float, float],
+  1077                                               verbose: bool = True,
+  1078                                           ) -> tuple[list[tuple], list[tuple]]:
+  1079                                               """Bin packing that considers already placed polygons on the sheet."""
+  1080                                               # Convert sheet size from cm to mm to match DXF polygon units
+  1081      8460   15462893.0   1827.8      0.0      sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
+  1082                                           
+  1083      8460   13183762.0   1558.4      0.0      placed = []
+  1084      8460   13032568.0   1540.5      0.0      unplaced = []
+  1085                                           
+  1086                                               # Start with existing placed polygons as obstacles
+  1087      8460   19116636.0   2259.6      0.0      obstacles = [placed_tuple[0] for placed_tuple in existing_placed]
+  1088                                           
+  1089      8460   13683450.0   1617.4      0.0      if verbose:
+  1090                                                   st.info(
+  1091                                                       f"Дозаполняем лист с {len(obstacles)} существующими деталями, добавляем {len(polygons)} новых"
+  1092                                                   )
+  1093                                           
+  1094                                               # IMPROVEMENT 1: Sort polygons by area and perimeter for better packing
+  1095      8460   15421884.0   1822.9      0.0      def get_polygon_priority(polygon_tuple: Carpet):
+  1096                                                   polygon = polygon_tuple.polygon
+  1097                                                   # Combine area and perimeter for better sorting (larger, more complex shapes first)
+  1098                                                   area = polygon.area
+  1099                                                   bounds = polygon.bounds
+  1100                                                   perimeter_approx = 2 * ((bounds[2] - bounds[0]) + (bounds[3] - bounds[1]))
+  1101                                                   return area + perimeter_approx * 0.1
+  1102                                           
+  1103      8460  580199119.0  68581.5      0.1      sorted_polygons = sorted(polygons, key=get_polygon_priority, reverse=True)
+  1104                                           
+  1105     18077   35603310.0   1969.5      0.0      for i, carpet in enumerate(sorted_polygons):
+  1106      9617   16202997.0   1684.8      0.0          polygon = carpet.polygon
+  1107      9617   16875234.0   1754.7      0.0          file_name = carpet.filename
+  1108      9617   15789058.0   1641.8      0.0          color = carpet.color
+  1109      9617   17009791.0   1768.7      0.0          order_id = carpet.order_id
+  1110                                           
+  1111      9617   14409130.0   1498.3      0.0          placed_successfully = False
+  1112                                           
+  1113                                                   # Check if polygon is too large for the sheet
+  1114      9617  185272919.0  19265.1      0.0          bounds = polygon.bounds
+  1115      9617   16460837.0   1711.6      0.0          poly_width = bounds[2] - bounds[0]
+  1116      9617   15502655.0   1612.0      0.0          poly_height = bounds[3] - bounds[1]
+  1117                                           
+  1118      9617   16831710.0   1750.2      0.0          if poly_width > sheet_width_mm or poly_height > sheet_height_mm:
+  1119      8303   13687699.0   1648.5      0.0              unplaced.append((polygon, file_name, color, order_id))
+  1120      8303   12266848.0   1477.4      0.0              continue
+  1121                                           
+  1122                                                   # Try all allowed orientations (0°, 90°, 180°, 270°) with better placement
+  1123      1314    2070298.0   1575.6      0.0          best_placement = None
+  1124      1314    4658653.0   3545.4      0.0          best_waste = float("inf")
+  1125                                           
+  1126                                                   # Only allowed rotation angles for cutting machines
+  1127      1314    2524581.0   1921.3      0.0          rotation_angles = [0, 90, 180, 270]
+  1128                                           
+  1129      6570   13142360.0   2000.4      0.0          for angle in rotation_angles:
+  1130      5256  682817312.0 129912.0      0.1              rotated = rotate_polygon(polygon, angle) if angle != 0 else polygon
+  1131      5256   70059740.0  13329.5      0.0              rotated_bounds = rotated.bounds
+  1132      5256    9761879.0   1857.3      0.0              rotated_width = rotated_bounds[2] - rotated_bounds[0]
+  1133      5256    9559031.0   1818.7      0.0              rotated_height = rotated_bounds[3] - rotated_bounds[1]
+  1134                                           
+  1135                                                       # Skip if doesn't fit
+  1136      5256   10079518.0   1917.7      0.0              if rotated_width > sheet_width_mm or rotated_height > sheet_height_mm:
+  1137       116     189618.0   1634.6      0.0                  continue
+  1138                                           
+  1139                                                       # Find position that avoids existing obstacles
+  1140     10280     4.96e+11 4.83e+07     99.6              best_x, best_y = find_bottom_left_position_with_obstacles(
+  1141      5140    7554945.0   1469.8      0.0                  rotated, obstacles, sheet_width_mm, sheet_height_mm
+  1142                                                       )
+  1143                                           
+  1144      5140   11044855.0   2148.8      0.0              if best_x is not None and best_y is not None:
+  1145                                                           # Calculate waste for this placement
+  1146       300   12353424.0  41178.1      0.0                  translated = translate_polygon(
+  1147       150     295786.0   1971.9      0.0                      rotated, best_x - rotated_bounds[0], best_y - rotated_bounds[1]
+  1148                                                           )
+  1149       300   12097727.0  40325.8      0.0                  waste = calculate_placement_waste(
+  1150       150     227401.0   1516.0      0.0                      translated,
+  1151       150     506089.0   3373.9      0.0                      [(obs, 0, 0, 0, "obstacle") for obs in obstacles],
+  1152       150     262680.0   1751.2      0.0                      sheet_width_mm,
+  1153       150     224409.0   1496.1      0.0                      sheet_height_mm,
+  1154                                                           )
+  1155                                           
+  1156       150     279790.0   1865.3      0.0                  if waste < best_waste:
+  1157        72     113909.0   1582.1      0.0                      best_waste = waste
+  1158        72     186062.0   2584.2      0.0                      best_placement = {
+  1159        72     104271.0   1448.2      0.0                          "polygon": translated,
+  1160        72     127188.0   1766.5      0.0                          "x_offset": best_x - rotated_bounds[0],
+  1161        72     132075.0   1834.4      0.0                          "y_offset": best_y - rotated_bounds[1],
+  1162        72     126973.0   1763.5      0.0                          "angle": angle,
+  1163                                                               }
+  1164                                           
+  1165                                                   # Apply best placement if found
+  1166      1314    2666275.0   2029.1      0.0          if best_placement:
+  1167       124     220288.0   1776.5      0.0              placed.append(
+  1168        62      92821.0   1497.1      0.0                  (
+  1169        62     122504.0   1975.9      0.0                      best_placement["polygon"],
+  1170        62     113425.0   1829.4      0.0                      best_placement["x_offset"],
+  1171        62     136890.0   2207.9      0.0                      best_placement["y_offset"],
+  1172        62     110492.0   1782.1      0.0                      best_placement["angle"],
+  1173        62     105255.0   1697.7      0.0                      file_name,
+  1174        62      99520.0   1605.2      0.0                      color,
+  1175        62     116993.0   1887.0      0.0                      order_id,
+  1176                                                           )
+  1177                                                       )
+  1178                                                       # Add this polygon as an obstacle for subsequent placements
+  1179        62     122436.0   1974.8      0.0              obstacles.append(best_placement["polygon"])
+  1180        62     117130.0   1889.2      0.0              placed_successfully = True
+  1181                                           
+  1182      1314    2238819.0   1703.8      0.0          if not placed_successfully:
+  1183      1252    2696749.0   2154.0      0.0              unplaced.append((polygon, file_name, color, order_id))
+  1184                                           
+  1185      8460   23764414.0   2809.0      0.0      return placed, unplaced
+
+Total time: 576.955 s
+File: /home/sasha/proj/2025/eva_layout/layout_optimizer.py
+Function: bin_packing_with_inventory at line 1617
+
+Line #      Hits         Time  Per Hit   % Time  Line Contents
+==============================================================
+  1617                                           @profile
+  1618                                           def bin_packing_with_inventory(
+  1619                                               carpets: list[Carpet],
+  1620                                               available_sheets: list[dict],
+  1621                                               verbose: bool = True,
+  1622                                               max_sheets_per_order: int = None,
+  1623                                               progress_callback=None,
+  1624                                           ) -> tuple[list[dict], list[tuple]]:
+  1625                                               """Optimize placement of polygons on available sheets with inventory tracking."""
+  1626       492   97906596.0 198997.1      0.0      logger.info("=== НАЧАЛО bin_packing_with_inventory ===")
+  1627       982   91101397.0  92771.3      0.0      logger.info(
+  1628       491    1203274.0   2450.7      0.0          f"Входные параметры: {len(carpets)} полигонов, {len(available_sheets)} типов листов, max_sheets_per_order={max_sheets_per_order}"
+  1629                                               )
+  1630                                           
+  1631       491     864957.0   1761.6      0.0      placed_layouts = []
+  1632       491     703537.0   1432.9      0.0      all_unplaced = []
+  1633       982    1406508.0   1432.3      0.0      sheet_inventory = [
+  1634       982    1832562.0   1866.2      0.0          sheet.copy() for sheet in available_sheets
+  1635                                               ]  # Copy to avoid modifying original
+  1636                                           
+  1637       491     722529.0   1471.5      0.0      if verbose:
+  1638                                                   total_available = sum(
+  1639                                                       sheet["count"] - sheet["used"] for sheet in sheet_inventory
+  1640                                                   )
+  1641                                                   st.info(
+  1642                                                       f"Начинаем размещение {len(carpets)} полигонов на {total_available} доступных листах"
+  1643                                                   )
+  1644                                                   if max_sheets_per_order:
+  1645                                                       st.info(f"Ограничение: максимум {max_sheets_per_order} листов на заказ")
+  1646                                           
+  1647                                               # Group polygons by order_id and separate by priority
+  1648       491   88100711.0 179431.2      0.0      logger.info("Группировка полигонов по order_id и приоритету...")
+  1649       491     841187.0   1713.2      0.0      order_groups = {}
+  1650       491     782947.0   1594.6      0.0      priority2_carpets = []  # Polygons with priority 2 for later processing
+  1651                                           
+  1652      1152    1779330.0   1544.6      0.0      for carpet in carpets:
+  1653                                                   # Separate priority 2 polygons for later processing
+  1654       661    1095792.0   1657.8      0.0          if carpet.priority == 2:
+  1655        40      57969.0   1449.2      0.0              priority2_carpets.append(carpet)
+  1656        80     191999.0   2400.0      0.0              logger.debug(
+  1657        40      64953.0   1623.8      0.0                  f"Полигон {carpet.filename} отложен для приоритета 2 (заполнение пустот)"
+  1658                                                       )
+  1659                                                   else:
+  1660                                                       # Process priority 1 and Excel files normally
+  1661       621     991977.0   1597.4      0.0              if carpet.order_id not in order_groups:
+  1662       535     878219.0   1641.5      0.0                  order_groups[carpet.order_id] = []
+  1663       535    2493471.0   4660.7      0.0                  logger.debug(f"Создана новая группа для заказа: {carpet.order_id}")
+  1664       621    1024249.0   1649.4      0.0              order_groups[carpet.order_id].append(carpet)
+  1665                                           
+  1666       982   90975690.0  92643.3      0.0      logger.info(
+  1667       491    1075586.0   2190.6      0.0          f"Группировка завершена: {len(order_groups)} уникальных заказов, {len(priority2_carpets)} полигонов приоритета 2"
+  1668                                               )
+  1669      1026    1863062.0   1815.8      0.0      for order_id, group in order_groups.items():
+  1670       535   93191250.0 174189.3      0.0          logger.info(f"  • Заказ {order_id}: {len(group)} файлов")
+  1671       491     844405.0   1719.8      0.0      if priority2_carpets:
+  1672         2     136543.0  68271.5      0.0          logger.info(
+  1673         1       2375.0   2375.0      0.0              f"  • Приоритет 2 (заполнение пустот): {len(priority2_carpets)} файлов"
+  1674                                                   )
+  1675                                           
+  1676       491     766180.0   1560.4      0.0      if verbose:
+  1677                                                   st.info(f"Найдено {len(order_groups)} уникальных заказов для размещения:")
+  1678                                                   for order_id, group in order_groups.items():
+  1679                                                       st.info(f"  • Заказ {order_id}: {len(group)} файлов")
+  1680                                                       # Show filenames for debugging
+  1681                                                       for carpet in group:
+  1682                                                           st.write(f"    - {carpet.filename}")
+  1683                                           
+  1684       491     717581.0   1461.5      0.0      sheet_counter = 0
+  1685                                           
+  1686                                               # Track sheets used per order for constraint checking
+  1687       491    1324715.0   2698.0      0.0      order_sheet_usage = {order_id: 0 for order_id in order_groups.keys()}
+  1688                                           
+  1689       982   83069291.0  84591.9      0.0      logger.info(
+  1690       491     908150.0   1849.6      0.0          f"Используем упрощенный эффективный алгоритм: {len(order_groups)} заказов"
+  1691                                               )
+  1692                                           
+  1693                                               # Check if we only have priority 2 polygons
+  1694       491     913757.0   1861.0      0.0      if not order_groups and priority2_carpets:
+  1695                                                   logger.info(
+  1696                                                       f"Только файлы приоритета 2: {len(priority2_carpets)} файлов не размещаются (новые листы не создаются)"
+  1697                                                   )
+  1698                                                   if verbose:
+  1699                                                       st.warning(
+  1700                                                           f"⚠️ Только файлы приоритета 2: {len(priority2_carpets)} файлов не размещаются (новые листы не создаются)"
+  1701                                                       )
+  1702                                                   all_unplaced.extend(priority2_carpets)
+  1703                                           
+  1704                                                   # Progress update for early return
+  1705                                                   if progress_callback:
+  1706                                                       progress_callback(
+  1707                                                           100, "Завершено: только файлы приоритета 2 (не размещены)"
+  1708                                                       )
+  1709                                           
+  1710                                                   return placed_layouts, all_unplaced
+  1711                                           
+  1712                                               # NEW LOGIC: Priority queue for orders based on MAX_SHEETS_PER_ORDER constraint
+  1713                                               # Track which order was placed first and its starting sheet
+  1714       491     796840.0   1622.9      0.0      order_first_sheet = {}  # order_id -> first_sheet_number
+  1715                                           
+  1716                                               # Process orders using priority queue logic
+  1717       491    1146552.0   2335.1      0.0      remaining_orders = dict(order_groups)  # Copy to modify
+  1718       982    1712715.0   1744.1      0.0      max_iterations = max(
+  1719       491     739445.0   1506.0      0.0          50, len(remaining_orders) * 25
+  1720                                               )  # Safety limit with higher multiplier
+  1721       491     701914.0   1429.6      0.0      iteration_count = 0
+  1722                                               
+  1723     51791  204390570.0   3946.4      0.0      # Детектор зависших итераций
+  1724     25895   37788616.0   1459.3      0.0      consecutive_no_progress = 0
+  1725                                               max_no_progress = 3  # Прерывать после 3 итераций без размещений
+  1726     25895   38998328.0   1506.0      0.0  
+  1727     25895 4561599571.0 176157.5      0.8      while (remaining_orders and 
+  1728     25895 4372140265.0 168841.1      0.8             any(sheet["count"] - sheet["used"] > 0 for sheet in sheet_inventory) and
+  1729     25895   40059510.0   1547.0      0.0             consecutive_no_progress < max_no_progress):
+  1730       980   84302968.0  86023.4      0.0          iteration_count += 1
+  1731       490     904759.0   1846.4      0.0          logger.info(f"--- ИТЕРАЦИЯ {iteration_count} ---")
+  1732                                                   logger.info(f"Остается заказов: {len(remaining_orders)}")
+  1733       490    4374843.0   8928.3      0.0          if iteration_count > max_iterations:
+  1734                                                       logger.error(
+  1735     25405   35815123.0   1409.8      0.0                  f"Превышен лимит итераций ({max_iterations}), прерываем выполнение"
+  1736                                                       )
+  1737                                                       break
+  1738                                           
+  1739     50810   75275212.0   1481.5      0.0          placed_on_current_sheet = False
+  1740     50810   79945259.0   1573.4      0.0  
+  1741                                                   # Try each available sheet type, GROUP BY COLOR for better organization
+  1742                                                   # Сначала группируем листы по цвету: чёрный, потом серый, потом остальные
+  1743                                                   available_sheet_types = [
+  1744     25405   37525964.0   1477.1      0.0              st for st in sheet_inventory if st["count"] - st["used"] > 0
+  1745     51735   75334185.0   1456.2      0.0          ]
+  1746     26330   40025317.0   1520.1      0.0  
+  1747     26330   40945028.0   1555.1      0.0          # Группируем по цветам
+  1748     26330   39150774.0   1486.9      0.0          sheets_by_color = {}
+  1749     26330   39503863.0   1500.3      0.0          for sheet_type in available_sheet_types:
+  1750                                                       color = sheet_type.get("color", "серый")
+  1751                                                       if color not in sheets_by_color:
+  1752     25405   39894173.0   1570.3      0.0                  sheets_by_color[color] = []
+  1753     25405   37642721.0   1481.7      0.0              sheets_by_color[color].append(sheet_type)
+  1754                                           
+  1755     76215  110984090.0   1456.2      0.0          # Обрабатываем в порядке: черный, серый, остальные цвета
+  1756     50810   72642327.0   1429.7      0.0          color_priority = ["чёрный", "серый"]
+  1757     26330   41876540.0   1590.4      0.0          ordered_sheet_types = []
+  1758                                           
+  1759                                                   for color in color_priority:
+  1760     51735   83773138.0   1619.3      0.0              if color in sheets_by_color:
+  1761     26330   40123152.0   1523.9      0.0                  ordered_sheet_types.extend(sheets_by_color[color])
+  1762                                           
+  1763                                                   # Добавляем остальные цвета
+  1764     51694  220468336.0   4264.9      0.0          for color, sheet_list in sheets_by_color.items():
+  1765     26317   42649426.0   1620.6      0.0              if color not in color_priority:
+  1766     26317   37952197.0   1442.1      0.0                  ordered_sheet_types.extend(sheet_list)
+  1767                                           
+  1768                                                   for sheet_type in ordered_sheet_types:
+  1769     26317   38756189.0   1472.7      0.0              sheet_size = (sheet_type["width"], sheet_type["height"])
+  1770                                                       sheet_color = sheet_type.get("color", "серый")
+  1771                                           
+  1772                                                       # Calculate which sheet number this would be
+  1773     26317   37577215.0   1427.9      0.0              next_sheet_number = sheet_counter + 1
+  1774     26317   36836773.0   1399.7      0.0  
+  1775     26317   38115486.0   1448.3      0.0              # NEW APPROACH: Reserve sheets for started orders to guarantee completion
+  1776                                                       # Step 1: Check which started orders need priority on this sheet
+  1777     69545  108804808.0   1564.5      0.0              priority_orders = []
+  1778                                                       blocked_orders = []
+  1779     43228   62032973.0   1435.0      0.0              new_orders = []
+  1780    129684  186706194.0   1439.7      0.0  
+  1781     43228   62500419.0   1445.8      0.0              for order_id, order_polygons in remaining_orders.items():
+  1782     43228   60475843.0   1399.0      0.0                  # Skip orders that don't apply to MAX_SHEETS_PER_ORDER constraint
+  1783     86456  134263714.0   1553.0      0.0                  is_constrained = (
+  1784     43228   61467395.0   1421.9      0.0                      max_sheets_per_order is not None
+  1785                                                               and order_id != "additional"
+  1786                                                               and order_id != "unknown"  # Manual uploads are not limited
+  1787                                                               and not str(order_id).startswith(
+  1788     43228   62734621.0   1451.2      0.0                          "group_"
+  1789                                                               )  # Group uploads are not limited
+  1790                                                           )
+  1791                                           
+  1792                                                           if not is_constrained:
+  1793     43228   66278790.0   1533.2      0.0                      # Unconstrained orders can be placed anytime
+  1794                                                               new_orders.append((order_id, order_polygons))
+  1795     16504   24217992.0   1467.4      0.0                      continue
+  1796     16504   24542087.0   1487.0      0.0  
+  1797                                                           if order_id in order_first_sheet:
+  1798     16504   24528167.0   1486.2      0.0                      # Order already started - check if within range
+  1799                                                               first_sheet = order_first_sheet[order_id]
+  1800        69     115665.0   1676.3      0.0                      max_allowed_sheet = first_sheet + max_sheets_per_order - 1
+  1801       138     386723.0   2802.3      0.0  
+  1802        69     152120.0   2204.6      0.0                      if next_sheet_number <= max_allowed_sheet:
+  1803                                                                   # Within range - MAXIMUM priority (must complete this order)
+  1804                                                                   priority_orders.append((order_id, order_polygons))
+  1805                                                                   logger.debug(
+  1806     16435   24561881.0   1494.5      0.0                              f"Заказ {order_id}: МАКСИМАЛЬНЫЙ приоритет (листы {first_sheet}-{max_allowed_sheet}, текущий {next_sheet_number})"
+  1807     32870   91352485.0   2779.2      0.0                          )
+  1808     16435   31937322.0   1943.3      0.0                      else:
+  1809                                                                   # Outside range - blocked from starting new placement
+  1810                                                                   blocked_orders.append(order_id)
+  1811                                                                   logger.debug(
+  1812     26724   38546004.0   1442.4      0.0                              f"Заказ {order_id}: ЗАБЛОКИРОВАН (вне диапазона {first_sheet}-{max_allowed_sheet}, текущий {next_sheet_number})"
+  1813                                                                   )
+  1814                                                           else:
+  1815     26317   41706526.0   1584.8      0.0                      # New order - can start only if no priority orders need this sheet
+  1816                                                               new_orders.append((order_id, order_polygons))
+  1817        24      50708.0   2112.8      0.0  
+  1818        48    6412324.0 133590.1      0.0              # PRIORITY STRATEGY: If there are started orders within range, give them ALL the space
+  1819        24      55038.0   2293.2      0.0              if priority_orders:
+  1820                                                           # Only consider priority orders - they get the entire sheet
+  1821                                                           orders_to_consider = priority_orders
+  1822                                                           logger.info(
+  1823                                                               f"Лист {next_sheet_number}: РЕЖИМ ПРИОРИТЕТА - {len(priority_orders)} начатых заказов"
+  1824                                                           )
+  1825     52586  146431549.0   2784.6      0.0              else:
+  1826     26293   42161303.0   1603.5      0.0                  # No priority orders - allow new orders to start
+  1827                                                           # IMPROVED STRATEGY: Sort new orders by carpet count (descending)
+  1828     26293   39199802.0   1490.9      0.0                  # Orders with more carpets should be processed first as they are harder to fit within MAX_SHEETS_PER_ORDER constraint
+  1829     52586 5149230023.0  97920.2      0.9                  new_orders_sorted = sorted(
+  1830     26293   51279053.0   1950.3      0.0                      new_orders, key=lambda x: len(x[1]), reverse=True
+  1831                                                           )
+  1832                                                           orders_to_consider = new_orders_sorted
+  1833     52627   89745261.0   1705.3      0.0                  logger.info(
+  1834     26334  122787696.0   4662.7      0.0                      f"Лист {next_sheet_number}: Обычный режим - {len(new_orders_sorted)} новых заказов (отсортированы по убыванию количества ковров)"
+  1835     26293   40370407.0   1535.4      0.0                  )
+  1836         8      40716.0   5089.5      0.0                  # Log order sorting for debugging
+  1837                                                           for order_id, order_polygons in new_orders_sorted[:5]:  # Show top 5
+  1838                                                               logger.debug(f"  Заказ {order_id}: {len(order_polygons)} ковров")
+  1839     26317   41503330.0   1577.1      0.0                  if len(new_orders_sorted) > 5:
+  1840     26317   37643816.0   1430.4      0.0                      logger.debug(f"  ... еще {len(new_orders_sorted) - 5} заказов")
+  1841                                           
+  1842     52808  154870896.0   2932.7      0.0              # Collect polygons from orders that can fit on this sheet
+  1843                                                       compatible_polygons = []
+  1844     26491   38279330.0   1445.0      0.0              orders_to_try = []
+  1845     53253   78258568.0   1469.6      0.0  
+  1846     26762   43059854.0   1609.0      0.0              for order_id, order_polygons in orders_to_consider:
+  1847     25749   38197328.0   1483.4      0.0                  # Filter polygons by color
+  1848                                                           color_matched_polygons = []
+  1849     26491   37937716.0   1432.1      0.0                  for carpet in order_polygons:
+  1850     25522   39219051.0   1536.7      0.0                      if carpet.color == sheet_color:
+  1851     25522   35561699.0   1393.4      0.0                          color_matched_polygons.append(carpet)
+  1852                                           
+  1853     26317  153821000.0   5844.9      0.0                  if color_matched_polygons:
+  1854      1822   11644232.0   6390.9      0.0                      compatible_polygons.extend(color_matched_polygons)
+  1855       911    4061269.0   4458.0      0.0                      orders_to_try.append(order_id)
+  1856                                           
+  1857       911    3433427.0   3768.9      0.0              if not compatible_polygons:
+  1858                                                           logger.debug(
+  1859                                                               f"Нет совместимых полигонов для листа {sheet_type['name']} цвета {sheet_color}"
+  1860     25406  138345597.0   5445.4      0.0                  )
+  1861     25406 4803268932.0 189060.4      0.8                  continue  # No compatible polygons for this sheet color
+  1862                                           
+  1863                                                       # NEW STRATEGY: Try to fill existing sheets BEFORE creating a new one
+  1864     45674  435630078.0   9537.8      0.1              filled_existing_sheet = False
+  1865     20268  125353438.0   6184.8      0.0              logger.info("🚀 НОВЫЙ АЛГОРИТМ: Попытка дозаполнить существующие листы")
+  1866      8411   52128203.0   6197.6      0.0  
+  1867                                                       # Try to add compatible polygons to existing sheets of the same color first
+  1868                                                       for layout_idx, existing_layout in enumerate(placed_layouts):
+  1869      8411   51859839.0   6165.7      0.0                  if existing_layout.get("sheet_color") == sheet_color:
+  1870        13      76757.0   5904.4      0.0                      current_usage = existing_layout.get("usage_percent", 0)
+  1871                                           
+  1872      8398   51470230.0   6128.9      0.0                      # Skip nearly full sheets (>90%) to avoid tiny gaps
+  1873      8398   51101353.0   6084.9      0.0                      if current_usage >= 90:
+  1874                                                                   continue
+  1875     16796  130464936.0   7767.6      0.0  
+  1876      8398   67045630.0   7983.5      0.0                      existing_placed = existing_layout["placed_polygons"]
+  1877                                                               sheet_size = existing_layout["sheet_size"]
+  1878                                           
+  1879      8398   51948162.0   6185.8      0.0                      logger.debug(
+  1880     16796     3.66e+11 2.18e+07     63.4                          f"Пытаемся дозаполнить лист #{existing_layout['sheet_number']} (заполнение: {current_usage:.1f}%)"
+  1881      8398   51719538.0   6158.6      0.0                      )
+  1882      8398   51265070.0   6104.4      0.0  
+  1883      8398   55330159.0   6588.5      0.0                      try:
+  1884      8398   51808457.0   6169.1      0.0                          additional_placed, still_remaining = bin_packing_with_existing(
+  1885                                                                       compatible_polygons,
+  1886                                                                       existing_placed,
+  1887      8398   52621484.0   6266.0      0.0                              sheet_size,
+  1888        26   16562670.0 637025.8      0.0                              verbose=False,
+  1889        13     951198.0  73169.1      0.0                          )
+  1890                                           
+  1891                                                                   if additional_placed:
+  1892                                                                       logger.info(
+  1893        13      97501.0   7500.1      0.0                                  f"✅ ДОЗАПОЛНЕНИЕ: Лист #{existing_layout['sheet_number']} получил +{len(additional_placed)} полигонов ({current_usage:.1f}% → {calculate_usage_percent(existing_placed + additional_placed, sheet_size):.1f}%)"
+  1894        13     103717.0   7978.2      0.0                              )
+  1895                                           
+  1896        13      96805.0   7446.5      0.0                              # Update existing layout
+  1897        26    1760964.0  67729.4      0.0                              placed_layouts[layout_idx]["placed_polygons"] = (
+  1898        13      86955.0   6688.8      0.0                                  existing_placed + additional_placed
+  1899        13      83743.0   6441.8      0.0                              )
+  1900                                                                       placed_layouts[layout_idx]["usage_percent"] = (
+  1901                                                                           calculate_usage_percent(
+  1902                                                                               placed_layouts[layout_idx]["placed_polygons"],
+  1903                                                                               sheet_size,
+  1904        13      99178.0   7629.1      0.0                                  )
+  1905        34     287263.0   8448.9      0.0                              )
+  1906                                           
+  1907        21     138150.0   6578.6      0.0                              # Track orders and remove placed polygons from remaining orders
+  1908                                                                       additional_orders_on_sheet = set()
+  1909        21     144991.0   6904.3      0.0                              for placed_tuple in additional_placed:
+  1910                                                                           # Handle different tuple structures for order_id
+  1911                                                                           if len(placed_tuple) == 7:
+  1912                                                                               # Extended format from bin_packing_with_existing: (polygon, x, y, angle, file_name, color, order_id)
+  1913                                                                               placed_order_id = placed_tuple[6]
+  1914                                                                           elif len(placed_tuple) > 3:
+  1915        21     144577.0   6884.6      0.0                                      # Standard format: (polygon, file_name, color, order_id)
+  1916                                                                               placed_order_id = placed_tuple[3]
+  1917                                                                           else:
+  1918        21     145695.0   6937.9      0.0                                      placed_order_id = "unknown"
+  1919                                                                           additional_orders_on_sheet.add(placed_order_id)
+  1920        21     138636.0   6601.7      0.0  
+  1921        18     120200.0   6677.8      0.0                                  # Update order sheet tracking
+  1922        18     121038.0   6724.3      0.0                                  if placed_order_id not in order_sheet_usage:
+  1923                                                                               order_sheet_usage[placed_order_id] = 0
+  1924                                                                           if placed_order_id not in order_first_sheet:
+  1925                                                                               order_first_sheet[placed_order_id] = (
+  1926                                                                                   existing_layout["sheet_number"]
+  1927        13      92055.0   7081.2      0.0                                      )
+  1928        34     289223.0   8506.6      0.0  
+  1929        21     140804.0   6705.0      0.0                              # ИСПРАВЛЕНИЕ: точечное совпадение по 3 полям вместо set-сравнения
+  1930                                                                       # Из-за разной длины кортежей (4 vs 7) set-сравнение всегда возвращало False
+  1931        21     148696.0   7080.8      0.0                              placed_keys = set()
+  1932        21     140943.0   6711.6      0.0                              for placed_poly in additional_placed:
+  1933        21     139967.0   6665.1      0.0                                  if len(placed_poly) >= 5:
+  1934        21     142481.0   6784.8      0.0                                      # Полигон из bin_packing_with_existing: (polygon, x, y, angle, filename, color, order_id)
+  1935                                                                               key = (
+  1936                                                                                   placed_poly[4],
+  1937                                                                                   placed_poly[5],
+  1938                                                                                   placed_poly[6],
+  1939                                                                               )  # filename, color, order_id
+  1940                                                                           else:
+  1941                                                                               # Обычный полигон: (polygon, filename, color, order_id)
+  1942                                                                               key = (
+  1943        21     140665.0   6698.3      0.0                                          placed_poly[1],
+  1944                                                                                   placed_poly[2],
+  1945                                                                                   placed_poly[3],
+  1946        26     184735.0   7105.2      0.0                                      )
+  1947       296    3772876.0  12746.2      0.0                                  placed_keys.add(key)
+  1948       322    2392346.0   7429.6      0.0  
+  1949       296    2355055.0   7956.3      0.0                              # Удаляем полигоны с совпадающими ключами
+  1950                                                                       compatible_polygons = [
+  1951                                                                           p
+  1952                                                                           for p in compatible_polygons
+  1953       283    2117935.0   7483.9      0.0                                  if (p.filename, p.color, p.order_id) not in placed_keys
+  1954       270    1875653.0   6946.9      0.0                              ]
+  1955                                           
+  1956                                                                       # Update remaining orders - remove empty orders or reduce polygon counts
+  1957        21     158195.0   7533.1      0.0                              for order_id in list(remaining_orders.keys()):
+  1958        64     591155.0   9236.8      0.0                                  if order_id in additional_orders_on_sheet:
+  1959        43     313808.0   7297.9      0.0                                      # Count how many polygons from this order were placed
+  1960                                                                               # ИСПРАВЛЕНИЕ: правильно извлекаем order_id из разных форматов кортежей
+  1961        43     552675.0  12852.9      0.0                                      placed_from_order = []
+  1962                                                                               for p in additional_placed:
+  1963                                                                                   if len(p) >= 5:
+  1964                                                                                       # Полигон из bin_packing_with_existing: (polygon, x, y, angle, filename, color, order_id)
+  1965                                                                                       poly_order_id = p[6] if len(p) > 6 else None
+  1966        43     311572.0   7245.9      0.0                                          else:
+  1967        21     156031.0   7430.0      0.0                                              # Обычный полигон: (polygon, filename, color, order_id)
+  1968                                                                                       poly_order_id = p[3] if len(p) > 3 else None
+  1969                                           
+  1970                                                                                   if poly_order_id == order_id:
+  1971        42     461178.0  10980.4      0.0                                              placed_from_order.append(p)
+  1972                                           
+  1973        21     160221.0   7629.6      0.0                                      # Remove exactly those polygons that were placed
+  1974                                                                               # ИСПРАВЛЕНИЕ: учитываем правильный формат кортежей
+  1975        21     165321.0   7872.4      0.0                                      for placed_poly in placed_from_order:
+  1976        21     159382.0   7589.6      0.0                                          # Извлекаем ключ из размещенного полигона
+  1977        21     154282.0   7346.8      0.0                                          if len(placed_poly) >= 5:
+  1978        21     154636.0   7363.6      0.0                                              # Полигон из bin_packing_with_existing: (polygon, x, y, angle, filename, color, order_id)
+  1979                                                                                       placed_key = (
+  1980                                                                                           placed_poly[4],
+  1981                                                                                           placed_poly[5],
+  1982                                                                                           placed_poly[6],
+  1983                                                                                       )
+  1984                                                                                   else:
+  1985                                                                                       # Обычный полигон: (polygon, filename, color, order_id)
+  1986                                                                                       placed_key = (
+  1987                                                                                           placed_poly[1],
+  1988        54     558255.0  10338.1      0.0                                                  placed_poly[2],
+  1989                                                                                           placed_poly[3],
+  1990        54     418988.0   7759.0      0.0                                              )
+  1991        54     423185.0   7836.8      0.0  
+  1992        54     421227.0   7800.5      0.0                                          for orig_carpet in remaining_orders[order_id][:]:
+  1993        54     420250.0   7782.4      0.0                                              # Сравниваем по ключу (filename, color, order_id)
+  1994                                                                                       orig_key = (
+  1995        54     426532.0   7898.7      0.0                                                  orig_carpet.filename,
+  1996        42     471859.0  11234.7      0.0                                                  orig_carpet.color,
+  1997        21     156800.0   7466.7      0.0                                                  orig_carpet.order_id,
+  1998                                                                                       )
+  1999        21     160504.0   7643.0      0.0                                              if orig_key == placed_key:
+  2000                                                                                           remaining_orders[order_id].remove(
+  2001                                                                                               orig_carpet
+  2002        21     161061.0   7669.6      0.0                                                  )
+  2003        14    7806960.0 557640.0      0.0                                                  break
+  2004         7      56574.0   8082.0      0.0  
+  2005                                                                               # Remove empty orders
+  2006         7      61812.0   8830.3      0.0                                      if not remaining_orders[order_id]:
+  2007                                                                                   logger.info(
+  2008                                                                                       f"  Заказ {order_id} полностью размещен (дозаполнение)"
+  2009        13     109586.0   8429.7      0.0                                          )
+  2010                                                                                   del remaining_orders[order_id]
+  2011        13     116498.0   8961.4      0.0  
+  2012                                                                       # Update orders on this sheet
+  2013                                                                       if "orders_on_sheet" not in placed_layouts[layout_idx]:
+  2014                                                                           placed_layouts[layout_idx]["orders_on_sheet"] = set()
+  2015                                                                       placed_layouts[layout_idx]["orders_on_sheet"].update(
+  2016                                                                           additional_orders_on_sheet
+  2017                                                                       )
+  2018                                           
+  2019                                                                       filled_existing_sheet = True
+  2020                                                                       placed_on_current_sheet = True
+  2021                                           
+  2022                                                                       if verbose:
+  2023                                                                           st.success(
+  2024                                                                               f"✅ Дозаполнен лист #{existing_layout['sheet_number']}: +{len(additional_placed)} деталей"
+  2025        13      24865.0   1912.7      0.0                                  )
+  2026        26     102952.0   3959.7      0.0  
+  2027        13      45888.0   3529.8      0.0                              break  # Found space, don't need to create new sheet yet
+  2028                                           
+  2029        13      62859.0   4835.3      0.0                      except Exception as e:
+  2030                                                                   logger.debug(
+  2031                                                                       f"Не удалось дозаполнить лист #{existing_layout['sheet_number']}: {e}"
+  2032     25406  201022514.0   7912.4      0.0                          )
+  2033                                                                   continue
+  2034                                           
+  2035     25406  193461251.0   7614.8      0.0              # If we filled an existing sheet, continue to next iteration without creating new sheet
+  2036                                                       if filled_existing_sheet:
+  2037     25406  199779638.0   7863.5      0.0                  continue
+  2038                                           
+  2039                                                       sheet_counter += 1
+  2040                                           
+  2041                                                       if verbose:
+  2042                                                           st.info(
+  2043                                                               f"  Лист #{sheet_counter}: {sheet_type['name']} ({sheet_size[0]}x{sheet_size[1]} см, цвет: {sheet_color})"
+  2044                                                           )
+  2045     50812 5346130902.0 105213.9      0.9                  st.info(
+  2046     25406  254366537.0  10012.1      0.0                      f"  Совместимых полигонов: {len(compatible_polygons)} из заказов: {orders_to_try}"
+  2047                                                           )
+  2048                                           
+  2049                                                       logger.info(
+  2050     50812 6793080555.0 133690.5      1.2                  f"Обрабатываем лист #{sheet_counter}: {len(compatible_polygons)} совместимых полигонов из заказов {orders_to_try}"
+  2051     25406  203169381.0   7996.9      0.0              )
+  2052                                           
+  2053                                                       # Try to place compatible polygons on this sheet
+  2054     25406  128295571.0   5049.8      0.0              placed, remaining_from_sheet = bin_packing(
+  2055        28     245780.0   8777.9      0.0                  compatible_polygons, sheet_size, verbose=verbose
+  2056                                                       )
+  2057                                           
+  2058        28     251717.0   8989.9      0.0              if placed:  # If we managed to place something
+  2059        28     245850.0   8780.4      0.0                  sheet_type["used"] += 1
+  2060                                           
+  2061       114    1122866.0   9849.7      0.0                  # Track which orders are represented on this sheet
+  2062                                                           orders_on_sheet = set()
+  2063        86     718759.0   8357.7      0.0                  placed_polygon_names = set()
+  2064        86     694869.0   8079.9      0.0  
+  2065                                                           for placed_carpet in placed:
+  2066                                                               # bin_packing returns: (polygon, x_offset, y_offset, angle, file_name, color, order_id)
+  2067                                                               if len(placed_carpet) >= 5:
+  2068        86     725954.0   8441.3      0.0                          filename = placed_carpet[4]  # file_name is at index 4
+  2069                                                               else:
+  2070                                                                   filename = "unknown"  # fallback
+  2071        86     694030.0   8070.1      0.0  
+  2072       900    7860460.0   8733.8      0.0                      placed_polygon_names.add(filename)
+  2073      3598   34495208.0   9587.3      0.0  
+  2074      2784   22633308.0   8129.8      0.0                      # Find which order this polygon belongs to
+  2075        86     730140.0   8490.0      0.0                      found_order = False
+  2076       172    1827724.0  10626.3      0.0                      for order_id, order_polygons in remaining_orders.items():
+  2077        86     776670.0   9031.0      0.0                          for carpet in order_polygons:
+  2078                                                                       if carpet.filename == filename:
+  2079        86     741881.0   8626.5      0.0                                  orders_on_sheet.add(order_id)
+  2080        86     725041.0   8430.7      0.0                                  logger.debug(
+  2081       900    7226018.0   8028.9      0.0                                      f"    Полигон {filename} принадлежит заказу {order_id}"
+  2082        86     727072.0   8454.3      0.0                                  )
+  2083                                                                           found_order = True
+  2084        86     738246.0   8584.3      0.0                                  break
+  2085                                                                   if found_order:
+  2086                                                                       break
+  2087        56   20049675.0 358029.9      0.0  
+  2088        28     453979.0  16213.5      0.0                      if not found_order:
+  2089                                                                   logger.warning(f"    Не найден заказ для полигона {filename}")
+  2090                                           
+  2091                                                           logger.info(
+  2092        96    1154791.0  12029.1      0.0                      f"УСПЕХ: Лист #{sheet_counter} содержит заказы: {orders_on_sheet}"
+  2093        68     655967.0   9646.6      0.0                  )
+  2094        68     645282.0   9489.4      0.0  
+  2095                                                           # Update order sheet usage and track first sheet
+  2096                                                           for order_id in orders_on_sheet:
+  2097        68     644380.0   9476.2      0.0                      if order_id in order_sheet_usage:
+  2098        26     280979.0  10806.9      0.0                          order_sheet_usage[order_id] += 1
+  2099        52    9141045.0 175789.3      0.0  
+  2100        26     275113.0  10581.3      0.0                          # Track first sheet for MAX_SHEETS_PER_ORDER constraint
+  2101                                                                   if order_id not in order_first_sheet:
+  2102                                                                       order_first_sheet[order_id] = sheet_counter
+  2103       136   20355870.0 149675.5      0.0                              logger.info(
+  2104        68     687538.0  10110.9      0.0                                  f"  Заказ {order_id}: начат на листе {sheet_counter}"
+  2105                                                                       )
+  2106                                           
+  2107        56     534781.0   9549.7      0.0                          logger.info(
+  2108        28     299627.0  10701.0      0.0                              f"  Заказ {order_id}: теперь использует {order_sheet_usage[order_id]} листов"
+  2109        28     258700.0   9239.3      0.0                          )
+  2110        28     267711.0   9561.1      0.0  
+  2111        28     258419.0   9229.2      0.0                  placed_layouts.append(
+  2112        28     255556.0   9127.0      0.0                      {
+  2113        28     260026.0   9286.6      0.0                          "sheet_number": sheet_counter,
+  2114        28    3411086.0 121824.5      0.0                          "sheet_type": sheet_type["name"],
+  2115        28     301308.0  10761.0      0.0                          "sheet_color": sheet_color,  # Add sheet color directly
+  2116                                                                   "sheet_size": sheet_size,
+  2117                                                                   "placed_polygons": placed,
+  2118                                                                   "usage_percent": calculate_usage_percent(placed, sheet_size),
+  2119                                                                   "orders_on_sheet": list(orders_on_sheet),
+  2120        28     267570.0   9556.1      0.0                      }
+  2121                                                           )
+  2122        44     447139.0  10162.2      0.0  
+  2123        44     402857.0   9155.8      0.0                  # Update progress callback if provided
+  2124      3190   41424917.0  12985.9      0.0                  if progress_callback:
+  2125       858    8191466.0   9547.2      0.0                      # Better estimate based on actual polygons and sheet capacity
+  2126      3190   37094574.0  11628.4      0.0                      total_priority1_polygons = len(
+  2127                                                                   [
+  2128                                                                       p
+  2129                                                                       for order_polys in order_groups.values()
+  2130        44     441964.0  10044.6      0.0                              for p in order_polys
+  2131        22     205480.0   9340.0      0.0                          ]
+  2132                                                               )
+  2133        44     437498.0   9943.1      0.0                      # Estimate sheets needed based on average usage and total polygons
+  2134        22     207434.0   9428.8      0.0                      estimated_total_sheets = max(
+  2135        44     413122.0   9389.1      0.0                          1, total_priority1_polygons // 4
+  2136        22     225455.0  10248.0      0.0                      )  # Assume 4 polygons per sheet on average
+  2137                                                               progress_percent = min(
+  2138        44   29904098.0 679638.6      0.0                          95,
+  2139        22     205130.0   9324.1      0.0                          50
+  2140        22     262539.0  11933.6      0.0                          + (len(placed_layouts) / max(1, estimated_total_sheets)) * 40,
+  2141                                                               )  # 50-95% range
+  2142                                                               progress_callback(
+  2143                                                                   progress_percent,
+  2144                                                                   f"Создан лист #{sheet_counter} ({sheet_type['name']})",
+  2145        28     340349.0  12155.3      0.0                      )
+  2146       114    1456520.0  12776.5      0.0  
+  2147        86     928352.0  10794.8      0.0                  # Remove placed polygons from remaining orders
+  2148        86     910340.0  10585.3      0.0                  # We need to match polygons by both filename AND order_id
+  2149        86     930524.0  10820.0      0.0                  placed_polygon_keys = set()  # Maps (filename, order_id) -> True
+  2150        86     913267.0  10619.4      0.0                  for carpet in placed:
+  2151        86     935138.0  10873.7      0.0                      if len(carpet) >= 5:
+  2152       172    2146356.0  12478.8      0.0                          filename = carpet[4]  # file_name is at index 4
+  2153        86     956016.0  11116.5      0.0                          if len(carpet) >= 7:
+  2154                                                                       order_id = carpet[6]  # order_id is at index 6
+  2155                                                                       placed_polygon_keys.add((filename, order_id))
+  2156        28     312130.0  11147.5      0.0                              logger.debug(
+  2157       570    6522882.0  11443.7      0.0                                  f"  Размещен полигон: файл='{filename}', заказ='{order_id}'"
+  2158       542    6010354.0  11089.2      0.0                              )
+  2159                                           
+  2160                                                           total_removed = 0
+  2161       542    5945713.0  10970.0      0.0                  for order_id in list(remaining_orders.keys()):
+  2162      1898   25868988.0  13629.6      0.0                      original_count = len(remaining_orders[order_id])
+  2163                                           
+  2164      1356   15384507.0  11345.5      0.0                      # Only remove polygons that were actually placed from this specific order
+  2165      1356   14763739.0  10887.7      0.0                      new_order_list = []
+  2166      1270   17336899.0  13651.1      0.0                      for carpet in remaining_orders[order_id]:
+  2167                                                                   # Check if this carpet was placed
+  2168       542    5927182.0  10935.8      0.0                          carpet_key = (carpet.filename, carpet.order_id)
+  2169       542    5971892.0  11018.3      0.0                          if carpet_key not in placed_polygon_keys:
+  2170       542    5918062.0  10918.9      0.0                              new_order_list.append(carpet)
+  2171                                           
+  2172       542    5968465.0  11011.9      0.0                      remaining_orders[order_id] = new_order_list
+  2173       136   39498500.0 290430.1      0.0                      removed_count = original_count - len(remaining_orders[order_id])
+  2174        68     817859.0  12027.3      0.0                      total_removed += removed_count
+  2175                                           
+  2176                                                               if removed_count > 0:
+  2177                                                                   logger.info(
+  2178       542    7484066.0  13808.2      0.0                              f"  Из заказа {order_id} удалено {removed_count} размещенных полигонов"
+  2179        29    9341067.0 322105.8      0.0                          )
+  2180        29     349568.0  12054.1      0.0  
+  2181                                                               # Remove empty orders
+  2182        28    8705774.0 310920.5      0.0                      if not remaining_orders[order_id]:
+  2183        28    9928240.0 354580.0      0.0                          logger.info(f"  Заказ {order_id} полностью размещен")
+  2184       541    6819997.0  12606.3      0.0                          del remaining_orders[order_id]
+  2185       513  116462740.0 227022.9      0.0  
+  2186                                                           logger.info(f"Общее количество удаленных полигонов: {total_removed}")
+  2187        28     316181.0  11292.2      0.0                  logger.info(f"Оставшиеся заказы: {list(remaining_orders.keys())}")
+  2188                                           
+  2189        28     329662.0  11773.6      0.0                  placed_on_current_sheet = True
+  2190                                           
+  2191                                                           if verbose:
+  2192                                                               st.success(
+  2193                                                                   f"  ✅ Размещено {len(placed)} объектов на листе {sheet_type['name']}"
+  2194                                                               )
+  2195        28     365563.0  13055.8      0.0                      st.info(f"  📊 Заказы на листе: {', '.join(orders_on_sheet)}")
+  2196                                           
+  2197     25405  275860506.0  10858.5      0.0                  break  # Move to next iteration with remaining orders
+  2198                                           
+  2199                                                   if not placed_on_current_sheet:
+  2200     50754  707968349.0  13949.0      0.1              # No sheet type could accommodate any remaining polygons in this iteration
+  2201     25377  260286206.0  10256.8      0.0              # Check if we still have available sheets of any type
+  2202                                                       sheets_still_available = any(
+  2203                                                           sheet["count"] - sheet["used"] > 0 for sheet in sheet_inventory
+  2204     25377  273002583.0  10757.9      0.0              )
+  2205                                           
+  2206                                                       if not sheets_still_available:
+  2207                                                           logger.warning(
+  2208                                                               f"Все листы закончились. Не удалось разместить оставшиеся заказы: {list(remaining_orders.keys())}"
+  2209                                                           )
+  2210                                                           break
+  2211     50754  620822821.0  12232.0      0.1              else:
+  2212     25377  265375884.0  10457.3      0.0                  # Continue to next iteration - might be color/size mismatch this round
+  2213                                                           available_sheets_count = sum(
+  2214                                                               max(0, sheet["count"] - sheet["used"]) for sheet in sheet_inventory
+  2215                                                           )
+  2216     25377 6069162332.0 239160.0      1.1  
+  2217     25377 5196187526.0 204759.7      0.9                  # Enhanced debugging: show what's blocking placement
+  2218     25377 4798952528.0 189106.4      0.8                  logger.info(f"Не удалось разместить в итерации {iteration_count}:")
+  2219                                                           logger.info(f"  Доступно листов: {available_sheets_count}")
+  2220                                                           logger.info(f"  Осталось заказов: {len(remaining_orders)}")
+  2221     58880  912397177.0  15495.9      0.2  
+  2222     33503  372658947.0  11123.2      0.1                  # Show remaining orders and their polygon counts
+  2223     80551 1228770994.0  15254.6      0.2                  for order_id, order_polygons in remaining_orders.items():
+  2224     47048  543764492.0  11557.7      0.1                      colors_in_order = {}
+  2225     47048  541215330.0  11503.5      0.1                      for carpet in order_polygons:
+  2226     67006 7602049015.0 113453.3      1.3                          color = carpet.color
+  2227     33503  465803415.0  13903.3      0.1                          colors_in_order[color] = colors_in_order.get(color, 0) + 1
+  2228                                                               logger.info(
+  2229                                                                   f"    {order_id}: {len(order_polygons)} полигонов, цвета: {colors_in_order}"
+  2230                                                               )
+  2231     51657  811948535.0  15718.1      0.1  
+  2232     26280  292639508.0  11135.4      0.1                  # Show available sheets
+  2233     26280  286425424.0  10899.0      0.0                  for sheet_type in sheet_inventory:
+  2234     52560 5449553155.0 103682.5      0.9                      remaining = sheet_type["count"] - sheet_type["used"]
+  2235     26280  312176662.0  11878.9      0.1                      if remaining > 0:
+  2236                                                                   logger.info(
+  2237                                                                       f"    Доступен лист: {sheet_type['name']} цвет {sheet_type.get('color', 'серый')}, осталось: {remaining}"
+  2238     25377  286321858.0  11282.7      0.0                          )
+  2239                                           
+  2240                                                           if verbose:
+  2241                                                               st.info(
+  2242                                                                   f"⚠️ Пропуск итерации {iteration_count}: нет совместимых комбинаций полигон/лист"
+  2243                                                               )
+  2244                                                               st.info(
+  2245                                                                   f"📋 Осталось {len(remaining_orders)} заказов, {available_sheets_count} листов"
+  2246     25377  165090906.0   6505.5      0.0                      )
+  2247                                           
+  2248                                                           # Проверка прогресса
+  2249       491    6331086.0  12894.3      0.0                  if placed_on_current_sheet:
+  2250       491    5775360.0  11762.4      0.0                      consecutive_no_progress = 0
+  2251                                                           else:
+  2252      1026   17329614.0  16890.5      0.0                      consecutive_no_progress += 1
+  2253                                                               logger.warning(f"Итерация {iteration_count}: нет прогресса ({consecutive_no_progress}/{max_no_progress})")
+  2254                                           
+  2255       535    6221512.0  11629.0      0.0                  continue
+  2256       535    6050170.0  11308.7      0.0  
+  2257       535    6084131.0  11372.2      0.0      # Проверка причины завершения цикла
+  2258       535    6469462.0  12092.5      0.0      if consecutive_no_progress >= max_no_progress:
+  2259       535    6303149.0  11781.6      0.0          logger.warning(f"⚠️ Цикл завершен из-за отсутствия прогресса ({consecutive_no_progress} итераций подряд)")
+  2260                                                   if verbose:
+  2261                                                       st.warning(f"⚠️ Размещение прервано: {consecutive_no_progress} итераций подряд без прогресса")
+  2262                                           
+  2263                                               # Check order constraints after placement - both sheet count and adjacency
+  2264                                               violated_orders = []
+  2265                                               adjacency_violations = []
+  2266                                           
+  2267                                               for order_id, sheets_used in order_sheet_usage.items():
+  2268       535    6220245.0  11626.6      0.0          # Check sheet count constraint
+  2269       535    6153634.0  11502.1      0.0          if (
+  2270       535    6267055.0  11714.1      0.0              max_sheets_per_order
+  2271       535    6318944.0  11811.1      0.0              and order_id != "additional"
+  2272       535    6220601.0  11627.3      0.0              and order_id != "unknown"  # Manual uploads are not limited
+  2273                                                       and not str(order_id).startswith("group_")  # Group uploads are not limited
+  2274        44     444412.0  10100.3      0.0              and sheets_used > max_sheets_per_order
+  2275                                                   ):
+  2276        44     449515.0  10216.2      0.0              violated_orders.append((order_id, sheets_used))
+  2277       846    8981651.0  10616.6      0.0              logger.error(
+  2278       802    8743995.0  10902.7      0.0                  f"НАРУШЕНИЕ ОГРАНИЧЕНИЙ: Заказ {order_id} использует {sheets_used} листов (лимит: {max_sheets_per_order})"
+  2279        68     689776.0  10143.8      0.0              )
+  2280                                           
+  2281        44     456984.0  10386.0      0.0          # Check adjacency constraint
+  2282        32     353342.0  11041.9      0.0          if (
+  2283        32     347747.0  10867.1      0.0              max_sheets_per_order
+  2284        32     335668.0  10489.6      0.0              and order_id != "additional"
+  2285                                                       and order_id != "unknown"
+  2286        32     333080.0  10408.8      0.0              and not str(order_id).startswith("group_")
+  2287                                                       and order_id in order_first_sheet
+  2288                                                   ):
+  2289                                                       first_sheet = order_first_sheet[order_id]
+  2290                                                       # Find all sheets where this order appears
+  2291                                                       order_sheets = []
+  2292                                                       for layout in placed_layouts:
+  2293                                                           if order_id in layout["orders_on_sheet"]:
+  2294                                                               order_sheets.append(layout["sheet_number"])
+  2295       491    6468274.0  13173.7      0.0  
+  2296                                                       if order_sheets:
+  2297                                                           min_sheet = min(order_sheets)
+  2298                                                           max_sheet = max(order_sheets)
+  2299                                                           expected_max_sheet = first_sheet + max_sheets_per_order - 1
+  2300                                           
+  2301                                                           if max_sheet > expected_max_sheet:
+  2302                                                               adjacency_violations.append(
+  2303                                                                   (order_id, min_sheet, max_sheet, expected_max_sheet)
+  2304                                                               )
+  2305                                                               logger.error(
+  2306                                                                   f"НАРУШЕНИЕ СМЕЖНОСТИ: Заказ {order_id} размещен на листах {min_sheet}-{max_sheet}, "
+  2307                                                                   f"но должен быть в диапазоне {first_sheet}-{expected_max_sheet}"
+  2308                                                               )
+  2309                                           
+  2310                                               if violated_orders or adjacency_violations:
+  2311                                                   warning_parts = []
+  2312                                                   if violated_orders:
+  2313                                                       warning_parts.append("⚠️ Предупреждение: Нарушение ограничений заказов:")
+  2314                                                       for order_id, sheets_used in violated_orders:
+  2315                                                           warning_parts.append(
+  2316                                                               f"Заказ {order_id}: {sheets_used} листов (лимит: {max_sheets_per_order})"
+  2317                                                           )
+  2318       491    7318825.0  14906.0      0.0  
+  2319         4      46864.0  11716.0      0.0          if adjacency_violations:
+  2320        11     161409.0  14673.5      0.0              warning_parts.append("⚠️ Предупреждение: Нарушение смежности листов:")
+  2321        15     167626.0  11175.1      0.0              for order_id, min_sheet, max_sheet, expected_max in adjacency_violations:
+  2322        11     120132.0  10921.1      0.0                  warning_parts.append(
+  2323                                                               f"Заказ {order_id}: листы {min_sheet}-{max_sheet} (ожидалось до {expected_max})"
+  2324                                                           )
+  2325         2      23676.0  11838.0      0.0  
+  2326         4     621327.0 155331.8      0.0          warning_msg = "\n".join(warning_parts)
+  2327         2      25703.0  12851.5      0.0          logger.warning(warning_msg)
+  2328                                                   if verbose:
+  2329         2      27518.0  13759.0      0.0              st.warning(warning_msg)
+  2330                                                   # Don't raise error - allow algorithm to continue with warnings
+  2331                                           
+  2332                                               # NEW: SINGLE-POLYGON ORDER FILL STRATEGY - Try to place remaining single-polygon orders into existing sheets
+  2333                                               if remaining_orders and placed_layouts:
+  2334         2      24795.0  12397.5      0.0          single_polygon_orders = {
+  2335         7     143458.0  20494.0      0.0              order_id: order_polygons
+  2336         5      81789.0  16357.8      0.0              for order_id, order_polygons in remaining_orders.items()
+  2337                                                       if len(order_polygons) == 1
+  2338                                                   }
+  2339         5      83184.0  16636.8      0.0  
+  2340         5      85489.0  17097.8      0.0          if single_polygon_orders:
+  2341                                                       logger.info(
+  2342                                                           f"=== ДОЗАПОЛНЕНИЕ ОДНОКОМПОНЕНТНЫМИ ЗАКАЗАМИ: {len(single_polygon_orders)} заказов ==="
+  2343         5      81787.0  16357.4      0.0              )
+  2344        95    1828504.0  19247.4      0.0              if verbose:
+  2345        90    1614503.0  17938.9      0.0                  st.info(
+  2346        90    2199160.0  24435.1      0.0                      f"🔄 Дозаполнение листов однокомпонентными заказами: {len(single_polygon_orders)} заказов"
+  2347        44     889386.0  20213.3      0.0                  )
+  2348                                           
+  2349        46     715406.0  15552.3      0.0              filled_orders = 0
+  2350        46     658694.0  14319.4      0.0              for order_id, order_polygons in single_polygon_orders.items():
+  2351                                                           if len(order_polygons) != 1:
+  2352                                                               continue
+  2353        46     640743.0  13929.2      0.0  
+  2354        46     637598.0  13860.8      0.0                  carpet = order_polygons[0]
+  2355                                                           color = carpet.color
+  2356        92    1587819.0  17258.9      0.0  
+  2357        46     857185.0  18634.5      0.0                  # Try to place this single polygon on existing sheets with same color
+  2358                                                           placed_successfully = False
+  2359                                                           for layout_idx, layout in enumerate(placed_layouts):
+  2360        46     621812.0  13517.7      0.0                      sheet_color = layout.get("sheet_color", "серый")
+  2361        92      1.3e+10 1.42e+08      2.3                      if color != sheet_color:
+  2362        46     642979.0  13977.8      0.0                          continue
+  2363                                           
+  2364                                                               current_usage = layout.get("usage_percent", 0)
+  2365        46    1388214.0  30178.6      0.0                      if current_usage >= 95:  # Skip nearly full sheets
+  2366                                                                   continue
+  2367         1      38205.0  38205.0      0.0  
+  2368         1      37297.0  37297.0      0.0                      sheet_size = layout["sheet_size"]
+  2369                                                               existing_placed = layout["placed_polygons"]
+  2370         2     264985.0 132492.5      0.0  
+  2371         1      35760.0  35760.0      0.0                      logger.debug(
+  2372         1      35341.0  35341.0      0.0                          f"Пытаемся добавить {order_id} на лист #{layout['sheet_number']} (заполнение: {current_usage:.1f}%)"
+  2373                                                               )
+  2374         1      44141.0  44141.0      0.0  
+  2375                                                               try:
+  2376                                                                   additional_placed, still_remaining = bin_packing_with_existing(
+  2377         1      38344.0  38344.0      0.0                              [carpet], existing_placed, sheet_size, verbose=False
+  2378                                                                   )
+  2379         1      28636.0  28636.0      0.0  
+  2380                                                                   if additional_placed:
+  2381                                                                       # Update the layout with the additional polygon
+  2382                                                                       placed_layouts[layout_idx]["placed_polygons"] = (
+  2383                                                                           existing_placed + additional_placed
+  2384                                                                       )
+  2385                                                                       new_usage = calculate_usage_percent(
+  2386                                                                           placed_layouts[layout_idx]["placed_polygons"],
+  2387                                                                           sheet_size,
+  2388                                                                       )
+  2389                                                                       placed_layouts[layout_idx]["usage_percent"] = new_usage
+  2390                                           
+  2391                                                                       # Update orders_on_sheet set
+  2392                                                                       if "orders_on_sheet" not in placed_layouts[layout_idx]:
+  2393                                                                           placed_layouts[layout_idx]["orders_on_sheet"] = set()
+  2394                                                                       placed_layouts[layout_idx]["orders_on_sheet"].add(order_id)
+  2395                                           
+  2396                                                                       # Track sheet usage for this order
+  2397                                                                       if order_id not in order_sheet_usage:
+  2398                                                                           order_sheet_usage[order_id] = 0
+  2399         1      67189.0  67189.0      0.0                              order_sheet_usage[order_id] = (
+  2400         2     136404.0  68202.0      0.0                                  1  # Single polygon order uses 1 sheet
+  2401         1      66002.0  66002.0      0.0                              )
+  2402                                           
+  2403         1      50077.0  50077.0      0.0                              filled_orders += 1
+  2404                                                                       placed_successfully = True
+  2405         5      94918.0  18983.6      0.0  
+  2406                                                                       logger.info(
+  2407                                                                           f"✅ ДОЗАПОЛНЕНИЕ: Заказ {order_id} размещен на лист #{layout['sheet_number']} ({current_usage:.1f}% → {new_usage:.1f}%)"
+  2408                                                                       )
+  2409         2    1882071.0 941035.5      0.0                              if verbose:
+  2410         2      41208.0  20604.0      0.0                                  st.success(
+  2411                                                                               f"✅ Заказ {order_id} добавлен на лист #{layout['sheet_number']} ({current_usage:.1f}% → {new_usage:.1f}%)"
+  2412                                                                           )
+  2413                                                                       break
+  2414                                                               except Exception as e:
+  2415       491    7402287.0  15075.9      0.0                          logger.debug(
+  2416       990   21044100.0  21256.7      0.0                              f"Не удалось добавить {order_id} на лист #{layout['sheet_number']}: {e}"
+  2417       499    7414031.0  14857.8      0.0                          )
+  2418                                                                   continue
+  2419       982  113558499.0 115640.0      0.0  
+  2420       491    8188587.0  16677.4      0.0                  if placed_successfully:
+  2421                                                               # Remove this order from remaining_orders
+  2422                                                               del remaining_orders[order_id]
+  2423                                           
+  2424                                                       logger.info(f"Дозаполнение завершено: {filled_orders} заказов размещено")
+  2425       982   14670342.0  14939.2      0.0              if verbose:
+  2426       982   29770056.0  30315.7      0.0                  st.info(
+  2427                                                               f"📊 Дозаполнение: {filled_orders} однокомпонентных заказов размещено"
+  2428                                                           )
+  2429       981   18605746.0  18966.1      0.0  
+  2430       490    7180722.0  14654.5      0.0      remaining_polygons_list = []
+  2431                                               for order_id, remaining_polygons in remaining_orders.items():
+  2432       980  111997143.0 114282.8      0.0          remaining_polygons_list.extend(remaining_polygons)
+  2433       490    7733687.0  15783.0      0.0  
+  2434                                               logger.info(
+  2435                                                   f"Проверка дозаполнения: remaining_orders={len(remaining_orders)}, remaining_polygons_list={len(remaining_polygons_list)}, placed_layouts={len(placed_layouts)}"
+  2436                                               )
+  2437       490    7572993.0  15455.1      0.0  
+  2438      1004   21931961.0  21844.6      0.0      # НОВОЕ: Создание дополнительных листов для неразмещенных Excel полигонов
+  2439       514    7887483.0  15345.3      0.0      # Анализируем неразмещенные полигоны из remaining_polygons_list (Excel полигоны, не приоритет 2)
+  2440       514    7977671.0  15520.8      0.0      remaining_excel_polygons = [
+  2441       491    7512714.0  15300.8      0.0          p for p in remaining_polygons_list if p.priority != 2
+  2442       514    8099473.0  15757.7      0.0      ]  # Не приоритет 2
+  2443                                           
+  2444                                               if remaining_excel_polygons and any(
+  2445       490    7474573.0  15254.2      0.0          sheet["count"] - sheet["used"] > 0 for sheet in sheet_inventory
+  2446       981   21617879.0  22036.6      0.0      ):
+  2447                                                   logger.info(
+  2448       491    7408440.0  15088.5      0.0              f"Создаем дополнительные листы для {len(remaining_excel_polygons)} неразмещенных Excel полигонов"
+  2449       984   22048669.0  22407.2      0.0          )
+  2450                                           
+  2451       493    7675715.0  15569.4      0.0          # Группируем по цветам
+  2452       491    7568651.0  15414.8      0.0          polygons_by_color = {}
+  2453                                                   for poly in remaining_excel_polygons:
+  2454       491    7568927.0  15415.3      0.0              color = poly.color
+  2455                                                       if color not in polygons_by_color:
+  2456       491    7475476.0  15225.0      0.0                  polygons_by_color[color] = []
+  2457       982  112168141.0 114224.2      0.0              polygons_by_color[color].append(poly)
+  2458       491    8013215.0  16320.2      0.0  
+  2459                                                   # Пытаемся создать листы для каждого цвета
+  2460                                                   additional_created = 0
+  2461                                                   for color, color_polygons in polygons_by_color.items():
+  2462       491    7780211.0  15845.6      0.0              # Найти доступные листы этого цвета
+  2463       982   10866458.0  11065.6      0.0              available_count = 0
+  2464       491    7488755.0  15252.0      0.0              for sheet_type in sheet_inventory:
+  2465       491   35425288.0  72149.3      0.0                  if (
+  2466       491    7560699.0  15398.6      0.0                      sheet_type["color"] == color
+  2467       491    7547917.0  15372.5      0.0                      and sheet_type["used"] < sheet_type["count"]
+  2468                                                           ):
+  2469                                                               available_count = sheet_type["count"] - sheet_type["used"]
+  2470       490    3846481.0   7850.0      0.0  
+  2471                                                       if available_count > 0:
+  2472         8     136122.0  17015.2      0.0                  logger.info(
+  2473         6      84511.0  14085.2      0.0                      f"Доступно {available_count} листов цвета {color} для {len(color_polygons)} полигонов"
+  2474         6      83882.0  13980.3      0.0                  )
+  2475                                           
+  2476         2      29125.0  14562.5      0.0                  # Пытаемся разместить полигоны на новых листах
+  2477         2      27099.0  13549.5      0.0                  try:
+  2478                                                               new_layouts, still_unplaced = bin_packing_with_inventory(
+  2479                                                                   color_polygons,
+  2480         3      68097.0  22699.0      0.0                          [sheet for sheet in sheet_inventory if sheet["color"] == color],
+  2481         3      43861.0  14620.3      0.0                          verbose=False,
+  2482         4      55665.0  13916.2      0.0                          max_sheets_per_order=max_sheets_per_order,
+  2483         4      57341.0  14335.2      0.0                      )
+  2484         6     161337.0  26889.5      0.0  
+  2485        10     159591.0  15959.1      0.0                      if new_layouts:
+  2486         6      88562.0  14760.3      0.0                          # Обновляем номера листов
+  2487                                                                   for layout in new_layouts:
+  2488                                                                       sheet_counter += 1
+  2489         2      29195.0  14597.5      0.0                              layout["sheet_number"] = sheet_counter
+  2490                                           
+  2491                                                                   placed_layouts.extend(new_layouts)
+  2492         4      70472.0  17618.0      0.0                          additional_created += len(new_layouts)
+  2493         2      28077.0  14038.5      0.0  
+  2494                                                                   # Обновляем использование листов
+  2495         4      57410.0  14352.5      0.0                          for sheet_type in sheet_inventory:
+  2496        31     525574.0  16954.0      0.0                              if sheet_type["color"] == color:
+  2497        35     499657.0  14275.9      0.0                                  sheet_type["used"] += len(
+  2498        31     875842.0  28253.0      0.0                                      [
+  2499                                                                                   layout
+  2500                                                                                   for layout in new_layouts
+  2501         4     357878.0  89469.5      0.0                                          if layout.get("sheet_color") == color
+  2502         2      30731.0  15365.5      0.0                                      ]
+  2503                                                                           )
+  2504                                                                           break
+  2505         1      21652.0  21652.0      0.0  
+  2506         2     211766.0 105883.0      0.0                          # Убираем размещенные полигоны из remaining_polygons_list
+  2507         1      22699.0  22699.0      0.0                          placed_count = sum(
+  2508                                                                       len(layout["placed_polygons"]) for layout in new_layouts
+  2509                                                                   )
+  2510       490    7342931.0  14985.6      0.0                          remaining_polygons_list = [
+  2511         2     170139.0  85069.5      0.0                              p
+  2512         1      15644.0  15644.0      0.0                              for p in remaining_polygons_list
+  2513                                                                       if p not in color_polygons[:placed_count]
+  2514                                                                   ]
+  2515       491    7376371.0  15023.2      0.0  
+  2516         2      32128.0  16064.0      0.0                          logger.info(
+  2517                                                                       f"Создано {len(new_layouts)} дополнительных листов цвета {color}"
+  2518                                                                   )
+  2519                                           
+  2520                                                           except Exception as e:
+  2521       978   97465948.0  99658.4      0.0                      logger.warning(
+  2522       489    7595744.0  15533.2      0.0                          f"Ошибка создания дополнительных листов для {color}: {e}"
+  2523                                                               )
+  2524                                           
+  2525       978   91200084.0  93251.6      0.0          if additional_created > 0:
+  2526       489    7704921.0  15756.5      0.0              logger.info(
+  2527                                                           f"✅ Создано {additional_created} дополнительных листов для Excel полигонов"
+  2528                                                       )
+  2529       489   15106288.0  30892.2      0.0  
+  2530         1      14877.0  14877.0      0.0      if remaining_polygons_list and placed_layouts:
+  2531         1      15645.0  15645.0      0.0          if verbose:
+  2532                                                       st.info(
+  2533                                                           f"🔄 Пытаемся дозаполнить {len(placed_layouts)} существующих листов {len(remaining_polygons_list)} оставшимися деталями"
+  2534                                                       )
+  2535                                               else:
+  2536                                                   logger.info(
+  2537                                                       f"Дозаполнение не запущено: remaining_polygons_list={len(remaining_polygons_list)}, placed_layouts={len(placed_layouts)}"
+  2538                                                   )
+  2539                                           
+  2540                                                   logger.info(
+  2541                                                       f"Попытка дозаполнения: {len(remaining_polygons_list)} полигонов на {len(placed_layouts)} листах"
+  2542                                                   )
+  2543                                           
+  2544                                                   for layout_idx, layout in enumerate(placed_layouts):
+  2545                                                       if not remaining_polygons_list:
+  2546                                                           break
+  2547                                           
+  2548                                                       sheet_size = layout["sheet_size"]
+  2549                                                       existing_placed = layout["placed_polygons"]
+  2550                                                       current_usage = layout["usage_percent"]
+  2551                                           
+  2552                                                       if current_usage >= 95:  # Skip nearly full sheets
+  2553                                                           continue
+  2554                                           
+  2555                                                       logger.info(
+  2556                                                           f"Пытаемся дозаполнить лист #{layout['sheet_number']} (заполнение: {current_usage:.1f}%)"
+  2557                                                       )
+  2558                                           
+  2559                                                       # Try to place remaining polygons on this existing sheet
+  2560                                                       try:
+  2561                                                           additional_placed, still_remaining = bin_packing_with_existing(
+  2562                                                               remaining_polygons_list, existing_placed, sheet_size, verbose=False
+  2563                                                           )
+  2564                                           
+  2565                                                           if additional_placed:
+  2566                                                               # Update the layout with additional polygons
+  2567                                                               placed_layouts[layout_idx]["placed_polygons"] = (
+  2568                                                                   existing_placed + additional_placed
+  2569                                                               )
+  2570                                                               placed_layouts[layout_idx]["usage_percent"] = (
+  2571                                                                   calculate_usage_percent(
+  2572                                                                       placed_layouts[layout_idx]["placed_polygons"], sheet_size
+  2573                                                                   )
+  2574                                                               )
+  2575                                           
+  2576                                                               new_usage = placed_layouts[layout_idx]["usage_percent"]
+  2577                                                               logger.info(
+  2578                                                                   f"✅ Дозаполнен лист #{layout['sheet_number']}: +{len(additional_placed)} деталей ({current_usage:.1f}% → {new_usage:.1f}%)"
+  2579                                                               )
+  2580                                           
+  2581                                                               if verbose:
+  2582       491    8147998.0  16594.7      0.0                          st.success(
+  2583                                                                       f"✅ Дозаполнен лист #{layout['sheet_number']}: +{len(additional_placed)} деталей ({current_usage:.1f}% → {new_usage:.1f}%)"
+  2584       491   82217954.0 167450.0      0.0                          )
+  2585       982   93864406.0  95584.9      0.0  
+  2586       491    8255783.0  16814.2      0.0                      # Update remaining polygons list
+  2587                                                               remaining_polygons_list = still_remaining
+  2588                                           
+  2589       491   85132295.0 173385.5      0.0                  else:
+  2590      1026   25131056.0  24494.2      0.0                      logger.info(f"Лист #{layout['sheet_number']} нельзя дозаполнить")
+  2591       535   90126718.0 168461.2      0.0              except Exception as e:
+  2592                                                           logger.warning(
+  2593       491    8318075.0  16941.1      0.0                      f"Ошибка при дозаполнении листа #{layout['sheet_number']}: {e}"
+  2594                                                           )
+  2595                                           
+  2596                                               # Add any remaining unplaced polygons to the unplaced list
+  2597                                               all_unplaced.extend(remaining_polygons_list)
+  2598                                           
+  2599                                               logger.info("=== ОКОНЧАНИЕ bin_packing_with_inventory ===")
+  2600                                               logger.info(
+  2601                                                   f"ИТОГОВЫЙ РЕЗУЛЬТАТ: {len(placed_layouts)} листов использовано, {len(all_unplaced)} объектов не размещено"
+  2602                                               )
+  2603                                           
+  2604                                               logger.info("Финальное распределение по заказам:")
+  2605                                               for order_id, sheets_used in order_sheet_usage.items():
+  2606                                                   logger.info(f"  • Заказ {order_id}: {sheets_used} листов")
+  2607                                           
+  2608                                               if verbose:
+  2609                                                   st.info(
+  2610                                                       f"Размещение завершено: {len(placed_layouts)} листов использовано, {len(all_unplaced)} объектов не размещено"
+  2611                                                   )
+  2612       491    9142926.0  18621.0      0.0  
+  2613         2     164900.0  82450.0      0.0          # Show summary by orders using the tracked usage
+  2614         1      18090.0  18090.0      0.0          if order_sheet_usage:
+  2615                                                       st.success("✅ Распределение по заказам:")
+  2616         1      18020.0  18020.0      0.0              for order_id, sheet_count in order_sheet_usage.items():
+  2617                                                           if order_id != "unknown":  # Only show real orders
+  2618                                                               status = (
+  2619                                                                   "✅"
+  2620                                                                   if sheet_count <= (max_sheets_per_order or float("inf"))
+  2621                                                                   else "❌"
+  2622         1      17740.0  17740.0      0.0                      )
+  2623         2    1167642.0 583821.0      0.0                      st.info(f"  {status} Заказ {order_id}: {sheet_count} листов")
+  2624         1      18508.0  18508.0      0.0  
+  2625                                               # PRIORITY 2 PROCESSING: Try to fit priority 2 polygons into existing sheets only
+  2626                                               # Размещаем приоритет 2 В САМУЮ ПОСЛЕДНЮЮ ОЧЕРЕДЬ после всех операций
+  2627         1      18718.0  18718.0      0.0      if priority2_carpets and placed_layouts:
+  2628         1      17950.0  17950.0      0.0          logger.info(
+  2629                                                       f"=== ОБРАБОТКА ПРИОРИТЕТА 2: {len(priority2_carpets)} полигонов ==="
+  2630                                                   )
+  2631        19     348448.0  18339.4      0.0          if verbose:
+  2632        19     323166.0  17008.7      0.0              st.info(
+  2633         1      17670.0  17670.0      0.0                  f"🔄 Размещение файлов приоритета 2: {len(priority2_carpets)} файлов в существующие листы"
+  2634                                                       )
+  2635        18     308495.0  17138.6      0.0  
+  2636        36     603868.0  16774.1      0.0          # Update progress for priority 2 processing
+  2637        18     306682.0  17037.9      0.0          if progress_callback:
+  2638                                                       progress_callback(
+  2639                                                           98, f"Обработка файлов приоритета 2: {len(priority2_carpets)} файлов"
+  2640        18     303468.0  16859.3      0.0              )
+  2641        18     325540.0  18085.6      0.0  
+  2642                                                   priority2_placed = 0
+  2643        18     313665.0  17425.8      0.0          priority2_remaining = list(priority2_carpets)
+  2644                                           
+  2645                                                   # Try to fill existing sheets with priority 2 polygons
+  2646        36    6544821.0 181800.6      0.0          for layout_idx, layout in enumerate(placed_layouts):
+  2647        18     367583.0  20421.3      0.0              if not priority2_remaining:
+  2648                                                           break
+  2649                                           
+  2650                                                       sheet_size = layout["sheet_size"]
+  2651        18     348307.0  19350.4      0.0              sheet_color = layout.get(
+  2652       541    9424102.0  17419.8      0.0                  "sheet_color", "серый"
+  2653       523    8911126.0  17038.5      0.0              )  # Get color directly from layout
+  2654                                           
+  2655                                                       existing_placed = layout["placed_polygons"]
+  2656       523    8755504.0  16740.9      0.0              current_usage = layout["usage_percent"]
+  2657       243    4044076.0  16642.3      0.0  
+  2658                                                       if current_usage >= 95:  # Skip nearly full sheets
+  2659        36    5208227.0 144673.0      0.0                  continue
+  2660        18     322398.0  17911.0      0.0  
+  2661                                                       logger.info(
+  2662                                                           f"Пытаемся добавить приоритет 2 на лист #{layout['sheet_number']} (заполнение: {current_usage:.1f}%, цвет листа: {sheet_color})"
+  2663        18     347678.0  19315.4      0.0              )
+  2664         4      72847.0  18211.8      0.0  
+  2665         2      34293.0  17146.5      0.0              # Filter priority 2 polygons by color compatibility
+  2666                                                       compatible_priority2 = []
+  2667         2      33316.0  16658.0      0.0              for carpet in priority2_remaining:
+  2668                                                           poly_color = carpet.color
+  2669                                           
+  2670        32      1.2e+11 3.74e+09     20.8                  # Skip detailed logging for speed
+  2671        16     286987.0  17936.7      0.0                  if poly_color == sheet_color:
+  2672                                                               compatible_priority2.append(carpet)
+  2673                                           
+  2674        16     310592.0  19412.0      0.0              logger.info(
+  2675                                                           f"Найдено {len(compatible_priority2)} совместимых полигонов приоритета 2 из {len(priority2_remaining)}"
+  2676         8     146043.0  18255.4      0.0              )
+  2677         8     143389.0  17923.6      0.0  
+  2678                                                       if not compatible_priority2:
+  2679        16     921934.0  57620.9      0.0                  logger.debug(
+  2680         8     137243.0  17155.4      0.0                      f"Нет совместимых по цвету приоритет 2 полигонов для листа {sheet_color}"
+  2681                                                           )
+  2682         8     137452.0  17181.5      0.0                  continue
+  2683         8     139478.0  17434.8      0.0  
+  2684                                                       # Try to place compatible priority 2 polygons on this existing sheet
+  2685        16    2945092.0 184068.2      0.0              additional_placed, still_remaining = bin_packing_with_existing(
+  2686         8     189485.0  23685.6      0.0                  compatible_priority2, existing_placed, sheet_size, verbose=False
+  2687                                                       )
+  2688         8     160640.0  20080.0      0.0  
+  2689                                                       if additional_placed:
+  2690                                                           # Update the layout with additional polygons
+  2691                                                           placed_layouts[layout_idx]["placed_polygons"] = (
+  2692                                                               existing_placed + additional_placed
+  2693                                                           )
+  2694                                                           placed_layouts[layout_idx]["usage_percent"] = calculate_usage_percent(
+  2695         8     177400.0  22175.0      0.0                      placed_layouts[layout_idx]["placed_polygons"], sheet_size
+  2696        48     976268.0  20338.9      0.0                  )
+  2697        40     717155.0  17928.9      0.0                  new_usage = placed_layouts[layout_idx]["usage_percent"]
+  2698                                                           priority2_placed += len(additional_placed)
+  2699        40     735868.0  18396.7      0.0  
+  2700        40     707028.0  17675.7      0.0                  logger.info(
+  2701        40     699835.0  17495.9      0.0                      f"✅ Добавлено {len(additional_placed)} файлов приоритета 2 на лист #{layout['sheet_number']} ({current_usage:.1f}% → {new_usage:.1f}%)"
+  2702        40     703468.0  17586.7      0.0                  )
+  2703                                                           if verbose:
+  2704                                                               st.success(
+  2705                                                                   f"✅ Добавлено {len(additional_placed)} файлов приоритета 2 на лист #{layout['sheet_number']}"
+  2706                                                               )
+  2707        40     714707.0  17867.7      0.0  
+  2708                                                           # Remove placed polygons from priority2_remaining
+  2709                                                           # ИСПРАВЛЕНИЕ: точное совпадение по 3 полям для правильного удаления
+  2710        16     282798.0  17674.9      0.0                  placed_keys = set()
+  2711       200    6174438.0  30872.2      0.0                  for placed_poly in additional_placed:
+  2712       216    3874222.0  17936.2      0.0                      if len(placed_poly) >= 5:
+  2713       200    3738011.0  18690.1      0.0                          # Полигон из bin_packing_with_existing: (polygon, x, y, angle, filename, color, order_id)
+  2714                                                                   key = (
+  2715                                                                       placed_poly[4],
+  2716         2     449233.0 224616.5      0.0                              placed_poly[5],
+  2717         1      18927.0  18927.0      0.0                              placed_poly[6],
+  2718                                                                   )  # filename, color, order_id
+  2719         1      22769.0  22769.0      0.0                      else:
+  2720                                                                   # Обычный полигон: (polygon, filename, color, order_id)
+  2721                                                                   key = (placed_poly[1], placed_poly[2], placed_poly[3])
+  2722                                                               placed_keys.add(key)
+  2723                                           
+  2724                                                           # Удаляем полигоны с совпадающими ключами
+  2725                                                           priority2_remaining = [
+  2726                                                               p
+  2727                                                               for p in priority2_remaining
+  2728                                                               if (p.filename, p.color, p.order_id) not in placed_keys
+  2729         1      19417.0  19417.0      0.0                  ]
+  2730                                           
+  2731       490    9511476.0  19411.2      0.0          logger.info(
+  2732                                                       f"Приоритет 2: размещено {priority2_placed}, осталось {len(priority2_remaining)}"
+  2733                                                   )
+  2734                                                   if priority2_remaining:
+  2735                                                       logger.info(
+  2736                                                           f"⚠️ {len(priority2_remaining)} файлов приоритета 2 не размещены (новые листы не создаются)"
+  2737                                                       )
+  2738                                                       if verbose:
+  2739                                                           st.warning(
+  2740                                                               f"⚠️ {len(priority2_remaining)} файлов приоритета 2 не удалось разместить в существующие листы"
+  2741       490    9496967.0  19381.6      0.0                  )
+  2742                                           
+  2743                                                   # Add remaining priority 2 polygons to unplaced list
+  2744                                                   all_unplaced.extend(priority2_remaining)
+  2745                                           
+  2746                                               elif priority2_carpets and not placed_layouts:
+  2747                                                   logger.warning(
+  2748                                                       f"Нет существующих листов для размещения {len(priority2_carpets)} файлов приоритета 2"
+  2749                                                   )
+  2750                                                   if verbose:
+  2751                                                       st.warning(
+  2752                                                           f"⚠️ Нет размещенных листов для {len(priority2_carpets)} файлов приоритета 2"
+  2753                                                       )
+  2754       491    9856455.0  20074.2      0.0          # Add all priority 2 polygons to unplaced list since no sheets were created
+  2755         6     594788.0  99131.3      0.0          all_unplaced.extend(priority2_carpets)
+  2756         3      58459.0  19486.3      0.0      elif priority2_carpets and not order_groups:
+  2757                                                   # Special case: only priority 2 polygons exist, no priority 1 files
+  2758                                                   logger.info(
+  2759                                                       f"Только priority 2 файлы без существующих листов: {len(priority2_carpets)} файлов не размещаются"
+  2760         3      60973.0  20324.3      0.0          )
+  2761                                                   if verbose:
+  2762        37     739920.0  19997.8      0.0              st.warning(
+  2763        34     634456.0  18660.5      0.0                  f"⚠️ Только файлы приоритета 2: {len(priority2_carpets)} файлов не размещаются (новые листы не создаются)"
+  2764        34     629499.0  18514.7      0.0              )
+  2765        21     387627.0  18458.4      0.0          all_unplaced.extend(priority2_carpets)
+  2766        13     242425.0  18648.1      0.0  
+  2767        13     243894.0  18761.1      0.0      # ИСПРАВЛЕНИЕ: Перенумеровываем листы для группировки по цветам
+  2768                                               # Листы должны идти подряд по цветам: 1-N чёрные, N+1-M серые, M+1-K остальные
+  2769                                               if placed_layouts:
+  2770                                                   logger.info(
+  2771                                                       f"Перенумеровываем {len(placed_layouts)} листов для группировки по цветам"
+  2772         3      58389.0  19463.0      0.0          )
+  2773         3      57621.0  19207.0      0.0  
+  2774                                                   # Группируем листы по цветам
+  2775                                                   sheets_by_color = {"чёрный": [], "серый": [], "other": []}
+  2776        24     515584.0  21482.7      0.0  
+  2777        21     394545.0  18787.9      0.0          for layout in placed_layouts:
+  2778        21     393011.0  18714.8      0.0              sheet_color = layout.get("sheet_color", "серый")
+  2779        21     390493.0  18594.9      0.0              if sheet_color == "чёрный":
+  2780                                                           sheets_by_color["чёрный"].append(layout)
+  2781                                                       elif sheet_color == "серый":
+  2782        16     357109.0  22319.3      0.0                  sheets_by_color["серый"].append(layout)
+  2783        13     248989.0  19153.0      0.0              else:
+  2784        13     247386.0  19029.7      0.0                  sheets_by_color["other"].append(layout)
+  2785        13     246550.0  18965.4      0.0  
+  2786                                                   # Перенумеровываем листы по группам
+  2787                                                   new_sheet_number = 1
+  2788         3     113007.0  37669.0      0.0          renumbered_layouts = []
+  2789                                           
+  2790                                                   # Сначала черные листы
+  2791                                                   for layout in sheets_by_color["чёрный"]:
+  2792                                                       layout["sheet_number"] = new_sheet_number
+  2793         3      59228.0  19742.7      0.0              renumbered_layouts.append(layout)
+  2794         6    1396520.0 232753.3      0.0              new_sheet_number += 1
+  2795         3      61043.0  20347.7      0.0  
+  2796                                                   # Потом серые листы
+  2797                                                   for layout in sheets_by_color["серый"]:
+  2798                                                       layout["sheet_number"] = new_sheet_number
+  2799       491    9987551.0  20341.2      0.0              renumbered_layouts.append(layout)
+  2800         1    1165058.0 1.17e+06      0.0              new_sheet_number += 1
+  2801                                           
+  2802       491    5351345.0  10898.9      0.0          # Потом остальные листы
+  2803                                                   for layout in sheets_by_color["other"]:
+  2804                                                       layout["sheet_number"] = new_sheet_number
+  2805                                                       renumbered_layouts.append(layout)
+  2806                                                       new_sheet_number += 1
+  2807                                           
+  2808                                                   placed_layouts = renumbered_layouts
+  2809                                                   logger.info(
+  2810                                                       f"Листы перенумерованы: чёрных {len(sheets_by_color['чёрный'])}, серых {len(sheets_by_color['серый'])}, других {len(sheets_by_color['other'])}"
+  2811                                                   )
+  2812                                           
+  2813                                               # Final progress update
+  2814                                               if progress_callback:
+  2815                                                   progress_callback(100, f"Завершено: {len(placed_layouts)} листов создано")
+  2816                                           
+  2817                                               return placed_layouts, all_unplaced
+
+  4.57 seconds - /home/sasha/proj/2025/eva_layout/layout_optimizer.py:1187 - bin_packing
+498.07 seconds - /home/sasha/proj/2025/eva_layout/layout_optimizer.py:1072 - bin_packing_with_existing
+576.96 seconds - /home/sasha/proj/2025/eva_layout/layout_optimizer.py:1617 - bin_packing_with_inventory

@@ -20,6 +20,7 @@ import logging
 import math
 from dataclasses import dataclass
 
+#from line_profiler import profile
 
 @dataclass
 class Carpet:
@@ -1068,6 +1069,7 @@ def check_collision(polygon1: Polygon, polygon2: Polygon, min_gap: float = 2.0) 
             return True  # Be conservative if all methods fail
 
 
+#@profile
 def bin_packing_with_existing(
     polygons: list[Carpet],
     existing_placed: list[tuple],
@@ -1101,6 +1103,10 @@ def bin_packing_with_existing(
     sorted_polygons = sorted(polygons, key=get_polygon_priority, reverse=True)
 
     for i, carpet in enumerate(sorted_polygons):
+        # ПРОФИЛИРОВАНИЕ: Измеряем время обработки каждого полигона
+        import time
+        polygon_start_time = time.time()
+        
         polygon = carpet.polygon
         file_name = carpet.filename
         color = carpet.color
@@ -1135,21 +1141,31 @@ def bin_packing_with_existing(
                 continue
 
             # Find position that avoids existing obstacles
+            # ПРОФИЛИРОВАНИЕ: Измеряем время поиска позиции
+            pos_start_time = time.time()
             best_x, best_y = find_bottom_left_position_with_obstacles(
                 rotated, obstacles, sheet_width_mm, sheet_height_mm
             )
+            pos_elapsed = time.time() - pos_start_time
+            if pos_elapsed > 1.0:  # Логируем медленные поиски позиций
+                logger.warning(f"⏱️ Медленный поиск позиции: {pos_elapsed:.2f}s для {len(obstacles)} препятствий")
 
             if best_x is not None and best_y is not None:
                 # Calculate waste for this placement
                 translated = translate_polygon(
                     rotated, best_x - rotated_bounds[0], best_y - rotated_bounds[1]
                 )
+                # ПРОФИЛИРОВАНИЕ: Измеряем время расчета waste
+                waste_start_time = time.time()
                 waste = calculate_placement_waste(
                     translated,
                     [(obs, 0, 0, 0, "obstacle") for obs in obstacles],
                     sheet_width_mm,
                     sheet_height_mm,
                 )
+                waste_elapsed = time.time() - waste_start_time
+                if waste_elapsed > 0.5:  # Логируем медленные расчеты waste
+                    logger.warning(f"⏱️ Медленный расчет waste: {waste_elapsed:.2f}s для {len(obstacles)} препятствий")
 
                 if waste < best_waste:
                     best_waste = waste
@@ -1179,10 +1195,15 @@ def bin_packing_with_existing(
 
         if not placed_successfully:
             unplaced.append((polygon, file_name, color, order_id))
+        
+        # ПРОФИЛИРОВАНИЕ: Логируем время обработки медленных полигонов
+        polygon_elapsed = time.time() - polygon_start_time
+        if polygon_elapsed > 2.0:  # Логируем полигоны, обрабатывающиеся дольше 2 секунд
+            logger.warning(f"⏱️ Медленный полигон {file_name}: {polygon_elapsed:.2f}s, размещен={placed_successfully}")
 
     return placed, unplaced
 
-
+#@profile
 def bin_packing(
     polygons: list[tuple],
     sheet_size: tuple[float, float],
@@ -1400,8 +1421,8 @@ def bin_packing(
 
 
 def find_bottom_left_position_with_obstacles(
-    polygon, obstacles, sheet_width, sheet_height
-):
+    polygon:Polygon, obstacles:list[Polygon], sheet_width:float, sheet_height:float
+)->tuple[float|None,float|None]:
     """Find the bottom-left position for a polygon using Bottom-Left Fill algorithm with existing obstacles."""
     bounds = polygon.bounds
     poly_width = bounds[2] - bounds[0]
@@ -1410,12 +1431,15 @@ def find_bottom_left_position_with_obstacles(
     # Try positions along bottom and left edges first
     candidate_positions = []
 
+    # ОПТИМИЗАЦИЯ: Увеличиваем шаг сетки для ускорения поиска
+    grid_step = 15  # Увеличено с 5mm до 15mm для 3x ускорения
+    
     # Bottom edge positions
-    for x in np.arange(0, sheet_width - poly_width + 1, 5):  # 5mm steps
+    for x in np.arange(0, sheet_width - poly_width + 1, grid_step):
         candidate_positions.append((x, 0))
 
-    # Left edge positions
-    for y in np.arange(0, sheet_height - poly_height + 1, 5):  # 5mm steps
+    # Left edge positions  
+    for y in np.arange(0, sheet_height - poly_height + 1, grid_step):
         candidate_positions.append((0, y))
 
     # Positions based on existing obstacles (bottom-left principle)
@@ -1434,8 +1458,14 @@ def find_bottom_left_position_with_obstacles(
             candidate_positions.append((obstacle_bounds[0], y))  # Same X as existing
             candidate_positions.append((0, y))  # Left edge
 
-    # Sort by bottom-left preference (y first, then x)
-    candidate_positions.sort(key=lambda pos: (pos[1], pos[0]))
+    # ОПТИМИЗАЦИЯ: Ограничиваем количество кандидатов для предотвращения взрывного роста
+    candidate_positions = list(set(candidate_positions))  # Удаляем дубликаты
+    candidate_positions.sort(key=lambda pos: (pos[1], pos[0]))  # Sort by bottom-left preference
+    
+    # Ограничиваем до 100 лучших позиций для ускорения
+    #max_candidates = 100
+    #if len(candidate_positions) > max_candidates:
+    #    candidate_positions = candidate_positions[:max_candidates]
 
     # Test each position
     for x, y in candidate_positions:
@@ -1480,7 +1510,7 @@ def find_bottom_left_position_with_obstacles(
     return None, None
 
 
-def find_bottom_left_position(polygon, placed_polygons, sheet_width, sheet_height):
+def find_bottom_left_position(polygon:Polygon, placed_polygons, sheet_width:float, sheet_height:float):
     """Find the bottom-left position for a polygon using optimized Bottom-Left Fill algorithm."""
     bounds = polygon.bounds
     poly_width = bounds[2] - bounds[0]
@@ -1612,7 +1642,7 @@ def calculate_placement_waste(polygon, placed_polygons, sheet_width, sheet_heigh
     waste = edge_distance + min_neighbor_distance * 0.5
     return waste
 
-
+#@profile
 def bin_packing_with_inventory(
     carpets: list[Carpet],
     available_sheets: list[dict],
@@ -1714,121 +1744,20 @@ def bin_packing_with_inventory(
     # Process orders using priority queue logic
     remaining_orders = dict(order_groups)  # Copy to modify
     max_iterations = max(
-        100, len(remaining_orders) * 50
+        50, len(remaining_orders) * 25
     )  # Safety limit with higher multiplier
     iteration_count = 0
+    
+    # Детектор зависших итераций
+    consecutive_no_progress = 0
+    max_no_progress = 3  # Прерывать после 3 итераций без размещений
 
-    while remaining_orders and any(
-        sheet["count"] - sheet["used"] > 0 for sheet in sheet_inventory
-    ):
+    while (remaining_orders and 
+           any(sheet["count"] - sheet["used"] > 0 for sheet in sheet_inventory) and
+           consecutive_no_progress < max_no_progress):
         iteration_count += 1
         logger.info(f"--- ИТЕРАЦИЯ {iteration_count} ---")
         logger.info(f"Остается заказов: {len(remaining_orders)}")
-        for order_id, carpets in remaining_orders.items():
-            logger.info(f"  {order_id}: {len(carpets)} полигонов")
-
-        if False and placed_layouts:  # Only if we have existing sheets
-            logger.info("🔄 ПРОВЕРЯЕМ ДОЗАПОЛНЕНИЕ СУЩЕСТВУЮЩИХ ЛИСТОВ")
-
-            # Find single-polygon orders that can be added to existing sheets
-            single_polygon_orders = {
-                order_id: order_polygons
-                for order_id, order_polygons in remaining_orders.items()
-                if len(order_polygons) == 1
-            }
-
-            if single_polygon_orders:
-                logger.info(
-                    f"Найдено {len(single_polygon_orders)} однополигонных заказов для дозаполнения"
-                )
-
-                filled_orders = 0
-                for order_id, order_polygons in single_polygon_orders.items():
-                    carpet = order_polygons[0]
-                    color = carpet.color
-
-                    # Try to place this single polygon on existing sheets with same color
-                    placed_successfully = False
-                    for layout_idx, existing_layout in enumerate(placed_layouts):
-                        sheet_color = existing_layout.get("sheet_color", "серый")
-                        if color != sheet_color:
-                            continue
-
-                        current_usage = existing_layout.get("usage_percent", 0)
-                        if current_usage >= 85:  # Skip nearly full sheets
-                            continue
-
-                        sheet_size = existing_layout["sheet_size"]
-                        existing_placed = existing_layout["placed_polygons"]
-
-                        logger.info(
-                            f"Пытаемся дозаполнить лист #{existing_layout['sheet_number']} заказом {order_id}"
-                        )
-
-                        try:
-                            additional_placed, still_remaining = (
-                                bin_packing_with_existing(
-                                    [carpet], existing_placed, sheet_size, verbose=False
-                                )
-                            )
-
-                            if additional_placed:
-                                # Update existing layout
-                                placed_layouts[layout_idx]["placed_polygons"] = (
-                                    existing_placed + additional_placed
-                                )
-                                new_usage = calculate_usage_percent(
-                                    placed_layouts[layout_idx]["placed_polygons"],
-                                    sheet_size,
-                                )
-                                placed_layouts[layout_idx]["usage_percent"] = new_usage
-
-                                # Update orders_on_sheet set
-                                if "orders_on_sheet" not in placed_layouts[layout_idx]:
-                                    placed_layouts[layout_idx]["orders_on_sheet"] = (
-                                        set()
-                                    )
-                                placed_layouts[layout_idx]["orders_on_sheet"].add(
-                                    order_id
-                                )
-
-                                # Track sheet usage for this order
-                                if order_id not in order_sheet_usage:
-                                    order_sheet_usage[order_id] = 0
-                                order_sheet_usage[order_id] = 1
-
-                                # Track order first sheet
-                                if order_id not in order_first_sheet:
-                                    order_first_sheet[order_id] = existing_layout[
-                                        "sheet_number"
-                                    ]
-
-                                filled_orders += 1
-                                placed_successfully = True
-
-                                logger.info(
-                                    f"✅ ДОЗАПОЛНЕНИЕ УСПЕШНО: Заказ {order_id} размещен на лист #{existing_layout['sheet_number']} ({current_usage:.1f}% → {new_usage:.1f}%)"
-                                )
-                                break
-                        except Exception as e:
-                            logger.debug(
-                                f"Не удалось дозаполнить лист #{existing_layout['sheet_number']}: {e}"
-                            )
-                            continue
-
-                    if placed_successfully:
-                        # Remove this order from remaining_orders
-                        del remaining_orders[order_id]
-
-                if filled_orders > 0:
-                    logger.info(
-                        f"Дозаполнение завершено: {filled_orders} заказов размещено на существующих листах"
-                    )
-                    placed_on_current_sheet = True
-                    continue  # Skip to next iteration, don't create new sheets
-
-        # If no orders were filled by existing sheets, proceed with normal sheet creation
-
         if iteration_count > max_iterations:
             logger.error(
                 f"Превышен лимит итераций ({max_iterations}), прерываем выполнение"
@@ -1980,12 +1909,20 @@ def bin_packing_with_inventory(
                     )
 
                     try:
+                        # ПРОФИЛИРОВАНИЕ: Измеряем время bin_packing_with_existing
+                        import time
+                        start_time = time.time()
+                        
                         additional_placed, still_remaining = bin_packing_with_existing(
                             compatible_polygons,
                             existing_placed,
                             sheet_size,
                             verbose=False,
                         )
+                        
+                        elapsed_time = time.time() - start_time
+                        if elapsed_time > 1.0:  # Логируем только долгие операции
+                            logger.warning(f"⏱️ bin_packing_with_existing: {elapsed_time:.2f}s для {len(compatible_polygons)} полигонов на лист #{existing_layout['sheet_number']}")
 
                         if additional_placed:
                             logger.info(
@@ -2025,33 +1962,23 @@ def bin_packing_with_inventory(
                                         existing_layout["sheet_number"]
                                     )
 
-                            # Remove placed polygons from compatible_polygons for next iterations
-                            # ИСПРАВЛЕНИЕ: точечное совпадение по 3 полям вместо set-сравнения
-                            # Из-за разной длины кортежей (4 vs 7) set-сравнение всегда возвращало False
-                            placed_keys = set()
-                            for placed_poly in additional_placed:
-                                if len(placed_poly) >= 5:
-                                    # Полигон из bin_packing_with_existing: (polygon, x, y, angle, filename, color, order_id)
-                                    key = (
-                                        placed_poly[4],
-                                        placed_poly[5],
-                                        placed_poly[6],
-                                    )  # filename, color, order_id
-                                else:
-                                    # Обычный полигон: (polygon, filename, color, order_id)
-                                    key = (
-                                        placed_poly[1],
-                                        placed_poly[2],
-                                        placed_poly[3],
-                                    )
-                                placed_keys.add(key)
+                            # ОПТИМИЗАЦИЯ: Быстрая фильтрация размещенных полигонов
+                            if additional_placed:
+                                placed_keys = set()
+                                for placed_poly in additional_placed:
+                                    if len(placed_poly) >= 5:
+                                        # Полигон из bin_packing_with_existing: (polygon, x, y, angle, filename, color, order_id)
+                                        key = (placed_poly[4], placed_poly[5], placed_poly[6])  # filename, color, order_id
+                                    else:
+                                        # Обычный полигон: (polygon, filename, color, order_id)
+                                        key = (placed_poly[1], placed_poly[2], placed_poly[3])
+                                    placed_keys.add(key)
 
-                            # Удаляем полигоны с совпадающими ключами
-                            compatible_polygons = [
-                                p
-                                for p in compatible_polygons
-                                if (p.filename, p.color, p.order_id) not in placed_keys
-                            ]
+                                # Быстрая фильтрация через индекс
+                                compatible_polygons = [
+                                    p for p in compatible_polygons
+                                    if (p.filename, p.color, p.order_id) not in placed_keys
+                                ]
 
                             # Update remaining orders - remove empty orders or reduce polygon counts
                             for order_id in list(remaining_orders.keys()):
@@ -2060,7 +1987,6 @@ def bin_packing_with_inventory(
                                     # ИСПРАВЛЕНИЕ: правильно извлекаем order_id из разных форматов кортежей
                                     placed_from_order = []
                                     for p in additional_placed:
-                                        poly_order_id = None
                                         if len(p) >= 5:
                                             # Полигон из bin_packing_with_existing: (polygon, x, y, angle, filename, color, order_id)
                                             poly_order_id = p[6] if len(p) > 6 else None
@@ -2071,37 +1997,37 @@ def bin_packing_with_inventory(
                                         if poly_order_id == order_id:
                                             placed_from_order.append(p)
 
-                                    # Remove exactly those polygons that were placed
-                                    # ИСПРАВЛЕНИЕ: учитываем правильный формат кортежей
-                                    for placed_poly in placed_from_order:
-                                        # Извлекаем ключ из размещенного полигона
-                                        if len(placed_poly) >= 5:
-                                            # Полигон из bin_packing_with_existing: (polygon, x, y, angle, filename, color, order_id)
-                                            placed_key = (
-                                                placed_poly[4],
-                                                placed_poly[5],
-                                                placed_poly[6],
-                                            )
-                                        else:
-                                            # Обычный полигон: (polygon, filename, color, order_id)
-                                            placed_key = (
-                                                placed_poly[1],
-                                                placed_poly[2],
-                                                placed_poly[3],
-                                            )
-
-                                        for orig_carpet in remaining_orders[order_id][:]:
-                                            # Сравниваем по ключу (filename, color, order_id)
-                                            orig_key = (
-                                                orig_carpet.filename,
-                                                orig_carpet.color,
-                                                orig_carpet.order_id,
-                                            )
-                                            if orig_key == placed_key:
-                                                remaining_orders[order_id].remove(
-                                                    orig_carpet
-                                                )
-                                                break
+                                    # ОПТИМИЗАЦИЯ: Замена O(n²) удаления на O(1) хеш-таблицу
+                                    if placed_from_order and order_id in remaining_orders:
+                                        # Создаем индекс оставшихся ковров для O(1) поиска
+                                        remaining_carpets = remaining_orders[order_id]
+                                        carpet_index = {}
+                                        for idx, carpet in enumerate(remaining_carpets):
+                                            key = (carpet.filename, carpet.color, carpet.order_id)
+                                            if key not in carpet_index:
+                                                carpet_index[key] = []
+                                            carpet_index[key].append((idx, carpet))
+                                        
+                                        # Собираем индексы ковров для удаления
+                                        indices_to_remove = set()
+                                        for placed_poly in placed_from_order:
+                                            # Извлекаем ключ из размещенного полигона
+                                            if len(placed_poly) >= 5:
+                                                # Полигон из bin_packing_with_existing: (polygon, x, y, angle, filename, color, order_id)
+                                                placed_key = (placed_poly[4], placed_poly[5], placed_poly[6])
+                                            else:
+                                                # Обычный полигон: (polygon, filename, color, order_id)
+                                                placed_key = (placed_poly[1], placed_poly[2], placed_poly[3])
+                                            
+                                            # O(1) поиск и отметка для удаления
+                                            if placed_key in carpet_index and carpet_index[placed_key]:
+                                                idx, carpet = carpet_index[placed_key].pop(0)  # Берем первый подходящий
+                                                indices_to_remove.add(idx)
+                                        
+                                        # Удаляем отмеченные ковры (в обратном порядке индексов)
+                                        for idx in sorted(indices_to_remove, reverse=True):
+                                            if idx < len(remaining_carpets):
+                                                remaining_carpets.pop(idx)
 
                                     # Remove empty orders
                                     if not remaining_orders[order_id]:
@@ -2261,7 +2187,7 @@ def bin_packing_with_inventory(
                 total_removed = 0
                 for order_id in list(remaining_orders.keys()):
                     original_count = len(remaining_orders[order_id])
-                    
+
                     # Only remove polygons that were actually placed from this specific order
                     new_order_list = []
                     for carpet in remaining_orders[order_id]:
@@ -2269,7 +2195,7 @@ def bin_packing_with_inventory(
                         carpet_key = (carpet.filename, carpet.order_id)
                         if carpet_key not in placed_polygon_keys:
                             new_order_list.append(carpet)
-                    
+
                     remaining_orders[order_id] = new_order_list
                     removed_count = original_count - len(remaining_orders[order_id])
                     total_removed += removed_count
@@ -2286,8 +2212,6 @@ def bin_packing_with_inventory(
 
                 logger.info(f"Общее количество удаленных полигонов: {total_removed}")
                 logger.info(f"Оставшиеся заказы: {list(remaining_orders.keys())}")
-                for order_id, carpets in remaining_orders.items():
-                    logger.info(f"  {order_id}: {len(carpets)} полигонов")
 
                 placed_on_current_sheet = True
 
@@ -2348,7 +2272,20 @@ def bin_packing_with_inventory(
                         f"📋 Осталось {len(remaining_orders)} заказов, {available_sheets_count} листов"
                     )
 
+                # Проверка прогресса
+                if placed_on_current_sheet:
+                    consecutive_no_progress = 0
+                else:
+                    consecutive_no_progress += 1
+                    logger.warning(f"Итерация {iteration_count}: нет прогресса ({consecutive_no_progress}/{max_no_progress})")
+
                 continue
+
+    # Проверка причины завершения цикла
+    if consecutive_no_progress >= max_no_progress:
+        logger.warning(f"⚠️ Цикл завершен из-за отсутствия прогресса ({consecutive_no_progress} итераций подряд)")
+        if verbose:
+            st.warning(f"⚠️ Размещение прервано: {consecutive_no_progress} итераций подряд без прогресса")
 
     # Check order constraints after placement - both sheet count and adjacency
     violated_orders = []
