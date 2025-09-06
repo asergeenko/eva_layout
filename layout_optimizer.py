@@ -1929,6 +1929,11 @@ def bin_packing_with_inventory(
                                 f"✅ ДОЗАПОЛНЕНИЕ: Лист #{existing_layout['sheet_number']} получил +{len(additional_placed)} полигонов ({current_usage:.1f}% → {calculate_usage_percent(existing_placed + additional_placed, sheet_size):.1f}%)"
                             )
 
+                            # BACKFILL OPERATIONS ARE INHERENTLY SAFE FOR MAX_SHEETS_PER_ORDER
+                            # Since we're filling existing sheets (not creating new ones), 
+                            # we cannot violate the sheet range constraint
+                            # The constraint check is only needed for additional sheet creation
+
                             # Update existing layout
                             placed_layouts[layout_idx]["placed_polygons"] = (
                                 existing_placed + additional_placed
@@ -2059,9 +2064,12 @@ def bin_packing_with_inventory(
                         )
                         continue
 
-            # If we filled an existing sheet, continue to next iteration without creating new sheet
-            if filled_existing_sheet:
-                continue
+            # If we filled an existing sheet and ALL compatible polygons were placed, continue to next iteration
+            # Otherwise, create a new sheet for remaining polygons
+            if filled_existing_sheet and not compatible_polygons:
+                continue  # All polygons placed, move to next order/iteration
+            
+            # If some polygons remain after backfilling, create a new sheet for them
 
             sheet_counter += 1
 

@@ -100,9 +100,10 @@ def process_orders_from_excel(df):
             # Обрабатываем найденные DXF файлы
             for dxf_file in dxf_files:
                 try:
-                    polygon_data = parse_dxf_complete(dxf_file)
-                    if polygon_data and polygon_data[0]:
-                        polygon = polygon_data[0]
+                    # Используем verbose=False чтобы избежать Streamlit вызовов
+                    polygon_data = parse_dxf_complete(dxf_file, verbose=False)
+                    if polygon_data and polygon_data.get("combined_polygon"):
+                        polygon = polygon_data["combined_polygon"]
                         filename = os.path.basename(dxf_file)
                         # Добавляем уникальный суффикс для различения файлов
                         unique_filename = f"{product_name}_{os.path.splitext(filename)[0]}.dxf"
@@ -135,9 +136,10 @@ def create_priority2_polygons():
             priority2_polygons.append(Carpet(base_polygon, filename, "серый", f"PRIORITY2_GRAY_{i+1}"))
     else:
         try:
-            polygon_data = parse_dxf_complete(dxf_file)
-            if polygon_data and polygon_data[0]:
-                base_polygon = polygon_data[0]
+            # Используем verbose=False чтобы избежать Streamlit вызовов
+            polygon_data = parse_dxf_complete(dxf_file, verbose=False)
+            if polygon_data and polygon_data.get("combined_polygon"):
+                base_polygon = polygon_data["combined_polygon"]
                 
                 # 20 черных полигонов приоритета 2
                 for i in range(20):
@@ -205,9 +207,20 @@ def test_streamlit_integration():
     if unplaced:
         print("\n❌ НЕРАЗМЕЩЕННЫЕ ПОЛИГОНЫ:")
         for poly in unplaced:
-            filename = poly[1] if len(poly) > 1 else "unknown"
-            color = poly[2] if len(poly) > 2 else "unknown"
-            order_id = poly[3] if len(poly) > 3 else "unknown"
+            if hasattr(poly, 'filename'):
+                # Объект Carpet
+                filename = poly.filename
+                color = poly.color
+                order_id = poly.order_id
+            elif len(poly) > 1:
+                # Кортеж
+                filename = poly[1] if len(poly) > 1 else "unknown"
+                color = poly[2] if len(poly) > 2 else "unknown"
+                order_id = poly[3] if len(poly) > 3 else "unknown"
+            else:
+                filename = "unknown"
+                color = "unknown"
+                order_id = "unknown"
             print(f"   • {filename} (цвет: {color}, заказ: {order_id})")
     
     # Детальный анализ по листам
@@ -224,9 +237,18 @@ def test_streamlit_integration():
         p2_black_count = 0
         p2_gray_count = 0
         for p in layout['placed_polygons']:
-            if len(p) > 3 and str(p[3]).startswith('PRIORITY2_BLACK'):
+            # Обрабатываем разные форматы кортежей
+            order_id = None
+            if len(p) >= 7:
+                # Extended format: (polygon, x, y, angle, file_name, color, order_id)
+                order_id = str(p[6])
+            elif len(p) > 3:
+                # Standard format: (polygon, file_name, color, order_id)
+                order_id = str(p[3])
+            
+            if order_id and order_id.startswith('PRIORITY2_BLACK'):
                 p2_black_count += 1
-            elif len(p) > 3 and str(p[3]).startswith('PRIORITY2_GRAY'):
+            elif order_id and order_id.startswith('PRIORITY2_GRAY'):
                 p2_gray_count += 1
         
         priority2_black_placed += p2_black_count
@@ -248,9 +270,26 @@ def test_streamlit_integration():
     problems = []
     
     if len(unplaced) > 0:
-        unplaced_excel = [p for p in unplaced if not str(p[3] if len(p) > 3 else "").startswith('PRIORITY2')]
-        unplaced_p2_black = [p for p in unplaced if str(p[3] if len(p) > 3 else "").startswith('PRIORITY2_BLACK')]
-        unplaced_p2_gray = [p for p in unplaced if str(p[3] if len(p) > 3 else "").startswith('PRIORITY2_GRAY')]
+        unplaced_excel = []
+        unplaced_p2_black = []
+        unplaced_p2_gray = []
+        
+        for p in unplaced:
+            if hasattr(p, 'order_id'):
+                # Объект Carpet
+                order_id = str(p.order_id)
+            elif len(p) > 3:
+                # Кортеж
+                order_id = str(p[3])
+            else:
+                order_id = ""
+            
+            if order_id.startswith('PRIORITY2_BLACK'):
+                unplaced_p2_black.append(p)
+            elif order_id.startswith('PRIORITY2_GRAY'):
+                unplaced_p2_gray.append(p)
+            elif not order_id.startswith('PRIORITY2'):
+                unplaced_excel.append(p)
         
         if unplaced_excel:
             problems.append(f"Неразмещенные заказы из Excel: {len(unplaced_excel)}")
