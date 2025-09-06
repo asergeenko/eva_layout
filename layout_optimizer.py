@@ -1070,6 +1070,43 @@ def check_collision(polygon1: Polygon, polygon2: Polygon, min_gap: float = 2.0) 
 
 
 #@profile
+def _check_max_sheets_constraint(
+    order_id: str,
+    current_sheet_num: int,
+    placed_layouts: list,
+    order_first_sheet: dict,
+    max_sheets_per_order: int
+) -> bool:
+    """Проверяет нарушение ограничения MAX_SHEETS_PER_ORDER для заказа."""
+    if not max_sheets_per_order or not order_id or str(order_id) not in order_first_sheet:
+        return False  # No violation
+    
+    if order_id in ["additional", "unknown"] or str(order_id).startswith("PRIORITY2"):
+        return False  # Unconstrained orders
+    
+    # Find all sheets where this order currently appears
+    order_sheets = set()
+    for existing_layout in placed_layouts:
+        for existing_poly in existing_layout.get('placed_polygons', []):
+            existing_order_id = None
+            if len(existing_poly) >= 7:
+                existing_order_id = existing_poly[6]
+            elif len(existing_poly) >= 4:
+                existing_order_id = existing_poly[3]
+            
+            if str(existing_order_id) == str(order_id):
+                order_sheets.add(existing_layout.get('sheet_number', 0))
+    
+    # Check if adding this polygon to current sheet would violate constraint
+    test_sheets = order_sheets | {current_sheet_num}
+    if len(test_sheets) > 1:
+        min_sheet = min(test_sheets)
+        max_sheet = max(test_sheets)
+        sheet_range = max_sheet - min_sheet + 1
+        return sheet_range > max_sheets_per_order
+    
+    return False
+
 def bin_packing_with_existing(
     polygons: list[Carpet],
     existing_placed: list[tuple],
@@ -1909,12 +1946,53 @@ def bin_packing_with_inventory(
                     )
 
                     try:
+                        # APPLY CONSTRAINT FILTER: Remove polygons that would violate MAX_SHEETS_PER_ORDER
+                        filtered_polygons = compatible_polygons
+                        if max_sheets_per_order:
+                            current_sheet_num = existing_layout['sheet_number']
+                            filtered_polygons = []
+                            
+                            for poly in compatible_polygons:
+                                order_id = getattr(poly, 'order_id', None)
+                                
+                                # Skip unconstrained orders
+                                if not order_id or order_id in ["additional", "unknown"] or str(order_id).startswith("PRIORITY2"):
+                                    filtered_polygons.append(poly)
+                                    continue
+                                
+                                # Check constraint for this order
+                                if str(order_id) in order_first_sheet:
+                                    # Find all sheets where this order currently appears
+                                    order_sheets = set()
+                                    for layout in placed_layouts:
+                                        for existing_poly in layout.get('placed_polygons', []):
+                                            existing_order_id = None
+                                            if len(existing_poly) >= 7:
+                                                existing_order_id = existing_poly[6]
+                                            elif len(existing_poly) >= 4:
+                                                existing_order_id = existing_poly[3]
+                                            
+                                            if str(existing_order_id) == str(order_id):
+                                                order_sheets.add(layout.get('sheet_number', 0))
+                                    
+                                    # Check if adding this polygon to current sheet would violate constraint
+                                    test_sheets = order_sheets | {current_sheet_num}
+                                    if len(test_sheets) > 1:
+                                        min_sheet = min(test_sheets)
+                                        max_sheet = max(test_sheets)
+                                        sheet_range = max_sheet - min_sheet + 1
+                                        
+                                        if sheet_range > max_sheets_per_order:
+                                            continue  # Skip this polygon
+                                
+                                filtered_polygons.append(poly)
+                        
                         # ПРОФИЛИРОВАНИЕ: Измеряем время bin_packing_with_existing
                         import time
                         start_time = time.time()
                         
                         additional_placed, still_remaining = bin_packing_with_existing(
-                            compatible_polygons,
+                            filtered_polygons,  # Use filtered polygons
                             existing_placed,
                             sheet_size,
                             verbose=False,
@@ -1928,11 +2006,6 @@ def bin_packing_with_inventory(
                             logger.info(
                                 f"✅ ДОЗАПОЛНЕНИЕ: Лист #{existing_layout['sheet_number']} получил +{len(additional_placed)} полигонов ({current_usage:.1f}% → {calculate_usage_percent(existing_placed + additional_placed, sheet_size):.1f}%)"
                             )
-
-                            # BACKFILL OPERATIONS ARE INHERENTLY SAFE FOR MAX_SHEETS_PER_ORDER
-                            # Since we're filling existing sheets (not creating new ones), 
-                            # we cannot violate the sheet range constraint
-                            # The constraint check is only needed for additional sheet creation
 
                             # Update existing layout
                             placed_layouts[layout_idx]["placed_polygons"] = (
@@ -2408,6 +2481,37 @@ def bin_packing_with_inventory(
                     )
 
                     try:
+                        # Check MAX_SHEETS_PER_ORDER constraint before attempting placement
+                        if max_sheets_per_order and str(order_id) in order_first_sheet:
+                            current_sheet_num = layout['sheet_number']
+                            
+                            # Find all sheets where this order currently appears
+                            order_sheets = set()
+                            for existing_layout in placed_layouts:
+                                for existing_poly in existing_layout.get('placed_polygons', []):
+                                    existing_order_id = None
+                                    if len(existing_poly) >= 7:
+                                        existing_order_id = existing_poly[6]
+                                    elif len(existing_poly) >= 4:
+                                        existing_order_id = existing_poly[3]
+                                    
+                                    if str(existing_order_id) == str(order_id):
+                                        order_sheets.add(existing_layout.get('sheet_number', 0))
+                            
+                            # Check if adding this polygon to current sheet would violate constraint
+                            test_sheets = order_sheets | {current_sheet_num}
+                            if len(test_sheets) > 1:
+                                min_sheet = min(test_sheets)
+                                max_sheet = max(test_sheets)
+                                sheet_range = max_sheet - min_sheet + 1
+                                
+                                if sheet_range > max_sheets_per_order:
+                                    logger.debug(
+                                        f"🚫 Заказ {order_id} заблокирован для дозаполнения листа #{current_sheet_num}: "
+                                        f"диапазон {min_sheet}-{max_sheet} ({sheet_range} > {max_sheets_per_order})"
+                                    )
+                                    continue  # Skip this sheet
+                        
                         additional_placed, still_remaining = bin_packing_with_existing(
                             [carpet], existing_placed, sheet_size, verbose=False
                         )
@@ -2592,9 +2696,19 @@ def bin_packing_with_inventory(
             )
 
             # Try to place remaining polygons on this existing sheet
+            # Filter out polygons that would violate MAX_SHEETS_PER_ORDER
+            current_sheet_num = layout['sheet_number']
+            filtered_remaining = []
+            
+            for poly in remaining_polygons_list:
+                order_id = getattr(poly, 'order_id', None)
+                if _check_max_sheets_constraint(order_id, current_sheet_num, placed_layouts, order_first_sheet, max_sheets_per_order):
+                    continue  # Skip this polygon due to constraint violation
+                filtered_remaining.append(poly)
+            
             try:
                 additional_placed, still_remaining = bin_packing_with_existing(
-                    remaining_polygons_list, existing_placed, sheet_size, verbose=False
+                    filtered_remaining, existing_placed, sheet_size, verbose=False
                 )
 
                 if additional_placed:
