@@ -1650,1175 +1650,430 @@ def bin_packing_with_inventory(
     max_sheet_range_per_order: int = None,
     progress_callback=None,
 ) -> tuple[list[dict], list[tuple]]:
-    """Optimize placement of polygons on available sheets with inventory tracking."""
-    logger.info("=== НАЧАЛО bin_packing_with_inventory ===")
+    """Optimize placement of polygons on available sheets with inventory tracking.
+    
+    NEW ALGORITHM: Ensures strict adherence to MAX_SHEET_RANGE_PER_ORDER constraint.
+    """
+    logger.info("=== НАЧАЛО bin_packing_with_inventory (НОВЫЙ АЛГОРИТМ) ===")
     logger.info(
         f"Входные параметры: {len(carpets)} полигонов, {len(available_sheets)} типов листов, max_sheet_range_per_order={max_sheet_range_per_order}"
     )
 
     placed_layouts = []
     all_unplaced = []
-    sheet_inventory = [
-        sheet.copy() for sheet in available_sheets
-    ]  # Copy to avoid modifying original
+    sheet_inventory = [sheet.copy() for sheet in available_sheets]
 
     if verbose:
-        total_available = sum(
-            sheet["count"] - sheet["used"] for sheet in sheet_inventory
-        )
-        st.info(
-            f"Начинаем размещение {len(carpets)} полигонов на {total_available} доступных листах"
-        )
+        total_available = sum(sheet["count"] - sheet["used"] for sheet in sheet_inventory)
+        st.info(f"Начинаем размещение {len(carpets)} полигонов на {total_available} доступных листах")
         if max_sheet_range_per_order:
             st.info(f"Ограничение: максимум {max_sheet_range_per_order} листов на заказ")
 
     # Group polygons by order_id and separate by priority
     logger.info("Группировка полигонов по order_id и приоритету...")
     order_groups = {}
-    priority2_carpets = []  # Polygons with priority 2 for later processing
+    priority2_carpets = []
 
     for carpet in carpets:
-        # Separate priority 2 polygons for later processing
         if carpet.priority == 2:
             priority2_carpets.append(carpet)
-            logger.debug(
-                f"Полигон {carpet.filename} отложен для приоритета 2 (заполнение пустот)"
-            )
+            logger.debug(f"Полигон {carpet.filename} отложен для приоритета 2")
         else:
-            # Process priority 1 and Excel files normally
             if carpet.order_id not in order_groups:
                 order_groups[carpet.order_id] = []
-                logger.debug(f"Создана новая группа для заказа: {carpet.order_id}")
             order_groups[carpet.order_id].append(carpet)
 
-    logger.info(
-        f"Группировка завершена: {len(order_groups)} уникальных заказов, {len(priority2_carpets)} полигонов приоритета 2"
-    )
+    logger.info(f"Группировка завершена: {len(order_groups)} заказов, {len(priority2_carpets)} приоритет 2")
     for order_id, group in order_groups.items():
         logger.info(f"  • Заказ {order_id}: {len(group)} файлов")
-    if priority2_carpets:
-        logger.info(
-            f"  • Приоритет 2 (заполнение пустот): {len(priority2_carpets)} файлов"
-        )
 
     if verbose:
         st.info(f"Найдено {len(order_groups)} уникальных заказов для размещения:")
         for order_id, group in order_groups.items():
             st.info(f"  • Заказ {order_id}: {len(group)} файлов")
-            # Show filenames for debugging
-            for carpet in group:
-                st.write(f"    - {carpet.filename}")
+
+    # Early return for priority 2 only
+    if not order_groups and priority2_carpets:
+        logger.info(f"Только файлы приоритета 2: {len(priority2_carpets)} файлов не размещаются")
+        all_unplaced.extend(priority2_carpets)
+        return placed_layouts, all_unplaced
 
     sheet_counter = 0
 
-    # Track sheets used per order for constraint checking
-    order_sheet_usage = {order_id: 0 for order_id in order_groups.keys()}
+    # NEW ALGORITHM: Process each order completely within its sheet range
+    def is_constrained_order(order_id):
+        """Check if order is subject to MAX_SHEET_RANGE_PER_ORDER constraint."""
+        return (max_sheet_range_per_order is not None 
+                and order_id != "additional" 
+                and order_id != "unknown"
+                and not str(order_id).startswith("group_"))
 
-    logger.info(
-        f"Используем упрощенный эффективный алгоритм: {len(order_groups)} заказов"
-    )
+    def find_available_sheet_of_color(color, sheet_inventory):
+        """Find an available sheet of the specified color."""
+        for sheet_type in sheet_inventory:
+            if (sheet_type.get("color", "серый") == color and 
+                sheet_type["count"] - sheet_type["used"] > 0):
+                return sheet_type
+        return None
 
-    # Check if we only have priority 2 polygons
-    if not order_groups and priority2_carpets:
-        logger.info(
-            f"Только файлы приоритета 2: {len(priority2_carpets)} файлов не размещаются (новые листы не создаются)"
-        )
-        if verbose:
-            st.warning(
-                f"⚠️ Только файлы приоритета 2: {len(priority2_carpets)} файлов не размещаются (новые листы не создаются)"
-            )
-        all_unplaced.extend(priority2_carpets)
-
-        # Progress update for early return
-        if progress_callback:
-            progress_callback(
-                100, "Завершено: только файлы приоритета 2 (не размещены)"
-            )
-
-        return placed_layouts, all_unplaced
-
-    # NEW LOGIC: Priority queue for orders based on MAX_SHEET_RANGE_PER_ORDER constraint
-    # Track which order was placed first and its starting sheet
-    order_first_sheet = {}  # order_id -> first_sheet_number
-
-    # Process orders using priority queue logic
-    remaining_orders = dict(order_groups)  # Copy to modify
-    max_iterations = max(
-        50, len(remaining_orders) * 25
-    )  # Safety limit with higher multiplier
-    iteration_count = 0
-
-    # Детектор зависших итераций
-    #consecutive_no_progress = 0
-    #max_no_progress = 3  # Прерывать после 3 итераций без размещений
-
-    while (remaining_orders and
-           any(sheet["count"] - sheet["used"] > 0 for sheet in sheet_inventory)):# and
-           #consecutive_no_progress < max_no_progress):
-        iteration_count += 1
-        logger.info(f"--- ИТЕРАЦИЯ {iteration_count} ---")
-        logger.info(f"Остается заказов: {len(remaining_orders)}")
-        if iteration_count > max_iterations:
-            logger.error(
-                f"Превышен лимит итераций ({max_iterations}), прерываем выполнение"
-            )
-            break
-
-        placed_on_current_sheet = False
-
-        # Try each available sheet type, GROUP BY COLOR for better organization
-        # Сначала группируем листы по цвету: чёрный, потом серый, потом остальные
-        available_sheet_types = [
-            st for st in sheet_inventory if st["count"] - st["used"] > 0
-        ]
-
-        # Группируем по цветам
-        sheets_by_color = {}
-        for sheet_type in available_sheet_types:
-            color = sheet_type.get("color", "серый")
-            if color not in sheets_by_color:
-                sheets_by_color[color] = []
-            sheets_by_color[color].append(sheet_type)
-
-        # Обрабатываем в порядке: черный, серый, остальные цвета
-        color_priority = ["чёрный", "серый"]
-        ordered_sheet_types = []
-
-        for color in color_priority:
-            if color in sheets_by_color:
-                ordered_sheet_types.extend(sheets_by_color[color])
-
-        # Добавляем остальные цвета
-        for color, sheet_list in sheets_by_color.items():
-            if color not in color_priority:
-                ordered_sheet_types.extend(sheet_list)
-
-        for sheet_type in ordered_sheet_types:
-            sheet_size = (sheet_type["width"], sheet_type["height"])
-            sheet_color = sheet_type.get("color", "серый")
-
-            # Calculate which sheet number this would be
-            next_sheet_number = sheet_counter + 1
-
-            # NEW APPROACH: Reserve sheets for started orders to guarantee completion
-            # Step 1: Check which started orders need priority on this sheet
-            priority_orders = []
-            blocked_orders = []
-            new_orders = []
-
-            for order_id, order_polygons in remaining_orders.items():
-                # Skip orders that don't apply to MAX_SHEET_RANGE_PER_ORDER constraint
-                is_constrained = (
-                        max_sheet_range_per_order is not None
-                        and order_id != "additional"
-                        and order_id != "unknown"  # Manual uploads are not limited
-                        and not str(order_id).startswith(
-                        "group_"
-                    )  # Group uploads are not limited
-                )
-
-                if not is_constrained:
-                    # Unconstrained orders can be placed anytime
-                    new_orders.append((order_id, order_polygons))
-                    continue
-
-                if order_id in order_first_sheet:
-                    # Order already started - check if within range
-                    first_sheet = order_first_sheet[order_id]
-                    max_allowed_sheet = first_sheet + max_sheet_range_per_order - 1
-
-                    if next_sheet_number <= max_allowed_sheet:
-                        # Within range - MAXIMUM priority (must complete this order)
-                        priority_orders.append((order_id, order_polygons))
-                        logger.debug(
-                            f"Заказ {order_id}: МАКСИМАЛЬНЫЙ приоритет (листы {first_sheet}-{max_allowed_sheet}, текущий {next_sheet_number})"
-                        )
-                    else:
-                        # Outside range - blocked from starting new placement
-                        blocked_orders.append(order_id)
-                        logger.debug(
-                            f"Заказ {order_id}: ЗАБЛОКИРОВАН (вне диапазона {first_sheet}-{max_allowed_sheet}, текущий {next_sheet_number})"
-                        )
-                else:
-                    # New order - can start only if no priority orders need this sheet
-                    new_orders.append((order_id, order_polygons))
-
-            # PRIORITY STRATEGY: If there are started orders within range, give them ALL the space
-            if priority_orders:
-                # Only consider priority orders - they get the entire sheet
-                orders_to_consider = priority_orders
-                logger.info(
-                    f"Лист {next_sheet_number}: РЕЖИМ ПРИОРИТЕТА - {len(priority_orders)} начатых заказов"
-                )
-            else:
-                # No priority orders - allow new orders to start
-                # IMPROVED STRATEGY: Sort new orders by carpet count (descending)
-                # Orders with more carpets should be processed first as they are harder to fit within MAX_SHEET_RANGE_PER_ORDER constraint
-                new_orders_sorted = sorted(
-                    new_orders, key=lambda x: len(x[1]), reverse=True
-                )
-                orders_to_consider = new_orders_sorted
-                logger.info(
-                    f"Лист {next_sheet_number}: Обычный режим - {len(new_orders_sorted)} новых заказов (отсортированы по убыванию количества ковров)"
-                )
-                # Log order sorting for debugging
-                for order_id, order_polygons in new_orders_sorted[:5]:  # Show top 5
-                    logger.debug(f"  Заказ {order_id}: {len(order_polygons)} ковров")
-                if len(new_orders_sorted) > 5:
-                    logger.debug(f"  ... еще {len(new_orders_sorted) - 5} заказов")
-
-            # Collect polygons from orders that can fit on this sheet
-            compatible_polygons = []
-            orders_to_try = []
-
-            for order_id, order_polygons in orders_to_consider:
-                # Filter polygons by color
-                color_matched_polygons = []
-                for carpet in order_polygons:
-                    if carpet.color == sheet_color:
-                        color_matched_polygons.append(carpet)
-
-                if color_matched_polygons:
-                    compatible_polygons.extend(color_matched_polygons)
-                    orders_to_try.append(order_id)
-
-            if not compatible_polygons:
-                logger.debug(
-                    f"Нет совместимых полигонов для листа {sheet_type['name']} цвета {sheet_color}"
-                )
-                continue  # No compatible polygons for this sheet color
-
-            # NEW STRATEGY: Try to fill existing sheets BEFORE creating a new one
-            filled_existing_sheet = False
-            logger.info("🚀 НОВЫЙ АЛГОРИТМ: Попытка дозаполнить существующие листы")
-
-            # Try to add compatible polygons to existing sheets of the same color first
-            for layout_idx, existing_layout in enumerate(placed_layouts):
-                if existing_layout.get("sheet_color") == sheet_color:
-                    current_usage = existing_layout.get("usage_percent", 0)
-
-                    # Skip nearly full sheets (>90%) to avoid tiny gaps
-                    if current_usage >= 90:
-                        continue
-
-                    existing_placed = existing_layout["placed_polygons"]
-                    sheet_size = existing_layout["sheet_size"]
-
-                    logger.debug(
-                        f"Пытаемся дозаполнить лист #{existing_layout['sheet_number']} (заполнение: {current_usage:.1f}%)"
-                    )
-
+    def place_order_optimized(order_id, carpets_in_order, is_constrained):
+        """Place all carpets from an order with smart optimization."""
+        nonlocal sheet_counter, sheet_inventory, placed_layouts
+        
+        logger.info(f"Размещение заказа {order_id}: {len(carpets_in_order)} ковров, ограничен: {is_constrained}")
+        
+        # Group carpets by color
+        carpets_by_color = {}
+        for carpet in carpets_in_order:
+            color = carpet.color
+            if color not in carpets_by_color:
+                carpets_by_color[color] = []
+            carpets_by_color[color].append(carpet)
+        
+        successfully_placed_carpets = []
+        remaining_carpets = []
+        order_sheet_numbers = []  # Track which sheets this order uses
+        
+        # Process each color group
+        for color, color_carpets in carpets_by_color.items():
+            logger.info(f"  Размещение {len(color_carpets)} ковров цвета {color}")
+            current_carpets = list(color_carpets)
+            
+            # PHASE 1: Try to fill existing sheets of same color first
+            for layout_idx, layout in enumerate(placed_layouts):
+                if not current_carpets:
+                    break
+                    
+                if layout["sheet_color"] == color and layout.get("usage_percent", 0) < 85:
+                    # Check constraint for constrained orders
+                    if is_constrained and order_sheet_numbers:
+                        # Check if adding this sheet would violate range constraint
+                        all_sheets = order_sheet_numbers + [layout["sheet_number"]]
+                        sheet_range = max(all_sheets) - min(all_sheets) + 1
+                        if sheet_range > max_sheet_range_per_order:
+                            logger.debug(f"Пропуск листа #{layout['sheet_number']} - нарушение диапазона")
+                            continue
+                    
                     try:
-                        # ПРОФИЛИРОВАНИЕ: Измеряем время bin_packing_with_existing
-                        import time
-                        start_time = time.time()
-
-                        additional_placed, still_remaining = bin_packing_with_existing(
-                            compatible_polygons,
-                            existing_placed,
-                            sheet_size,
-                            verbose=False,
+                        additional_placed, still_remaining_tuples = bin_packing_with_existing(
+                            current_carpets, layout["placed_polygons"], 
+                            layout["sheet_size"], verbose=False
                         )
-
-                        elapsed_time = time.time() - start_time
-                        if elapsed_time > 1.0:  # Логируем только долгие операции
-                            logger.warning(f"⏱️ bin_packing_with_existing: {elapsed_time:.2f}s для {len(compatible_polygons)} полигонов на лист #{existing_layout['sheet_number']}")
-
+                        
                         if additional_placed:
-                            logger.info(
-                                f"✅ ДОЗАПОЛНЕНИЕ: Лист #{existing_layout['sheet_number']} получил +{len(additional_placed)} полигонов ({current_usage:.1f}% → {calculate_usage_percent(existing_placed + additional_placed, sheet_size):.1f}%)"
-                            )
-
                             # Update existing layout
                             placed_layouts[layout_idx]["placed_polygons"] = (
-                                existing_placed + additional_placed
+                                layout["placed_polygons"] + additional_placed
                             )
-                            placed_layouts[layout_idx]["usage_percent"] = (
-                                calculate_usage_percent(
-                                    placed_layouts[layout_idx]["placed_polygons"],
-                                    sheet_size,
-                                )
+                            placed_layouts[layout_idx]["usage_percent"] = calculate_usage_percent(
+                                placed_layouts[layout_idx]["placed_polygons"], layout["sheet_size"]
                             )
-
-                            # Track orders and remove placed polygons from remaining orders
-                            additional_orders_on_sheet = set()
-                            for placed_tuple in additional_placed:
-                                # Handle different tuple structures for order_id
-                                if len(placed_tuple) == 7:
-                                    # Extended format from bin_packing_with_existing: (polygon, x, y, angle, file_name, color, order_id)
-                                    placed_order_id = placed_tuple[6]
-                                elif len(placed_tuple) > 3:
-                                    # Standard format: (polygon, file_name, color, order_id)
-                                    placed_order_id = placed_tuple[3]
-                                else:
-                                    placed_order_id = "unknown"
-                                additional_orders_on_sheet.add(placed_order_id)
-
-                                # Update order sheet tracking
-                                if placed_order_id not in order_sheet_usage:
-                                    order_sheet_usage[placed_order_id] = 0
-                                if placed_order_id not in order_first_sheet:
-                                    order_first_sheet[placed_order_id] = (
-                                        existing_layout["sheet_number"]
-                                    )
-
-                            # ОПТИМИЗАЦИЯ: Быстрая фильтрация размещенных полигонов
-                            if additional_placed:
-                                placed_keys = set()
-                                for placed_poly in additional_placed:
-                                    if len(placed_poly) >= 5:
-                                        # Полигон из bin_packing_with_existing: (polygon, x, y, angle, filename, color, order_id)
-                                        key = (placed_poly[4], placed_poly[5], placed_poly[6])  # filename, color, order_id
-                                    else:
-                                        # Обычный полигон: (polygon, filename, color, order_id)
-                                        key = (placed_poly[1], placed_poly[2], placed_poly[3])
-                                    placed_keys.add(key)
-
-                                # Быстрая фильтрация через индекс
-                                compatible_polygons = [
-                                    p for p in compatible_polygons
-                                    if (p.filename, p.color, p.order_id) not in placed_keys
-                                ]
-
-                            # Update remaining orders - remove empty orders or reduce polygon counts
-                            for order_id in list(remaining_orders.keys()):
-                                if order_id in additional_orders_on_sheet:
-                                    # Count how many polygons from this order were placed
-                                    # ИСПРАВЛЕНИЕ: правильно извлекаем order_id из разных форматов кортежей
-                                    placed_from_order = []
-                                    for p in additional_placed:
-                                        if len(p) >= 5:
-                                            # Полигон из bin_packing_with_existing: (polygon, x, y, angle, filename, color, order_id)
-                                            poly_order_id = p[6] if len(p) > 6 else None
-                                        else:
-                                            # Обычный полигон: (polygon, filename, color, order_id)
-                                            poly_order_id = p[3] if len(p) > 3 else None
-
-                                        if poly_order_id == order_id:
-                                            placed_from_order.append(p)
-
-                                    # ОПТИМИЗАЦИЯ: Замена O(n²) удаления на O(1) хеш-таблицу
-                                    if placed_from_order and order_id in remaining_orders:
-                                        # Создаем индекс оставшихся ковров для O(1) поиска
-                                        remaining_carpets = remaining_orders[order_id]
-                                        carpet_index = {}
-                                        for idx, carpet in enumerate(remaining_carpets):
-                                            key = (carpet.filename, carpet.color, carpet.order_id)
-                                            if key not in carpet_index:
-                                                carpet_index[key] = []
-                                            carpet_index[key].append((idx, carpet))
-
-                                        # Собираем индексы ковров для удаления
-                                        indices_to_remove = set()
-                                        for placed_poly in placed_from_order:
-                                            # Извлекаем ключ из размещенного полигона
-                                            if len(placed_poly) >= 5:
-                                                # Полигон из bin_packing_with_existing: (polygon, x, y, angle, filename, color, order_id)
-                                                placed_key = (placed_poly[4], placed_poly[5], placed_poly[6])
-                                            else:
-                                                # Обычный полигон: (polygon, filename, color, order_id)
-                                                placed_key = (placed_poly[1], placed_poly[2], placed_poly[3])
-
-                                            # O(1) поиск и отметка для удаления
-                                            if placed_key in carpet_index and carpet_index[placed_key]:
-                                                idx, carpet = carpet_index[placed_key].pop(0)  # Берем первый подходящий
-                                                indices_to_remove.add(idx)
-
-                                        # Удаляем отмеченные ковры (в обратном порядке индексов)
-                                        for idx in sorted(indices_to_remove, reverse=True):
-                                            if idx < len(remaining_carpets):
-                                                remaining_carpets.pop(idx)
-
-                                    # Remove empty orders
-                                    if not remaining_orders[order_id]:
-                                        logger.info(
-                                            f"  Заказ {order_id} полностью размещен (дозаполнение)"
-                                        )
-                                        del remaining_orders[order_id]
-
-                            # Update orders on this sheet
-                            if "orders_on_sheet" not in placed_layouts[layout_idx]:
-                                placed_layouts[layout_idx]["orders_on_sheet"] = set()
-                            placed_layouts[layout_idx]["orders_on_sheet"].update(
-                                additional_orders_on_sheet
-                            )
-
-                            filled_existing_sheet = True
-                            placed_on_current_sheet = True
-
-                            if verbose:
-                                st.success(
-                                    f"✅ Дозаполнен лист #{existing_layout['sheet_number']}: +{len(additional_placed)} деталей"
-                                )
-
-                            break  # Found space, don't need to create new sheet yet
-
+                            # Add order to sheet's order list
+                            if order_id not in placed_layouts[layout_idx]["orders_on_sheet"]:
+                                placed_layouts[layout_idx]["orders_on_sheet"].append(order_id)
+                            
+                            # Convert remaining tuples back to Carpet objects
+                            remaining_carpet_map = {(c.polygon, c.filename, c.color, c.order_id): c for c in current_carpets}
+                            current_carpets = []
+                            for remaining_tuple in still_remaining_tuples:
+                                # Find matching carpet object
+                                key = (remaining_tuple[0], remaining_tuple[1], remaining_tuple[2], remaining_tuple[3])
+                                if key in remaining_carpet_map:
+                                    current_carpets.append(remaining_carpet_map[key])
+                            
+                            # Track successfully placed carpets  
+                            newly_placed = [c for c in color_carpets if c not in current_carpets]
+                            successfully_placed_carpets.extend(newly_placed)
+                            
+                            # Track sheet usage
+                            if layout["sheet_number"] not in order_sheet_numbers:
+                                order_sheet_numbers.append(layout["sheet_number"])
+                            
+                            logger.info(f"    Дозаполнен лист #{layout['sheet_number']}: +{len(additional_placed)} ковров")
                     except Exception as e:
-                        logger.debug(
-                            f"Не удалось дозаполнить лист #{existing_layout['sheet_number']}: {e}"
-                        )
+                        logger.debug(f"Не удалось дозаполнить лист: {e}")
                         continue
-
-            # If we filled an existing sheet and ALL compatible polygons were placed, continue to next iteration
-            # Otherwise, create a new sheet for remaining polygons
-            if filled_existing_sheet and not compatible_polygons:
-                continue  # All polygons placed, move to next order/iteration
-
-            # If some polygons remain after backfilling, create a new sheet for them
-
-            sheet_counter += 1
-
-            if verbose:
-                st.info(
-                    f"  Лист #{sheet_counter}: {sheet_type['name']} ({sheet_size[0]}x{sheet_size[1]} см, цвет: {sheet_color})"
-                )
-                st.info(
-                    f"  Совместимых полигонов: {len(compatible_polygons)} из заказов: {orders_to_try}"
-                )
-
-            logger.info(
-                f"Обрабатываем лист #{sheet_counter}: {len(compatible_polygons)} совместимых полигонов из заказов {orders_to_try}"
-            )
-
-            # Try to place compatible polygons on this sheet
-            placed, remaining_from_sheet = bin_packing(
-                compatible_polygons, sheet_size, verbose=verbose
-            )
-
-            if placed:  # If we managed to place something
-                sheet_type["used"] += 1
-
-                # Track which orders are represented on this sheet
-                orders_on_sheet = set()
-                placed_polygon_names = set()
-
-                for placed_carpet in placed:
-                    # bin_packing returns: (polygon, x_offset, y_offset, angle, file_name, color, order_id)
-                    if len(placed_carpet) >= 5:
-                        filename = placed_carpet[4]  # file_name is at index 4
-                    else:
-                        filename = "unknown"  # fallback
-
-                    placed_polygon_names.add(filename)
-
-                    # Find which order this polygon belongs to
-                    found_order = False
-                    for order_id, order_polygons in remaining_orders.items():
-                        for carpet in order_polygons:
-                            if carpet.filename == filename:
-                                orders_on_sheet.add(order_id)
-                                logger.debug(
-                                    f"    Полигон {filename} принадлежит заказу {order_id}"
-                                )
-                                found_order = True
-                                break
-                        if found_order:
+            
+            # PHASE 2: Create new sheets for remaining carpets
+            while current_carpets:
+                sheet_type = find_available_sheet_of_color(color, sheet_inventory)
+                if not sheet_type:
+                    logger.warning(f"Нет доступных листов цвета {color}")
+                    remaining_carpets.extend(current_carpets)
+                    break
+                
+                sheet_counter += 1
+                proposed_sheet_number = sheet_counter
+                
+                # Check constraint for constrained orders
+                if is_constrained and order_sheet_numbers:
+                    all_sheets = order_sheet_numbers + [proposed_sheet_number]
+                    sheet_range = max(all_sheets) - min(all_sheets) + 1
+                    if sheet_range > max_sheet_range_per_order:
+                        # Try to find a sheet number that would fit within the range
+                        min_allowed = min(order_sheet_numbers)
+                        max_allowed = min_allowed + max_sheet_range_per_order - 1
+                        
+                        # If current proposed sheet is beyond range, try to use an earlier sheet number
+                        if proposed_sheet_number > max_allowed:
+                            logger.info(f"Лист #{proposed_sheet_number} вне диапазона для {order_id}, пропускаем")
+                            remaining_carpets.extend(current_carpets)
+                            sheet_counter -= 1  # Rollback counter
                             break
-
-                    if not found_order:
-                        logger.warning(f"    Не найден заказ для полигона {filename}")
-
-                logger.info(
-                    f"УСПЕХ: Лист #{sheet_counter} содержит заказы: {orders_on_sheet}"
-                )
-
-                # Update order sheet usage and track first sheet
-                for order_id in orders_on_sheet:
-                    if order_id in order_sheet_usage:
-                        order_sheet_usage[order_id] += 1
-
-                        # Track first sheet for MAX_SHEET_RANGE_PER_ORDER constraint
-                        if order_id not in order_first_sheet:
-                            order_first_sheet[order_id] = sheet_counter
-                            logger.info(
-                                f"  Заказ {order_id}: начат на листе {sheet_counter}"
-                            )
-
-                        logger.info(
-                            f"  Заказ {order_id}: теперь использует {order_sheet_usage[order_id]} листов"
-                        )
-
-                placed_layouts.append(
-                    {
-                        "sheet_number": sheet_counter,
+                
+                sheet_type["used"] += 1
+                sheet_size = (sheet_type["width"], sheet_type["height"])
+                
+                placed, remaining = bin_packing(current_carpets, sheet_size, verbose=False)
+                
+                if placed:
+                    new_layout = {
+                        "sheet_number": proposed_sheet_number,
                         "sheet_type": sheet_type["name"],
-                        "sheet_color": sheet_color,  # Add sheet color directly
+                        "sheet_color": color,
                         "sheet_size": sheet_size,
                         "placed_polygons": placed,
                         "usage_percent": calculate_usage_percent(placed, sheet_size),
-                        "orders_on_sheet": list(orders_on_sheet),
+                        "orders_on_sheet": [order_id],
                     }
-                )
-
-                # Update progress callback if provided
-                if progress_callback:
-                    # Better estimate based on actual polygons and sheet capacity
-                    total_priority1_polygons = len(
-                        [
-                            p
-                            for order_polys in order_groups.values()
-                            for p in order_polys
-                        ]
-                    )
-                    # Estimate sheets needed based on average usage and total polygons
-                    estimated_total_sheets = max(
-                        1, total_priority1_polygons // 4
-                    )  # Assume 4 polygons per sheet on average
-                    progress_percent = min(
-                        95,
-                        50
-                        + (len(placed_layouts) / max(1, estimated_total_sheets)) * 40,
-                    )  # 50-95% range
-                    progress_callback(
-                        progress_percent,
-                        f"Создан лист #{sheet_counter} ({sheet_type['name']})",
-                    )
-
-                # Remove placed polygons from remaining orders
-                # We need to match polygons by both filename AND order_id
-                placed_polygon_keys = set()  # Maps (filename, order_id) -> True
-                for carpet in placed:
-                    if len(carpet) >= 5:
-                        filename = carpet[4]  # file_name is at index 4
-                        if len(carpet) >= 7:
-                            order_id = carpet[6]  # order_id is at index 6
-                            placed_polygon_keys.add((filename, order_id))
-                            logger.debug(
-                                f"  Размещен полигон: файл='{filename}', заказ='{order_id}'"
-                            )
-
-                total_removed = 0
-                for order_id in list(remaining_orders.keys()):
-                    original_count = len(remaining_orders[order_id])
-
-                    # Only remove polygons that were actually placed from this specific order
-                    new_order_list = []
-                    for carpet in remaining_orders[order_id]:
-                        # Check if this carpet was placed
-                        carpet_key = (carpet.filename, carpet.order_id)
-                        if carpet_key not in placed_polygon_keys:
-                            new_order_list.append(carpet)
-
-                    remaining_orders[order_id] = new_order_list
-                    removed_count = original_count - len(remaining_orders[order_id])
-                    total_removed += removed_count
-
-                    if removed_count > 0:
-                        logger.info(
-                            f"  Из заказа {order_id} удалено {removed_count} размещенных полигонов"
-                        )
-
-                    # Remove empty orders
-                    if not remaining_orders[order_id]:
-                        logger.info(f"  Заказ {order_id} полностью размещен")
-                        del remaining_orders[order_id]
-
-                logger.info(f"Общее количество удаленных полигонов: {total_removed}")
-                logger.info(f"Оставшиеся заказы: {list(remaining_orders.keys())}")
-
-                placed_on_current_sheet = True
-
-                if verbose:
-                    st.success(
-                        f"  ✅ Размещено {len(placed)} объектов на листе {sheet_type['name']}"
-                    )
-                    st.info(f"  📊 Заказы на листе: {', '.join(orders_on_sheet)}")
-
-                break  # Move to next iteration with remaining orders
-
-        if not placed_on_current_sheet:
-            # No sheet type could accommodate any remaining polygons in this iteration
-            # Check if we still have available sheets of any type
-            sheets_still_available = any(
-                sheet["count"] - sheet["used"] > 0 for sheet in sheet_inventory
-            )
-
-            if not sheets_still_available:
-                logger.warning(
-                    f"Все листы закончились. Не удалось разместить оставшиеся заказы: {list(remaining_orders.keys())}"
-                )
-                break
-            else:
-                # Continue to next iteration - might be color/size mismatch this round
-                available_sheets_count = sum(
-                    max(0, sheet["count"] - sheet["used"]) for sheet in sheet_inventory
-                )
-
-                # Enhanced debugging: show what's blocking placement
-                logger.info(f"Не удалось разместить в итерации {iteration_count}:")
-                logger.info(f"  Доступно листов: {available_sheets_count}")
-                logger.info(f"  Осталось заказов: {len(remaining_orders)}")
-
-                # Show remaining orders and their polygon counts
-                for order_id, order_polygons in remaining_orders.items():
-                    colors_in_order = {}
-                    for carpet in order_polygons:
-                        color = carpet.color
-                        colors_in_order[color] = colors_in_order.get(color, 0) + 1
-                    logger.info(
-                        f"    {order_id}: {len(order_polygons)} полигонов, цвета: {colors_in_order}"
-                    )
-
-                # Show available sheets
-                for sheet_type in sheet_inventory:
-                    remaining = sheet_type["count"] - sheet_type["used"]
-                    if remaining > 0:
-                        logger.info(
-                            f"    Доступен лист: {sheet_type['name']} цвет {sheet_type.get('color', 'серый')}, осталось: {remaining}"
-                        )
-
-                if verbose:
-                    st.info(
-                        f"⚠️ Пропуск итерации {iteration_count}: нет совместимых комбинаций полигон/лист"
-                    )
-                    st.info(
-                        f"📋 Осталось {len(remaining_orders)} заказов, {available_sheets_count} листов"
-                    )
-
-                # Проверка прогресса
-                if placed_on_current_sheet:
-                    consecutive_no_progress = 0
-                else:
-                    consecutive_no_progress += 1
-                    logger.warning(f"Итерация {iteration_count}: нет прогресса ({consecutive_no_progress}/{max_no_progress})")
-
-                continue
-
-    # Проверка причины завершения цикла
-    if consecutive_no_progress >= max_no_progress:
-        logger.warning(f"⚠️ Цикл завершен из-за отсутствия прогресса ({consecutive_no_progress} итераций подряд)")
-        if verbose:
-            st.warning(f"⚠️ Размещение прервано: {consecutive_no_progress} итераций подряд без прогресса")
-
-    # Check order constraints after placement - both sheet count and adjacency
-
-    adjacency_violations = []
-
-    for order_id, sheets_used in order_sheet_usage.items():
-         # Check adjacency constraint
-        if (
-            max_sheet_range_per_order
-            and order_id != "additional"
-            and order_id != "unknown"
-            and not str(order_id).startswith("group_")
-            and order_id in order_first_sheet
-        ):
-            first_sheet = order_first_sheet[order_id]
-            # Find all sheets where this order appears
-            order_sheets = []
-            for layout in placed_layouts:
-                if order_id in layout["orders_on_sheet"]:
-                    order_sheets.append(layout["sheet_number"])
-
-            if order_sheets:
-                min_sheet = min(order_sheets)
-                max_sheet = max(order_sheets)
-                expected_max_sheet = first_sheet + max_sheet_range_per_order - 1
-
-                if max_sheet > expected_max_sheet:
-                    adjacency_violations.append(
-                        (order_id, min_sheet, max_sheet, expected_max_sheet)
-                    )
-                    logger.error(
-                        f"НАРУШЕНИЕ СМЕЖНОСТИ: Заказ {order_id} размещен на листах {min_sheet}-{max_sheet}, "
-                        f"но должен быть в диапазоне {first_sheet}-{expected_max_sheet}"
-                    )
-
-    if adjacency_violations:
-        warning_parts = []
-        warning_parts.append("⚠️ Предупреждение: Нарушение смежности листов:")
-        for order_id, min_sheet, max_sheet, expected_max in adjacency_violations:
-            warning_parts.append(
-                f"Заказ {order_id}: листы {min_sheet}-{max_sheet} (ожидалось до {expected_max})"
-            )
-
-        warning_msg = "\n".join(warning_parts)
-        logger.warning(warning_msg)
-        if verbose:
-            st.warning(warning_msg)
-        # Don't raise error - allow algorithm to continue with warnings
-
-    # NEW: SINGLE-POLYGON ORDER FILL STRATEGY - Try to place remaining single-polygon orders into existing sheets
-    if remaining_orders and placed_layouts:
-        single_polygon_orders = {
-            order_id: order_polygons
-            for order_id, order_polygons in remaining_orders.items()
-            if len(order_polygons) == 1
-        }
-
-        if single_polygon_orders:
-            logger.info(
-                f"=== ДОЗАПОЛНЕНИЕ ОДНОКОМПОНЕНТНЫМИ ЗАКАЗАМИ: {len(single_polygon_orders)} заказов ==="
-            )
-            if verbose:
-                st.info(
-                    f"🔄 Дозаполнение листов однокомпонентными заказами: {len(single_polygon_orders)} заказов"
-                )
-
-            filled_orders = 0
-            for order_id, order_polygons in single_polygon_orders.items():
-                if len(order_polygons) != 1:
-                    continue
-
-                carpet = order_polygons[0]
-                color = carpet.color
-
-                # Try to place this single polygon on existing sheets with same color
-                placed_successfully = False
-                for layout_idx, layout in enumerate(placed_layouts):
-                    sheet_color = layout.get("sheet_color", "серый")
-                    if color != sheet_color:
-                        continue
-
-                    current_usage = layout.get("usage_percent", 0)
-                    if current_usage >= 95:  # Skip nearly full sheets
-                        continue
-
-                    sheet_size = layout["sheet_size"]
-                    existing_placed = layout["placed_polygons"]
-
-                    logger.debug(
-                        f"Пытаемся добавить {order_id} на лист #{layout['sheet_number']} (заполнение: {current_usage:.1f}%)"
-                    )
-
-                    try:
-
-                        additional_placed, still_remaining = bin_packing_with_existing(
-                            [carpet], existing_placed, sheet_size, verbose=False
-                        )
-
-                        if additional_placed:
-                            ###############################
-                            #if order_id == "ZAKAZ_row_5":
-                            #    pass
-                            ###############################
-                            # Update the layout with the additional polygon
-                            placed_layouts[layout_idx]["placed_polygons"] = (
-                                existing_placed + additional_placed
-                            )
-                            new_usage = calculate_usage_percent(
-                                placed_layouts[layout_idx]["placed_polygons"],
-                                sheet_size,
-                            )
-                            placed_layouts[layout_idx]["usage_percent"] = new_usage
-
-                            # Update orders_on_sheet set
-                            if "orders_on_sheet" not in placed_layouts[layout_idx]:
-                                placed_layouts[layout_idx]["orders_on_sheet"] = set()
-                            placed_layouts[layout_idx]["orders_on_sheet"].add(order_id)
-
-                            # Track sheet usage for this order
-                            if order_id not in order_sheet_usage:
-                                order_sheet_usage[order_id] = 0
-                            order_sheet_usage[order_id] = (
-                                1  # Single polygon order uses 1 sheet
-                            )
-
-                            filled_orders += 1
-                            placed_successfully = True
-
-                            logger.info(
-                                f"✅ ДОЗАПОЛНЕНИЕ: Заказ {order_id} размещен на лист #{layout['sheet_number']} ({current_usage:.1f}% → {new_usage:.1f}%)"
-                            )
-                            if verbose:
-                                st.success(
-                                    f"✅ Заказ {order_id} добавлен на лист #{layout['sheet_number']} ({current_usage:.1f}% → {new_usage:.1f}%)"
-                                )
-                            break
-                    except Exception as e:
-                        logger.debug(
-                            f"Не удалось добавить {order_id} на лист #{layout['sheet_number']}: {e}"
-                        )
-                        continue
-
-                if placed_successfully:
-                    # Remove this order from remaining_orders
-                    del remaining_orders[order_id]
-
-            logger.info(f"Дозаполнение завершено: {filled_orders} заказов размещено")
-            if verbose:
-                st.info(
-                    f"📊 Дозаполнение: {filled_orders} однокомпонентных заказов размещено"
-                )
-
-    remaining_polygons_list = []
-    for order_id, remaining_polygons in remaining_orders.items():
-        remaining_polygons_list.extend(remaining_polygons)
-
-    logger.info(
-        f"Проверка дозаполнения: remaining_orders={len(remaining_orders)}, remaining_polygons_list={len(remaining_polygons_list)}, placed_layouts={len(placed_layouts)}"
-    )
-
-    # НОВОЕ: Создание дополнительных листов для неразмещенных Excel полигонов
-    # Анализируем неразмещенные полигоны из remaining_polygons_list (Excel полигоны, не приоритет 2)
-    remaining_excel_polygons = [
-        p for p in remaining_polygons_list if p.priority != 2
-    ]  # Не приоритет 2
-
-    if remaining_excel_polygons and any(
-        sheet["count"] - sheet["used"] > 0 for sheet in sheet_inventory
-    ):
-        logger.info(
-            f"Создаем дополнительные листы для {len(remaining_excel_polygons)} неразмещенных Excel полигонов"
-        )
-
-        # Группируем по цветам
-        polygons_by_color = {}
-        for poly in remaining_excel_polygons:
-            color = poly.color
-            if color not in polygons_by_color:
-                polygons_by_color[color] = []
-            polygons_by_color[color].append(poly)
-
-        # Пытаемся создать листы для каждого цвета
-        additional_created = 0
-        for color, color_polygons in polygons_by_color.items():
-            # Найти доступные листы этого цвета
-            available_count = 0
-            for sheet_type in sheet_inventory:
-                if (
-                    sheet_type["color"] == color
-                    and sheet_type["used"] < sheet_type["count"]
-                ):
-                    available_count = sheet_type["count"] - sheet_type["used"]
-
-            if available_count > 0:
-                logger.info(
-                    f"Доступно {available_count} листов цвета {color} для {len(color_polygons)} полигонов"
-                )
-
-                # Пытаемся разместить полигоны на новых листах
-                try:
-                    new_layouts, still_unplaced = bin_packing_with_inventory(
-                        color_polygons,
-                        [sheet for sheet in sheet_inventory if sheet["color"] == color],
-                        verbose=False,
-                        max_sheet_range_per_order=max_sheet_range_per_order,
-                    )
-
-                    if new_layouts:
-                        # Обновляем номера листов
-                        for layout in new_layouts:
-                            sheet_counter += 1
-                            layout["sheet_number"] = sheet_counter
-
-                        placed_layouts.extend(new_layouts)
-                        additional_created += len(new_layouts)
-
-                        # Обновляем использование листов
-                        for sheet_type in sheet_inventory:
-                            if sheet_type["color"] == color:
-                                sheet_type["used"] += len(
-                                    [
-                                        layout
-                                        for layout in new_layouts
-                                        if layout.get("sheet_color") == color
-                                    ]
-                                )
-                                break
-
-                        # Убираем размещенные полигоны из remaining_polygons_list
-                        placed_count = sum(
-                            len(layout["placed_polygons"]) for layout in new_layouts
-                        )
-                        remaining_polygons_list = [
-                            p
-                            for p in remaining_polygons_list
-                            if p not in color_polygons[:placed_count]
-                        ]
-
-                        logger.info(
-                            f"Создано {len(new_layouts)} дополнительных листов цвета {color}"
-                        )
-
-                except Exception as e:
-                    logger.warning(
-                        f"Ошибка создания дополнительных листов для {color}: {e}"
-                    )
-
-        if additional_created > 0:
-            logger.info(
-                f"✅ Создано {additional_created} дополнительных листов для Excel полигонов"
-            )
-
-    if remaining_polygons_list and placed_layouts:
-        if verbose:
-            st.info(
-                f"🔄 Пытаемся дозаполнить {len(placed_layouts)} существующих листов {len(remaining_polygons_list)} оставшимися деталями"
-            )
-    else:
-        logger.info(
-            f"Дозаполнение не запущено: remaining_polygons_list={len(remaining_polygons_list)}, placed_layouts={len(placed_layouts)}"
-        )
-
-        logger.info(
-            f"Попытка дозаполнения: {len(remaining_polygons_list)} полигонов на {len(placed_layouts)} листах"
-        )
-
-        for layout_idx, layout in enumerate(placed_layouts):
-            if not remaining_polygons_list:
-                break
-
-            sheet_size = layout["sheet_size"]
-            existing_placed = layout["placed_polygons"]
-            current_usage = layout["usage_percent"]
-
-            if current_usage >= 95:  # Skip nearly full sheets
-                continue
-
-            logger.info(
-                f"Пытаемся дозаполнить лист #{layout['sheet_number']} (заполнение: {current_usage:.1f}%)"
-            )
-
-            # Try to place remaining polygons on this existing sheet
-            try:
-                additional_placed, still_remaining = bin_packing_with_existing(
-                    remaining_polygons_list, existing_placed, sheet_size, verbose=False
-                )
-
-                if additional_placed:
-                    # Update the layout with additional polygons
-                    placed_layouts[layout_idx]["placed_polygons"] = (
-                        existing_placed + additional_placed
-                    )
-                    placed_layouts[layout_idx]["usage_percent"] = (
-                        calculate_usage_percent(
-                            placed_layouts[layout_idx]["placed_polygons"], sheet_size
-                        )
-                    )
-
-                    new_usage = placed_layouts[layout_idx]["usage_percent"]
-                    logger.info(
-                        f"✅ Дозаполнен лист #{layout['sheet_number']}: +{len(additional_placed)} деталей ({current_usage:.1f}% → {new_usage:.1f}%)"
-                    )
-
+                    placed_layouts.append(new_layout)
+                    current_carpets = remaining
+                    order_sheet_numbers.append(proposed_sheet_number)
+                    
+                    logger.info(f"    Создан лист #{proposed_sheet_number}: {len(placed)} ковров")
+                    
                     if verbose:
-                        st.success(
-                            f"✅ Дозаполнен лист #{layout['sheet_number']}: +{len(additional_placed)} деталей ({current_usage:.1f}% → {new_usage:.1f}%)"
-                        )
-
-                    # Update remaining polygons list
-                    remaining_polygons_list = still_remaining
-
+                        st.success(f"✅ Лист #{proposed_sheet_number} ({sheet_type['name']}): "
+                                 f"{len(placed)} ковров заказа {order_id}")
                 else:
-                    logger.info(f"Лист #{layout['sheet_number']} нельзя дозаполнить")
-            except Exception as e:
-                logger.warning(
-                    f"Ошибка при дозаполнении листа #{layout['sheet_number']}: {e}"
-                )
+                    logger.warning(f"Не удалось разместить ковры на новом листе {color}")
+                    remaining_carpets.extend(current_carpets)
+                    sheet_type["used"] -= 1  # Rollback usage
+                    sheet_counter -= 1  # Rollback counter
+                    break
+        
+        return successfully_placed_carpets, remaining_carpets, order_sheet_numbers
 
-    # Add any remaining unplaced polygons to the unplaced list
-    all_unplaced.extend(remaining_polygons_list)
-
-    logger.info("=== ОКОНЧАНИЕ bin_packing_with_inventory ===")
-    logger.info(
-        f"ИТОГОВЫЙ РЕЗУЛЬТАТ: {len(placed_layouts)} листов использовано, {len(all_unplaced)} объектов не размещено"
-    )
-
-    logger.info("Финальное распределение по заказам:")
-    for order_id, sheets_used in order_sheet_usage.items():
-        logger.info(f"  • Заказ {order_id}: {sheets_used} листов")
-
-    if verbose:
-        st.info(
-            f"Размещение завершено: {len(placed_layouts)} листов использовано, {len(all_unplaced)} объектов не размещено"
+    # MAIN ALGORITHM: Process constrained orders first, then unconstrained
+    processed_orders = set()
+    
+    # Step 1: Sort constrained orders by carpet count (descending) to handle complex orders first
+    constrained_orders = [(oid, carpets) for oid, carpets in order_groups.items() 
+                         if is_constrained_order(oid)]
+    unconstrained_orders = [(oid, carpets) for oid, carpets in order_groups.items() 
+                           if not is_constrained_order(oid)]
+    
+    constrained_orders.sort(key=lambda x: len(x[1]), reverse=True)
+    
+    logger.info(f"Ограниченных заказов: {len(constrained_orders)}, неограниченных: {len(unconstrained_orders)}")
+    
+    # Step 2: Process constrained orders with strict sheet range adherence
+    for order_id, order_carpets in constrained_orders:
+        if order_id in processed_orders:
+            continue
+            
+        logger.info(f"\n=== ОБРАБОТКА ОГРАНИЧЕННОГО ЗАКАЗА {order_id} ===")
+        
+        # Use optimized placement with constraints
+        placed_carpets, remaining, sheet_numbers = place_order_optimized(
+            order_id, order_carpets, is_constrained=True
         )
-
-        # Show summary by orders using the tracked usage
-        if order_sheet_usage:
-            st.success("✅ Распределение по заказам:")
-            for order_id, sheet_count in order_sheet_usage.items():
-                if order_id != "unknown":  # Only show real orders
-                    status = (
-                        "✅"
-                        if sheet_count <= (max_sheet_range_per_order or float("inf"))
-                        else "❌"
-                    )
-                    st.info(f"  {status} Заказ {order_id}: {sheet_count} листов")
-
-    # PRIORITY 2 PROCESSING: Try to fit priority 2 polygons into existing sheets only
-    # Размещаем приоритет 2 В САМУЮ ПОСЛЕДНЮЮ ОЧЕРЕДЬ после всех операций
-    if priority2_carpets and placed_layouts:
-        logger.info(
-            f"=== ОБРАБОТКА ПРИОРИТЕТА 2: {len(priority2_carpets)} полигонов ==="
-        )
-        if verbose:
-            st.info(
-                f"🔄 Размещение файлов приоритета 2: {len(priority2_carpets)} файлов в существующие листы"
-            )
-
-        # Update progress for priority 2 processing
+        
+        # Add any unplaceable carpets to unplaced list
+        if remaining:
+            logger.warning(f"Заказ {order_id}: {len(remaining)} ковров не размещено")
+            all_unplaced.extend(remaining)
+        
+        if placed_carpets:
+            logger.info(f"Заказ {order_id}: {len(placed_carpets)} ковров размещено на листах {sheet_numbers}")
+        
+        processed_orders.add(order_id)
+        
+        # Update progress
         if progress_callback:
-            progress_callback(
-                98, f"Обработка файлов приоритета 2: {len(priority2_carpets)} файлов"
-            )
+            progress = 50 * len(processed_orders) // len(order_groups)
+            progress_callback(progress, f"Заказ {order_id} обработан")
+
+    # Step 3: Process unconstrained orders (can use any available sheets)
+    logger.info(f"\n=== ОБРАБОТКА НЕОГРАНИЧЕННЫХ ЗАКАЗОВ: {len(unconstrained_orders)} ===")
+    
+    for order_id, order_carpets in unconstrained_orders:
+        if order_id in processed_orders:
+            continue
+            
+        logger.info(f"Обработка неограниченного заказа {order_id}: {len(order_carpets)} ковров")
+        
+        # Use optimized placement without constraints
+        placed_carpets, remaining, sheet_numbers = place_order_optimized(
+            order_id, order_carpets, is_constrained=False
+        )
+        
+        # Add any unplaceable carpets to unplaced list
+        if remaining:
+            logger.warning(f"Заказ {order_id}: {len(remaining)} ковров не размещено")
+            all_unplaced.extend(remaining)
+            
+        if placed_carpets:
+            logger.info(f"Заказ {order_id}: {len(placed_carpets)} ковров размещено на листах {sheet_numbers}")
+        
+        processed_orders.add(order_id)
+
+    # Step 3.5: Try to place remaining unplaced carpets from constrained orders on new sheets
+    # This is for carpets that couldn't fit within the range constraint
+    unplaced_from_constrained = [c for c in all_unplaced if hasattr(c, 'order_id') and is_constrained_order(c.order_id)]
+    if unplaced_from_constrained:
+        logger.info(f"\n=== ДОПОЛНИТЕЛЬНОЕ РАЗМЕЩЕНИЕ: {len(unplaced_from_constrained)} неразмещенных ковров из ограниченных заказов ===")
+        
+        # Group by order and try to place each order separately on additional sheets
+        remaining_by_order = {}
+        for carpet in unplaced_from_constrained:
+            if carpet.order_id not in remaining_by_order:
+                remaining_by_order[carpet.order_id] = []
+            remaining_by_order[carpet.order_id].append(carpet)
+        
+        for order_id, remaining_carpets in remaining_by_order.items():
+            logger.info(f"Попытка дополнительного размещения заказа {order_id}: {len(remaining_carpets)} ковров")
+            
+            # Try to place with range constraints, but allow creating additional sheets if needed
+            # Check if this order already has some placed carpets to maintain existing range
+            existing_sheets = []
+            for layout in placed_layouts:
+                if order_id in layout.get("orders_on_sheet", []):
+                    existing_sheets.append(layout["sheet_number"])
+            
+            if existing_sheets:
+                # Order already partially placed, don't place additional carpets to avoid range violations
+                logger.info(f"Заказ {order_id} уже частично размещен на листах {existing_sheets}, пропускаем дополнительное размещение")
+                continue
+            else:
+                # Order not placed yet, try to place as constrained order
+                placed_carpets, still_remaining, sheet_numbers = place_order_optimized(
+                    order_id, remaining_carpets, is_constrained=True
+                )
+            
+            if placed_carpets:
+                logger.info(f"Дополнительно размещено {len(placed_carpets)} ковров заказа {order_id} на листах {sheet_numbers}")
+                # Remove successfully placed carpets from unplaced list
+                all_unplaced = [c for c in all_unplaced if c not in placed_carpets]
+            
+            if still_remaining:
+                logger.warning(f"Заказ {order_id}: {len(still_remaining)} ковров все еще не размещены")
+
+    # Step 4: PRIORITY 2 PROCESSING - Fill existing sheets only
+    if priority2_carpets and placed_layouts:
+        logger.info(f"\n=== ОБРАБОТКА ПРИОРИТЕТА 2: {len(priority2_carpets)} ковров ===")
+        if verbose:
+            st.info(f"🔄 Размещение файлов приоритета 2: {len(priority2_carpets)} файлов")
 
         priority2_placed = 0
-        priority2_remaining = list(priority2_carpets)
-
-        # Try to fill existing sheets with priority 2 polygons
+        
         for layout_idx, layout in enumerate(placed_layouts):
-            if not priority2_remaining:
+            if not priority2_carpets:
                 break
-
-            sheet_size = layout["sheet_size"]
-            sheet_color = layout.get(
-                "sheet_color", "серый"
-            )  # Get color directly from layout
-
-            existing_placed = layout["placed_polygons"]
-            current_usage = layout["usage_percent"]
-
+            
+            sheet_color = layout.get("sheet_color", "серый")
+            current_usage = layout.get("usage_percent", 0)
+            
             if current_usage >= 95:  # Skip nearly full sheets
                 continue
-
-            logger.info(
-                f"Пытаемся добавить приоритет 2 на лист #{layout['sheet_number']} (заполнение: {current_usage:.1f}%, цвет листа: {sheet_color})"
-            )
-
-            # Filter priority 2 polygons by color compatibility
-            compatible_priority2 = []
-            for carpet in priority2_remaining:
-                poly_color = carpet.color
-
-                # Skip detailed logging for speed
-                if poly_color == sheet_color:
-                    compatible_priority2.append(carpet)
-
-            logger.info(
-                f"Найдено {len(compatible_priority2)} совместимых полигонов приоритета 2 из {len(priority2_remaining)}"
-            )
-
+            
+            # Filter priority 2 carpets by color
+            compatible_priority2 = [c for c in priority2_carpets if c.color == sheet_color]
+            
             if not compatible_priority2:
-                logger.debug(
-                    f"Нет совместимых по цвету приоритет 2 полигонов для листа {sheet_color}"
-                )
                 continue
-
-            # Try to place compatible priority 2 polygons on this existing sheet
-            additional_placed, still_remaining = bin_packing_with_existing(
-                compatible_priority2, existing_placed, sheet_size, verbose=False
-            )
-
-            if additional_placed:
-                # Update the layout with additional polygons
-                placed_layouts[layout_idx]["placed_polygons"] = (
-                    existing_placed + additional_placed
+            
+            try:
+                additional_placed, still_remaining = bin_packing_with_existing(
+                    compatible_priority2, layout["placed_polygons"], 
+                    layout["sheet_size"], verbose=False
                 )
-                placed_layouts[layout_idx]["usage_percent"] = calculate_usage_percent(
-                    placed_layouts[layout_idx]["placed_polygons"], sheet_size
-                )
-                new_usage = placed_layouts[layout_idx]["usage_percent"]
-                priority2_placed += len(additional_placed)
-
-                logger.info(
-                    f"✅ Добавлено {len(additional_placed)} файлов приоритета 2 на лист #{layout['sheet_number']} ({current_usage:.1f}% → {new_usage:.1f}%)"
-                )
-                if verbose:
-                    st.success(
-                        f"✅ Добавлено {len(additional_placed)} файлов приоритета 2 на лист #{layout['sheet_number']}"
+                
+                if additional_placed:
+                    # Update layout
+                    placed_layouts[layout_idx]["placed_polygons"] = (
+                        layout["placed_polygons"] + additional_placed
                     )
-
-                # Remove placed polygons from priority2_remaining
-                # ИСПРАВЛЕНИЕ: точное совпадение по 3 полям для правильного удаления
-                placed_keys = set()
-                for placed_poly in additional_placed:
-                    if len(placed_poly) >= 5:
-                        # Полигон из bin_packing_with_existing: (polygon, x, y, angle, filename, color, order_id)
-                        key = (
-                            placed_poly[4],
-                            placed_poly[5],
-                            placed_poly[6],
-                        )  # filename, color, order_id
-                    else:
-                        # Обычный полигон: (polygon, filename, color, order_id)
-                        key = (placed_poly[1], placed_poly[2], placed_poly[3])
-                    placed_keys.add(key)
-
-                # Удаляем полигоны с совпадающими ключами
-                priority2_remaining = [
-                    p
-                    for p in priority2_remaining
-                    if (p.filename, p.color, p.order_id) not in placed_keys
-                ]
-
-        logger.info(
-            f"Приоритет 2: размещено {priority2_placed}, осталось {len(priority2_remaining)}"
-        )
-        if priority2_remaining:
-            logger.info(
-                f"⚠️ {len(priority2_remaining)} файлов приоритета 2 не размещены (новые листы не создаются)"
-            )
-            if verbose:
-                st.warning(
-                    f"⚠️ {len(priority2_remaining)} файлов приоритета 2 не удалось разместить в существующие листы"
-                )
-
-        # Add remaining priority 2 polygons to unplaced list
-        all_unplaced.extend(priority2_remaining)
-
-    elif priority2_carpets and not placed_layouts:
-        logger.warning(
-            f"Нет существующих листов для размещения {len(priority2_carpets)} файлов приоритета 2"
-        )
-        if verbose:
-            st.warning(
-                f"⚠️ Нет размещенных листов для {len(priority2_carpets)} файлов приоритета 2"
-            )
-        # Add all priority 2 polygons to unplaced list since no sheets were created
+                    placed_layouts[layout_idx]["usage_percent"] = calculate_usage_percent(
+                        placed_layouts[layout_idx]["placed_polygons"], layout["sheet_size"]
+                    )
+                    
+                    priority2_placed += len(additional_placed)
+                    
+                    # Remove placed carpets from priority2_carpets
+                    placed_keys = set()
+                    for placed_poly in additional_placed:
+                        if len(placed_poly) >= 5:
+                            key = (placed_poly[4], placed_poly[5], placed_poly[6])  # filename, color, order_id
+                        else:
+                            key = (placed_poly[1], placed_poly[2], placed_poly[3])
+                        placed_keys.add(key)
+                    
+                    priority2_carpets = [
+                        c for c in priority2_carpets 
+                        if (c.filename, c.color, c.order_id) not in placed_keys
+                    ]
+                    
+                    logger.info(f"  Добавлено {len(additional_placed)} приоритет 2 на лист #{layout['sheet_number']}")
+                    
+            except Exception as e:
+                logger.debug(f"Ошибка размещения приоритета 2: {e}")
+                continue
+        
+        # Add remaining priority 2 to unplaced
         all_unplaced.extend(priority2_carpets)
-    elif priority2_carpets and not order_groups:
-        # Special case: only priority 2 polygons exist, no priority 1 files
-        logger.info(
-            f"Только priority 2 файлы без существующих листов: {len(priority2_carpets)} файлов не размещаются"
-        )
-        if verbose:
-            st.warning(
-                f"⚠️ Только файлы приоритета 2: {len(priority2_carpets)} файлов не размещаются (новые листы не создаются)"
-            )
-        all_unplaced.extend(priority2_carpets)
+        
+        if priority2_carpets:
+            logger.info(f"  Приоритет 2: размещено {priority2_placed}, не размещено {len(priority2_carpets)}")
 
-    # ИСПРАВЛЕНИЕ: Перенумеровываем листы для группировки по цветам
-    # Листы должны идти подряд по цветам: 1-N чёрные, N+1-M серые, M+1-K остальные
+    # Step 5: Renumber sheets by color groups (black, then gray, then others)
     if placed_layouts:
-        logger.info(
-            f"Перенумеровываем {len(placed_layouts)} листов для группировки по цветам"
-        )
-
-        # Группируем листы по цветам
+        logger.info(f"Перенумеровываем {len(placed_layouts)} листов по цветовым группам")
+        
         sheets_by_color = {"чёрный": [], "серый": [], "other": []}
-
+        
         for layout in placed_layouts:
-            sheet_color = layout.get("sheet_color", "серый")
-            if sheet_color == "чёрный":
+            color = layout.get("sheet_color", "серый")
+            if color == "чёрный":
                 sheets_by_color["чёрный"].append(layout)
-            elif sheet_color == "серый":
+            elif color == "серый":
                 sheets_by_color["серый"].append(layout)
             else:
                 sheets_by_color["other"].append(layout)
-
-        # Перенумеровываем листы по группам
+        
+        # Renumber by groups
         new_sheet_number = 1
         renumbered_layouts = []
-
-        # Сначала черные листы
+        
+        # Black sheets first
         for layout in sheets_by_color["чёрный"]:
             layout["sheet_number"] = new_sheet_number
             renumbered_layouts.append(layout)
             new_sheet_number += 1
-
-        # Потом серые листы
+        
+        # Gray sheets second
         for layout in sheets_by_color["серый"]:
             layout["sheet_number"] = new_sheet_number
             renumbered_layouts.append(layout)
             new_sheet_number += 1
-
+        
+        # Other colors last
+        for layout in sheets_by_color["other"]:
+            layout["sheet_number"] = new_sheet_number
+            renumbered_layouts.append(layout)
+            new_sheet_number += 1
+        
         placed_layouts = renumbered_layouts
-        logger.info(
-            f"Листы перенумерованы: чёрных {len(sheets_by_color['чёрный'])}, серых {len(sheets_by_color['серый'])}, других {len(sheets_by_color['other'])}"
-        )
+        
+        logger.info(f"Перенумеровано: {len(sheets_by_color['чёрный'])} чёрных, "
+                   f"{len(sheets_by_color['серый'])} серых, {len(sheets_by_color['other'])} других")
 
-    # Final progress update
+    logger.info(f"=== ФИНАЛЬНЫЙ РЕЗУЛЬТАТ ===")
+    logger.info(f"Листов создано: {len(placed_layouts)}, не размещено: {len(all_unplaced)}")
+
+    if verbose:
+        st.info(f"Размещение завершено: {len(placed_layouts)} листов, {len(all_unplaced)} не размещено")
+
     if progress_callback:
         progress_callback(100, f"Завершено: {len(placed_layouts)} листов создано")
 

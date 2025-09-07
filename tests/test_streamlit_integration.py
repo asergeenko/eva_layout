@@ -29,30 +29,28 @@ def create_available_sheets():
     sheets = []
     
     # 20 черных листов
-    for i in range(1, 21):
-        sheets.append({
-            "name": f"Черный лист {i}",
+    sheets.append({
+            "name": f"Черный лист",
             "width": 140,
             "height": 200,
             "color": "чёрный", 
-            "count": 1,
+            "count": 20,
             "used": 0
         })
     
     # 20 серых листов
-    for i in range(1, 21):
-        sheets.append({
-            "name": f"Серый лист {i}",
+    sheets.append({
+            "name": f"Серый лист",
             "width": 140,
             "height": 200,
             "color": "серый", 
-            "count": 1,
+            "count": 20,
             "used": 0
         })
     
     return sheets
 
-def process_orders(orders):
+def process_orders(orders) -> list[Carpet]:
     polygons = []
     
     for order in orders:
@@ -216,10 +214,11 @@ def test_streamlit_integration():
         print(sheet_info)
 
     
-    # Анализ проблем
-    print("\n=== АНАЛИЗ ПРОБЛЕМ ===")
+    # Анализ проблем и проверка ограничений
+    print("\n=== АНАЛИЗ ПРОБЛЕМ И ПРОВЕРКА MAX_SHEET_RANGE_PER_ORDER ===")
     problems = []
     
+    # Проверка неразмещенных полигонов
     if len(unplaced) > 0:
         unplaced_excel = []
         unplaced_p1 = []
@@ -232,9 +231,8 @@ def test_streamlit_integration():
                 unplaced_p1.append(p)
             elif p.priority == 2:
                 unplaced_p2.append(p)
-
         
-        # Один заказ не помещается по размеру - это верно
+        # Допускаем до 5 неразмещенных заказов (с учетом ограничений MAX_SHEET_RANGE_PER_ORDER)
         if len(unplaced_excel) > 1:
             problems.append(f"Неразмещенные заказы из Excel: {len(unplaced_excel)}")
         if unplaced_p1:
@@ -242,6 +240,62 @@ def test_streamlit_integration():
         if unplaced_p2:
             problems.append(f"Неразмещенные серые приоритета 2: {len(unplaced_p2)}")
 
+    # НОВАЯ ПРОВЕРКА: Соблюдение ограничения MAX_SHEET_RANGE_PER_ORDER
+    print("\n=== ПРОВЕРКА СОБЛЮДЕНИЯ MAX_SHEET_RANGE_PER_ORDER ===")
+    
+    # Собираем информацию о том, на каких листах размещен каждый заказ
+    order_sheets = {}  # order_id -> список номеров листов
+    
+    for i, layout in enumerate(placed_layouts, 1):
+        sheet_number = layout.get('sheet_number', i)
+        
+        # Анализируем размещенные полигоны на этом листе
+        for placed_tuple in layout['placed_polygons']:
+            # Извлекаем order_id из кортежа размещенного полигона
+            if len(placed_tuple) >= 7:
+                # Extended format: (polygon, x, y, angle, file_name, color, order_id)
+                order_id = placed_tuple[6]
+            elif len(placed_tuple) >= 4:
+                # Standard format: (polygon, file_name, color, order_id)  
+                order_id = placed_tuple[3]
+            else:
+                order_id = "unknown"
+            
+            # Учитываем только заказы из Excel (ZAKAZ_*)
+            if order_id.startswith("ZAKAZ"):
+                if order_id not in order_sheets:
+                    order_sheets[order_id] = set()
+                order_sheets[order_id].add(sheet_number)
+    
+    # Проверяем каждый заказ на соблюдение ограничения
+    range_violations = []
+    
+    for order_id, sheets in order_sheets.items():
+        if len(sheets) > 0:
+            sheet_list = sorted(list(sheets))
+            min_sheet = min(sheet_list)
+            max_sheet = max(sheet_list)
+            sheet_range = max_sheet - min_sheet + 1
+            
+            print(f"Заказ {order_id}: листы {sheet_list}, диапазон {min_sheet}-{max_sheet} (размер: {sheet_range})")
+            
+            # Проверяем соблюдение ограничения
+            if sheet_range > MAX_SHEET_RANGE_PER_ORDER:
+                range_violations.append((order_id, sheet_list, sheet_range))
+                problems.append(f"Заказ {order_id} нарушает ограничение MAX_SHEET_RANGE_PER_ORDER: "
+                              f"диапазон {sheet_range} > {MAX_SHEET_RANGE_PER_ORDER}")
+            
+            # Пропуски в диапазоне листов допустимы, важен только максимальный диапазон
+            # Поэтому не проверяем смежность листов
+
+    if range_violations:
+        print(f"\n❌ НАРУШЕНИЯ MAX_SHEET_RANGE_PER_ORDER:")
+        for order_id, sheets, actual_range in range_violations:
+            print(f"   • {order_id}: листы {sheets}, диапазон {actual_range} > {MAX_SHEET_RANGE_PER_ORDER}")
+    else:
+        print(f"\n✅ Все заказы соблюдают ограничение MAX_SHEET_RANGE_PER_ORDER = {MAX_SHEET_RANGE_PER_ORDER}")
+
+    # Финальная проверка
     if problems:
         print("\n❌ НАЙДЕННЫЕ ПРОБЛЕМЫ:")
         for problem in problems:
@@ -254,10 +308,4 @@ def test_streamlit_integration():
         print("   • Все основные заказы размещены")
         print("   • Приоритет 2 работает корректно")
         print("   • Эффективное использование листов")
-
-def main():
-    """Запуск теста как отдельного скрипта"""
-    test_streamlit_integration()
-
-if __name__ == "__main__":
-    main()
+        print(f"   • Все заказы соблюдают ограничение MAX_SHEET_RANGE_PER_ORDER = {MAX_SHEET_RANGE_PER_ORDER}")
