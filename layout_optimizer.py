@@ -1703,11 +1703,17 @@ def bin_packing_with_inventory(
         total_available = sum(
             sheet["count"] - sheet["used"] for sheet in sheet_inventory
         )
-        st.info(
-            f"Начинаем размещение {len(carpets)} полигонов на {total_available} доступных листах"
-        )
-        if max_sheets_per_order:
-            st.info(f"Ограничение: максимум {max_sheets_per_order} листов на заказ")
+        try:
+            st.info(
+                f"Начинаем размещение {len(carpets)} полигонов на {total_available} доступных листах"
+            )
+            if max_sheets_per_order:
+                st.info(f"Ограничение: максимум {max_sheets_per_order} листов на заказ")
+        except (NameError, AttributeError):
+            # st не доступен (запуск без Streamlit)
+            logger.info(f"Начинаем размещение {len(carpets)} полигонов на {total_available} доступных листах")
+            if max_sheets_per_order:
+                logger.info(f"Ограничение: максимум {max_sheets_per_order} листов на заказ")
 
     # Group polygons by order_id and separate by priority
     logger.info("Группировка полигонов по order_id и приоритету...")
@@ -1977,12 +1983,18 @@ def bin_packing_with_inventory(
                                     
                                     # Check if adding this polygon to current sheet would violate constraint
                                     test_sheets = order_sheets | {current_sheet_num}
-                                    if len(test_sheets) > 1:
+                                    
+                                    # ALWAYS check the range constraint - even for single sheets
+                                    if test_sheets:  # Must have at least one sheet
                                         min_sheet = min(test_sheets)
                                         max_sheet = max(test_sheets)
                                         sheet_range = max_sheet - min_sheet + 1
                                         
                                         if sheet_range > max_sheets_per_order:
+                                            logger.warning(
+                                                f"🚫 ДОЗАПОЛНЕНИЕ БЛОКИРОВАНО: заказ {order_id} заблокирован для листа #{current_sheet_num}: "
+                                                f"диапазон {min_sheet}-{max_sheet} ({sheet_range} > {max_sheets_per_order})"
+                                            )
                                             continue  # Skip this polygon
                                 
                                 filtered_polygons.append(poly)
@@ -2500,14 +2512,16 @@ def bin_packing_with_inventory(
                             
                             # Check if adding this polygon to current sheet would violate constraint
                             test_sheets = order_sheets | {current_sheet_num}
-                            if len(test_sheets) > 1:
+                            
+                            # ALWAYS check the range constraint - even for single sheets
+                            if test_sheets:  # Must have at least one sheet
                                 min_sheet = min(test_sheets)
                                 max_sheet = max(test_sheets)
                                 sheet_range = max_sheet - min_sheet + 1
                                 
                                 if sheet_range > max_sheets_per_order:
-                                    logger.debug(
-                                        f"🚫 Заказ {order_id} заблокирован для дозаполнения листа #{current_sheet_num}: "
+                                    logger.warning(
+                                        f"🚫 ОДНОКОМПОНЕНТНОЕ ДОЗАПОЛНЕНИЕ БЛОКИРОВАНО: заказ {order_id} заблокирован для листа #{current_sheet_num}: "
                                         f"диапазон {min_sheet}-{max_sheet} ({sheet_range} > {max_sheets_per_order})"
                                     )
                                     continue  # Skip this sheet
@@ -2573,99 +2587,8 @@ def bin_packing_with_inventory(
     logger.info(
         f"Проверка дозаполнения: remaining_orders={len(remaining_orders)}, remaining_polygons_list={len(remaining_polygons_list)}, placed_layouts={len(placed_layouts)}"
     )
-
-    # НОВОЕ: Создание дополнительных листов для неразмещенных Excel полигонов
-    # Анализируем неразмещенные полигоны из remaining_polygons_list (Excel полигоны, не приоритет 2)
-    remaining_excel_polygons = [
-        p for p in remaining_polygons_list if p.priority != 2
-    ]  # Не приоритет 2
-
-    if remaining_excel_polygons and any(
-        sheet["count"] - sheet["used"] > 0 for sheet in sheet_inventory
-    ):
-        logger.info(
-            f"Создаем дополнительные листы для {len(remaining_excel_polygons)} неразмещенных Excel полигонов"
-        )
-
-        # Группируем по цветам
-        polygons_by_color = {}
-        for poly in remaining_excel_polygons:
-            color = poly.color
-            if color not in polygons_by_color:
-                polygons_by_color[color] = []
-            polygons_by_color[color].append(poly)
-
-        # Пытаемся создать листы для каждого цвета
-        additional_created = 0
-        for color, color_polygons in polygons_by_color.items():
-            # Найти доступные листы этого цвета
-            available_count = 0
-            for sheet_type in sheet_inventory:
-                if (
-                    sheet_type["color"] == color
-                    and sheet_type["used"] < sheet_type["count"]
-                ):
-                    available_count = sheet_type["count"] - sheet_type["used"]
-
-            if available_count > 0:
-                logger.info(
-                    f"Доступно {available_count} листов цвета {color} для {len(color_polygons)} полигонов"
-                )
-
-                # Пытаемся разместить полигоны на новых листах
-                try:
-                    new_layouts, still_unplaced = bin_packing_with_inventory(
-                        color_polygons,
-                        [sheet for sheet in sheet_inventory if sheet["color"] == color],
-                        verbose=False,
-                        max_sheets_per_order=max_sheets_per_order,
-                    )
-
-                    if new_layouts:
-                        # Обновляем номера листов
-                        for layout in new_layouts:
-                            sheet_counter += 1
-                            layout["sheet_number"] = sheet_counter
-
-                        placed_layouts.extend(new_layouts)
-                        additional_created += len(new_layouts)
-
-                        # Обновляем использование листов
-                        for sheet_type in sheet_inventory:
-                            if sheet_type["color"] == color:
-                                sheet_type["used"] += len(
-                                    [
-                                        layout
-                                        for layout in new_layouts
-                                        if layout.get("sheet_color") == color
-                                    ]
-                                )
-                                break
-
-                        # Убираем размещенные полигоны из remaining_polygons_list
-                        placed_count = sum(
-                            len(layout["placed_polygons"]) for layout in new_layouts
-                        )
-                        remaining_polygons_list = [
-                            p
-                            for p in remaining_polygons_list
-                            if p not in color_polygons[:placed_count]
-                        ]
-
-                        logger.info(
-                            f"Создано {len(new_layouts)} дополнительных листов цвета {color}"
-                        )
-
-                except Exception as e:
-                    logger.warning(
-                        f"Ошибка создания дополнительных листов для {color}: {e}"
-                    )
-
-        if additional_created > 0:
-            logger.info(
-                f"✅ Создано {additional_created} дополнительных листов для Excel полигонов"
-            )
-
+    
+    # Дозаполнение с remaining_polygons_list
     if remaining_polygons_list and placed_layouts:
         if verbose:
             st.info(
@@ -2958,6 +2881,164 @@ def bin_packing_with_inventory(
         logger.info(
             f"Листы перенумерованы: чёрных {len(sheets_by_color['чёрный'])}, серых {len(sheets_by_color['серый'])}, других {len(sheets_by_color['other'])}"
         )
+
+    # НОВОЕ: Создание дополнительных листов для неразмещенных Excel полигонов
+    # Анализируем неразмещенные полигоны (не приоритет 2)
+    excel_unplaced = [
+        p for p in all_unplaced if not (hasattr(p, 'priority') and p.priority == 2) 
+        and not (hasattr(p, 'order_id') and str(p.order_id).startswith('PRIORITY2_'))
+    ]
+    
+    if excel_unplaced and any(sheet["count"] - sheet["used"] > 0 for sheet in sheet_inventory):
+        logger.info(f"🔧 Создаем дополнительные листы для {len(excel_unplaced)} неразмещенных Excel полигонов")
+        
+        # ОТЛАДКА: Показать неразмещенные полигоны по заказам
+        unplaced_by_order = {}
+        for poly in excel_unplaced:
+            order_id = getattr(poly, 'order_id', 'unknown')
+            if order_id not in unplaced_by_order:
+                unplaced_by_order[order_id] = []
+            unplaced_by_order[order_id].append(poly)
+        
+        for order_id, polys in unplaced_by_order.items():
+            logger.info(f"  ОТЛАДКА: {order_id} имеет {len(polys)} неразмещенных полигонов")
+        
+        # Группируем по цветам
+        polygons_by_color = {}
+        for poly in excel_unplaced:
+            color = getattr(poly, 'color', 'unknown')
+            if color not in polygons_by_color:
+                polygons_by_color[color] = []
+            polygons_by_color[color].append(poly)
+        
+        # Создаем листы для каждого цвета
+        successfully_placed = []
+        additional_layouts = []
+        next_sheet_number = max(layout["sheet_number"] for layout in placed_layouts) + 1 if placed_layouts else 1
+        
+        for color, color_polygons in polygons_by_color.items():
+            logger.info(f"Обрабатываем {len(color_polygons)} полигонов цвета {color}")
+            
+            # Найти доступные листы этого цвета - ищем любой неиспользованный лист
+            def find_available_sheet_of_color(color):
+                for sheet_type in sheet_inventory:
+                    if sheet_type["color"] == color and sheet_type["used"] < sheet_type["count"]:
+                        return sheet_type
+                return None
+            
+            available_sheet_type = find_available_sheet_of_color(color)
+            
+            if not available_sheet_type:
+                logger.warning(f"Нет доступных листов цвета {color}")
+                continue
+            
+            total_sheets_of_color = sum(s["count"] for s in sheet_inventory if s["color"] == color)
+            used_sheets_of_color = sum(s["used"] for s in sheet_inventory if s["color"] == color)
+            logger.info(f"  Доступные листы {color}: {used_sheets_of_color}/{total_sheets_of_color} использовано")
+                
+            sheet_size = (available_sheet_type["width"], available_sheet_type["height"])  # Все листы одинакового размера
+            
+            for poly in color_polygons:
+                order_id = getattr(poly, 'order_id', None)
+                filename = getattr(poly, 'filename', 'unknown')
+                logger.info(f"  ОТЛАДКА: Пытаемся разместить {filename} из заказа {order_id}")
+                
+                # Проверяем ограничение MAX_SHEETS_PER_ORDER перед размещением
+                can_place = True
+                tentative_sheet_num = None  # Инициализируем переменную
+                
+                if max_sheets_per_order and order_id and str(order_id).startswith("ZAKAZ_"):
+                    # Найдем все листы, где уже размещен этот заказ
+                    order_sheets = set()
+                    for layout in placed_layouts + additional_layouts:
+                        for existing_poly in layout.get('placed_polygons', []):
+                            existing_order_id = None
+                            if len(existing_poly) >= 7:
+                                existing_order_id = existing_poly[6]
+                            elif len(existing_poly) >= 4:
+                                existing_order_id = existing_poly[3]
+                            
+                            if str(existing_order_id) == str(order_id):
+                                order_sheets.add(layout.get('sheet_number', 0))
+                    
+                    # Проверяем, можем ли создать новый лист для этого заказа
+                    if order_sheets:
+                        # ИСПРАВЛЕННАЯ ЛОГИКА: Считаем количество листов, а не диапазон номеров
+                        current_sheet_count = len(order_sheets)
+                        new_sheet_count = current_sheet_count + 1
+                        
+                        logger.info(f"  ОТЛАДКА: {order_id} на {current_sheet_count} листах {sorted(order_sheets)}, станет на {new_sheet_count} листах")
+                        
+                        if new_sheet_count > max_sheets_per_order:
+                            logger.warning(
+                                f"🚫 ДОПОЛНИТЕЛЬНЫЙ ЛИСТ ЗАБЛОКИРОВАН: заказ {order_id} не может быть размещен: "
+                                f"будет использовать {new_sheet_count} листов > {max_sheets_per_order}"
+                            )
+                            can_place = False
+                        else:
+                            # Используем инкрементальный номер листа
+                            tentative_sheet_num = next_sheet_number
+                            logger.info(f"  ОТЛАДКА: {order_id} разрешен, создаем лист #{tentative_sheet_num}")
+                    else:
+                        # Заказ еще не имеет размещенных листов - можем создать первый лист
+                        tentative_sheet_num = next_sheet_number
+                        logger.info(f"  ОТЛАДКА: {order_id} новый заказ, создаем первый лист #{tentative_sheet_num}")
+                
+                # Если tentative_sheet_num все еще None (для не-ZAKAZ заказов), используем обычную логику
+                if tentative_sheet_num is None:
+                    used_sheet_numbers = set(layout["sheet_number"] for layout in placed_layouts + additional_layouts)
+                    tentative_sheet_num = max(used_sheet_numbers) + 1 if used_sheet_numbers else 1
+                
+                # Ищем доступный лист для каждого полигона индивидуально
+                current_available_sheet = find_available_sheet_of_color(color)
+                available_sheets_count = sum(1 for s in sheet_inventory if s["color"] == color and s["used"] < s["count"])
+                
+                logger.info(f"    ОТЛАДКА: {filename} can_place={can_place}, available_sheets={available_sheets_count}")
+                
+                if can_place and current_available_sheet:
+                    # Размещаем полигон на новом листе
+                    try:
+                        placed_polys, _ = bin_packing([poly], sheet_size, verbose=False)
+                        logger.info(f"    ОТЛАДКА: bin_packing результат для {filename}: {len(placed_polys) if placed_polys else 0} полигонов")
+                        
+                        if placed_polys:
+                            # Используем номер, рассчитанный в логике проверки ограничений
+                            sheet_num = tentative_sheet_num
+                            current_available_sheet["used"] += 1
+                            
+                            new_layout = {
+                                "sheet_number": sheet_num,
+                                "sheet_type": current_available_sheet["name"],
+                                "sheet_color": color,
+                                "sheet_size": sheet_size,
+                                "placed_polygons": placed_polys,
+                                "usage_percent": calculate_usage_percent(placed_polys, sheet_size),
+                                "orders_on_sheet": [order_id] if order_id else [],
+                            }
+                            
+                            additional_layouts.append(new_layout)
+                            successfully_placed.append(poly)
+                            
+                            # Инкрементируем счетчик для следующего листа
+                            next_sheet_number += 1
+                            
+                            logger.info(f"✅ Создан дополнительный лист #{sheet_num} для заказа {order_id} ({color})")
+                        else:
+                            logger.warning(f"Не удалось разместить полигон {getattr(poly, 'filename', 'unknown')} на новом листе")
+                            
+                    except Exception as e:
+                        logger.warning(f"Ошибка размещения полигона {getattr(poly, 'filename', 'unknown')}: {e}")
+                else:
+                    if not can_place:
+                        logger.debug(f"Полигон {getattr(poly, 'filename', 'unknown')} заблокирован ограничением MAX_SHEETS_PER_ORDER")
+                    else:
+                        logger.debug(f"Нет доступных листов цвета {color}")
+        
+        # Добавляем новые листы и убираем размещенные полигоны из unplaced
+        if additional_layouts:
+            placed_layouts.extend(additional_layouts)
+            all_unplaced = [p for p in all_unplaced if p not in successfully_placed]
+            logger.info(f"✅ Создано {len(additional_layouts)} дополнительных листов, размещено {len(successfully_placed)} Excel полигонов")
 
     # Final progress update
     if progress_callback:

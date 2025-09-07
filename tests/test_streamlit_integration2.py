@@ -193,7 +193,7 @@ def test_streamlit_integration():
     placed_layouts, unplaced = bin_packing_with_inventory(
         all_polygons,
         available_sheets,
-        verbose=True,
+        verbose=False,
         max_sheets_per_order=MAX_SHEETS_PER_ORDER,
     )
     
