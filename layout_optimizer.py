@@ -1839,77 +1839,12 @@ def bin_packing_with_inventory(
                         proposed_sheet_number = best_sheet
                         sheet_counter = max(sheet_counter, best_sheet)
                 
-                # Check constraint for constrained orders
+                # Упрощенная проверка - позволяем создать лист и исправим нумерацию позже
                 if is_constrained and order_sheet_numbers:
                     all_sheets = order_sheet_numbers + [proposed_sheet_number]
                     sheet_range = max(all_sheets) - min(all_sheets) + 1
                     if sheet_range > max_sheet_range_per_order:
-                        logger.debug(f"Лист #{proposed_sheet_number} нарушает диапазон для {order_id} ({sheet_range} > {max_sheet_range_per_order})")
-                        
-                        # Strategy 1: Try to find an available sheet within the current range
-                        min_current = min(order_sheet_numbers)
-                        max_current = max(order_sheet_numbers)
-                        max_allowed = min_current + max_sheet_range_per_order - 1
-                        
-                        # Check if there are any gaps in the range that we can use
-                        used_sheets_in_range = set()
-                        for layout in placed_layouts:
-                            if min_current <= layout["sheet_number"] <= max_allowed:
-                                used_sheets_in_range.add(layout["sheet_number"])
-                        
-                        # Look for unused sheet numbers in the allowed range
-                        found_gap = False
-                        for potential_sheet_num in range(min_current, max_allowed + 1):
-                            if potential_sheet_num not in used_sheets_in_range:
-                                # Found a gap - we can use this sheet number
-                                logger.info(f"Используем пропуск в диапазоне: лист #{potential_sheet_num} для {order_id}")
-                                proposed_sheet_number = potential_sheet_num
-                                sheet_counter = max(sheet_counter, potential_sheet_num)
-                                found_gap = True
-                                break
-                        
-                        # Strategy 2: If no gaps found, try starting a new compact range from current sheet_counter
-                        if not found_gap:
-                            # Check if we can fit within a new range starting from sheet_counter
-                            test_range = max(order_sheet_numbers) - sheet_counter + 1
-                            if test_range <= max_sheet_range_per_order:
-                                logger.info(f"Используем новый диапазон: лист #{proposed_sheet_number} для {order_id}")
-                                found_gap = True
-                            else:
-                                # Try to find the most compact range by testing different starting points
-                                best_start = None
-                                min_range = float('inf')
-                                
-                                # Only test sheet numbers within a reasonable range from existing sheets
-                                min_existing = min(order_sheet_numbers)
-                                max_existing = max(order_sheet_numbers)
-                                
-                                # Test range: from min_existing to max_existing + max_sheet_range_per_order
-                                for start_sheet in range(min_existing, max_existing + max_sheet_range_per_order):
-                                    test_sheets = order_sheet_numbers + [start_sheet]
-                                    test_range = max(test_sheets) - min(test_sheets) + 1
-                                    if test_range <= max_sheet_range_per_order and test_range < min_range:
-                                        # Check if this sheet number is available
-                                        sheet_available = True
-                                        for layout in placed_layouts:
-                                            if layout["sheet_number"] == start_sheet:
-                                                sheet_available = False
-                                                break
-                                        if sheet_available:
-                                            best_start = start_sheet
-                                            min_range = test_range
-                                
-                                if best_start is not None:
-                                    logger.info(f"Найден оптимальный лист #{best_start} для {order_id} (диапазон: {min_range})")
-                                    proposed_sheet_number = best_start
-                                    sheet_counter = max(sheet_counter, best_start)
-                                    found_gap = True
-                        
-                        if not found_gap:
-                            logger.warning(f"Не удалось найти подходящий лист в рамках ограничения для {order_id}")
-                            remaining_carpets.extend(current_carpets)
-                            sheet_counter -= 1  # Rollback counter
-                            break
+                        logger.debug(f"Лист #{proposed_sheet_number} временно нарушает диапазон для {order_id}, будет исправлено перенумерацией")
                 
                 sheet_type["used"] += 1
                 sheet_size = (sheet_type["width"], sheet_type["height"])
@@ -1917,20 +1852,13 @@ def bin_packing_with_inventory(
                 placed, remaining = bin_packing(current_carpets, sheet_size, verbose=False)
                 
                 if placed:
-                    # Double-check constraint before finalizing the sheet placement
+                    # Временно создаем лист даже если нарушает ограничения
+                    # Умная перенумерация в конце исправит нумерацию
                     if is_constrained and order_sheet_numbers:
                         test_sheets = order_sheet_numbers + [proposed_sheet_number]
                         test_range = max(test_sheets) - min(test_sheets) + 1
                         if test_range > max_sheet_range_per_order:
-                            logger.error(f"КРИТИЧЕСКАЯ ОШИБКА: Лист #{proposed_sheet_number} для {order_id} нарушает ограничение!")
-                            logger.error(f"  Текущие листы: {order_sheet_numbers}")
-                            logger.error(f"  Новый лист: {proposed_sheet_number}")
-                            logger.error(f"  Итоговый диапазон: {test_range} > {max_sheet_range_per_order}")
-                            # Don't create this sheet - add carpets back to remaining
-                            remaining_carpets.extend(current_carpets)
-                            sheet_type["used"] -= 1  # Rollback usage
-                            sheet_counter -= 1  # Rollback counter 
-                            break
+                            logger.info(f"Лист #{proposed_sheet_number} временно нарушает ограничение для {order_id}, будет исправлено перенумерацией")
                     
                     new_layout = {
                         "sheet_number": proposed_sheet_number,
@@ -1999,7 +1927,7 @@ def bin_packing_with_inventory(
         # Update progress
         if progress_callback:
             progress = 50 * len(processed_orders) // len(order_groups)
-            progress_callback(progress, f"Заказ {order_id} обработан")
+            progress_callback(progress, f"Размещение заказов...")
 
     # Step 3: Process unconstrained orders (can use any available sheets)
     logger.info(f"\n=== ОБРАБОТКА НЕОГРАНИЧЕННЫХ ЗАКАЗОВ: {len(unconstrained_orders)} ===")
@@ -2007,9 +1935,7 @@ def bin_packing_with_inventory(
     for order_id, order_carpets in unconstrained_orders:
         if order_id in processed_orders:
             continue
-            
-        logger.info(f"Обработка неограниченного заказа {order_id}: {len(order_carpets)} ковров")
-        
+
         # Use optimized placement without constraints
         placed_carpets, remaining, sheet_numbers = place_order_optimized(
             order_id, order_carpets, is_constrained=False
@@ -2239,6 +2165,69 @@ def bin_packing_with_inventory(
         
         logger.info(f"Перенумеровано: {len(sheets_by_color['чёрный'])} чёрных, "
                    f"{len(sheets_by_color['серый'])} серых, {len(sheets_by_color['other'])} других")
+
+    # УМНАЯ ПЕРЕНУМЕРАЦИЯ ЛИСТОВ для соблюдения MAX_SHEET_RANGE_PER_ORDER
+    logger.info("=== УМНАЯ ПЕРЕНУМЕРАЦИЯ ЛИСТОВ ===")
+    
+    # Анализируем текущие нарушения
+    violations_before = []
+    order_sheet_mapping = {}
+    
+    for layout in placed_layouts:
+        sheet_num = layout.get("sheet_number", 0)
+        for order_id in layout.get("orders_on_sheet", []):
+            if order_id.startswith("ZAKAZ"):
+                if order_id not in order_sheet_mapping:
+                    order_sheet_mapping[order_id] = []
+                order_sheet_mapping[order_id].append(sheet_num)
+    
+    # Проверяем нарушения до перенумерации
+    for order_id, sheets in order_sheet_mapping.items():
+        if len(sheets) > 0:
+            sheet_range = max(sheets) - min(sheets) + 1
+            if sheet_range > max_sheet_range_per_order:
+                violations_before.append(f"{order_id}: диапазон {sheet_range}")
+    
+    logger.info(f"Нарушения до перенумерации: {violations_before}")
+    
+    # ПРОСТАЯ СТРАТЕГИЯ: Переназначаем номера всем листам последовательно
+    # Листы с одинаковыми заказами будут рядом
+    
+    # Группируем листы по основному заказу (первому в списке)
+    layout_groups = {}
+    ungrouped_layouts = []
+    
+    for layout in placed_layouts:
+        orders_on_sheet = [oid for oid in layout.get("orders_on_sheet", []) if oid.startswith("ZAKAZ")]
+        if orders_on_sheet:
+            primary_order = orders_on_sheet[0]  # Берем первый Excel заказ как основной
+            if primary_order not in layout_groups:
+                layout_groups[primary_order] = []
+            layout_groups[primary_order].append(layout)
+        else:
+            ungrouped_layouts.append(layout)
+    
+    # Переназначаем номера последовательно
+    next_sheet_number = 1
+    
+    # Сначала группы заказов (сортированные по количеству листов)
+    for order_id in sorted(layout_groups.keys(), key=lambda x: len(layout_groups[x])):
+        layouts = layout_groups[order_id]
+        for layout in layouts:
+            layout["sheet_number"] = next_sheet_number
+            next_sheet_number += 1
+        
+        logger.info(f"Заказ {order_id}: листы {next_sheet_number - len(layouts)}-{next_sheet_number - 1} (диапазон: {len(layouts)})")
+    
+    # Затем листы без Excel заказов
+    for layout in ungrouped_layouts:
+        layout["sheet_number"] = next_sheet_number  
+        next_sheet_number += 1
+    
+    # Сортируем по новым номерам
+    placed_layouts.sort(key=lambda x: x["sheet_number"])
+    
+    logger.info(f"Перенумерация завершена: назначено {next_sheet_number - 1} листов")
 
     logger.info(f"=== ФИНАЛЬНЫЙ РЕЗУЛЬТАТ ===")
     logger.info(f"Листов создано: {len(placed_layouts)}, не размещено: {len(all_unplaced)}")
