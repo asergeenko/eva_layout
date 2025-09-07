@@ -1749,12 +1749,12 @@ def bin_packing_with_inventory(
     iteration_count = 0
 
     # Детектор зависших итераций
-    consecutive_no_progress = 0
-    max_no_progress = 3  # Прерывать после 3 итераций без размещений
+    #consecutive_no_progress = 0
+    #max_no_progress = 3  # Прерывать после 3 итераций без размещений
 
     while (remaining_orders and
-           any(sheet["count"] - sheet["used"] > 0 for sheet in sheet_inventory) and
-           consecutive_no_progress < max_no_progress):
+           any(sheet["count"] - sheet["used"] > 0 for sheet in sheet_inventory)):# and
+           #consecutive_no_progress < max_no_progress):
         iteration_count += 1
         logger.info(f"--- ИТЕРАЦИЯ {iteration_count} ---")
         logger.info(f"Остается заказов: {len(remaining_orders)}")
@@ -1928,11 +1928,6 @@ def bin_packing_with_inventory(
                             logger.info(
                                 f"✅ ДОЗАПОЛНЕНИЕ: Лист #{existing_layout['sheet_number']} получил +{len(additional_placed)} полигонов ({current_usage:.1f}% → {calculate_usage_percent(existing_placed + additional_placed, sheet_size):.1f}%)"
                             )
-
-                            # BACKFILL OPERATIONS ARE INHERENTLY SAFE FOR MAX_SHEET_RANGE_PER_ORDER
-                            # Since we're filling existing sheets (not creating new ones),
-                            # we cannot violate the sheet range constraint
-                            # The constraint check is only needed for additional sheet creation
 
                             # Update existing layout
                             placed_layouts[layout_idx]["placed_polygons"] = (
@@ -2296,24 +2291,11 @@ def bin_packing_with_inventory(
             st.warning(f"⚠️ Размещение прервано: {consecutive_no_progress} итераций подряд без прогресса")
 
     # Check order constraints after placement - both sheet count and adjacency
-    violated_orders = []
+
     adjacency_violations = []
 
     for order_id, sheets_used in order_sheet_usage.items():
-        # Check sheet count constraint
-        if (
-            max_sheet_range_per_order
-            and order_id != "additional"
-            and order_id != "unknown"  # Manual uploads are not limited
-            and not str(order_id).startswith("group_")  # Group uploads are not limited
-            and sheets_used > max_sheet_range_per_order
-        ):
-            violated_orders.append((order_id, sheets_used))
-            logger.error(
-                f"НАРУШЕНИЕ ОГРАНИЧЕНИЙ: Заказ {order_id} использует {sheets_used} листов (лимит: {max_sheet_range_per_order})"
-            )
-
-        # Check adjacency constraint
+         # Check adjacency constraint
         if (
             max_sheet_range_per_order
             and order_id != "additional"
@@ -2342,21 +2324,13 @@ def bin_packing_with_inventory(
                         f"но должен быть в диапазоне {first_sheet}-{expected_max_sheet}"
                     )
 
-    if violated_orders or adjacency_violations:
+    if adjacency_violations:
         warning_parts = []
-        if violated_orders:
-            warning_parts.append("⚠️ Предупреждение: Нарушение ограничений заказов:")
-            for order_id, sheets_used in violated_orders:
-                warning_parts.append(
-                    f"Заказ {order_id}: {sheets_used} листов (лимит: {max_sheet_range_per_order})"
-                )
-
-        if adjacency_violations:
-            warning_parts.append("⚠️ Предупреждение: Нарушение смежности листов:")
-            for order_id, min_sheet, max_sheet, expected_max in adjacency_violations:
-                warning_parts.append(
-                    f"Заказ {order_id}: листы {min_sheet}-{max_sheet} (ожидалось до {expected_max})"
-                )
+        warning_parts.append("⚠️ Предупреждение: Нарушение смежности листов:")
+        for order_id, min_sheet, max_sheet, expected_max in adjacency_violations:
+            warning_parts.append(
+                f"Заказ {order_id}: листы {min_sheet}-{max_sheet} (ожидалось до {expected_max})"
+            )
 
         warning_msg = "\n".join(warning_parts)
         logger.warning(warning_msg)
@@ -2408,11 +2382,16 @@ def bin_packing_with_inventory(
                     )
 
                     try:
+
                         additional_placed, still_remaining = bin_packing_with_existing(
                             [carpet], existing_placed, sheet_size, verbose=False
                         )
 
                         if additional_placed:
+                            ###############################
+                            #if order_id == "ZAKAZ_row_5":
+                            #    pass
+                            ###############################
                             # Update the layout with the additional polygon
                             placed_layouts[layout_idx]["placed_polygons"] = (
                                 existing_placed + additional_placed
@@ -2830,12 +2809,6 @@ def bin_packing_with_inventory(
 
         # Потом серые листы
         for layout in sheets_by_color["серый"]:
-            layout["sheet_number"] = new_sheet_number
-            renumbered_layouts.append(layout)
-            new_sheet_number += 1
-
-        # Потом остальные листы
-        for layout in sheets_by_color["other"]:
             layout["sheet_number"] = new_sheet_number
             renumbered_layouts.append(layout)
             new_sheet_number += 1

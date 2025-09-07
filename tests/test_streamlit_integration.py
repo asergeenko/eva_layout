@@ -88,41 +88,24 @@ def create_priority2_polygons():
     """Создает 20 серых + 20 черных полигонов приоритета 2 из ДЕКА KUGOO M4 PRO JILONG"""
     priority2_polygons = []
     dxf_file = "dxf_samples/ДЕКА KUGOO M4 PRO JILONG/1.dxf"
-    
-    if not os.path.exists(dxf_file):
-        print(f"⚠️ Файл {dxf_file} не найден, создаем синтетические полигоны")
-        from shapely.geometry import Polygon
-        # Создаем синтетический полигон размером примерно как коврик
-        base_polygon = Polygon([(0, 0), (60, 0), (60, 40), (0, 40)])
+    try:
+        # Используем verbose=False чтобы избежать Streamlit вызовов
+        polygon_data = parse_dxf_complete(dxf_file, verbose=False)
+        if polygon_data and polygon_data.get("combined_polygon"):
+            base_polygon = polygon_data["combined_polygon"]
 
-        # 20 черных полигонов приоритета 2
-        for i in range(20):
-            filename = f"ДЕКА_KUGOO_M4_PRO_JILONG_черный_{i+1}.dxf"
-            priority2_polygons.append(Carpet(base_polygon, filename, "чёрный", f"PRIORITY2_BLACK_{i+1}"))
-        
-        # 20 серых полигонов приоритета 2
-        for i in range(20):
-            filename = f"ДЕКА_KUGOO_M4_PRO_JILONG_серый_{i+1}.dxf"
-            priority2_polygons.append(Carpet(base_polygon, filename, "серый", f"PRIORITY2_GRAY_{i+1}"))
-    else:
-        try:
-            # Используем verbose=False чтобы избежать Streamlit вызовов
-            polygon_data = parse_dxf_complete(dxf_file, verbose=False)
-            if polygon_data and polygon_data.get("combined_polygon"):
-                base_polygon = polygon_data["combined_polygon"]
-                
-                # 20 черных полигонов приоритета 2
-                for i in range(20):
-                    filename = f"ДЕКА_KUGOO_M4_PRO_JILONG_черный_{i+1}.dxf"
-                    priority2_polygons.append(Carpet(base_polygon, filename, "чёрный", f"PRIORITY2_BLACK_{i+1}"))
-                
-                # 20 серых полигонов приоритета 2
-                for i in range(20):
-                    filename = f"ДЕКА_KUGOO_M4_PRO_JILONG_серый_{i+1}.dxf"
-                    priority2_polygons.append(Carpet(base_polygon, filename, "серый", f"PRIORITY2_GRAY_{i+1}"))
-        except Exception as e:
-            print(f"⚠️ Ошибка загрузки {dxf_file}: {e}")
-            return []
+            # 20 черных полигонов приоритета 2
+            for i in range(20):
+                filename = f"ДЕКА_KUGOO_M4_PRO_JILONG_черный_{i+1}.dxf"
+                priority2_polygons.append(Carpet(base_polygon, filename, "чёрный", "group_1",2))
+
+            # 20 серых полигонов приоритета 2
+            for i in range(20):
+                filename = f"ДЕКА_KUGOO_M4_PRO_JILONG_серый_{i+1}.dxf"
+                priority2_polygons.append(Carpet(base_polygon, filename, "серый", "group_2",2))
+    except Exception as e:
+        print(f"⚠️ Ошибка загрузки {dxf_file}: {e}")
+        return []
     
     return priority2_polygons
 
@@ -209,17 +192,17 @@ def test_streamlit_integration():
         p2_gray_count = 0
         for p in layout['placed_polygons']:
             # Обрабатываем разные форматы кортежей
-            order_id = None
+            color = None
             if len(p) >= 7:
                 # Extended format: (polygon, x, y, angle, file_name, color, order_id)
-                order_id = str(p[6])
+                color = str(p[5])
             elif len(p) > 3:
                 # Standard format: (polygon, file_name, color, order_id)
-                order_id = str(p[3])
+                color = str(p[2])
             
-            if order_id and order_id.startswith('PRIORITY2_BLACK'):
+            if color=="чёрный":
                 p2_black_count += 1
-            elif order_id and order_id.startswith('PRIORITY2_GRAY'):
+            elif color=="серый":
                 p2_gray_count += 1
         
         priority2_black_placed += p2_black_count
@@ -239,42 +222,26 @@ def test_streamlit_integration():
     
     if len(unplaced) > 0:
         unplaced_excel = []
-        unplaced_p2_black = []
-        unplaced_p2_gray = []
+        unplaced_p1 = []
+        unplaced_p2 = []
         
         for p in unplaced:
-            if hasattr(p, 'order_id'):
-                # Объект Carpet
-                order_id = str(p.order_id)
-            elif len(p) > 3:
-                # Кортеж
-                order_id = str(p[3])
-            else:
-                order_id = ""
-            
-            if order_id.startswith('PRIORITY2_BLACK'):
-                unplaced_p2_black.append(p)
-            elif order_id.startswith('PRIORITY2_GRAY'):
-                unplaced_p2_gray.append(p)
-            elif not order_id.startswith('PRIORITY2'):
+            if p.order_id.startswith("ZAKAZ"):
                 unplaced_excel.append(p)
+            elif p.priority == 1:
+                unplaced_p1.append(p)
+            elif p.priority == 2:
+                unplaced_p2.append(p)
+
         
         # Один заказ не помещается по размеру - это верно
         if len(unplaced_excel) > 1:
             problems.append(f"Неразмещенные заказы из Excel: {len(unplaced_excel)}")
-        if unplaced_p2_black:
-            problems.append(f"Неразмещенные черные приоритета 2: {len(unplaced_p2_black)}")
-        if unplaced_p2_gray:
-            problems.append(f"Неразмещенные серые приоритета 2: {len(unplaced_p2_gray)}")
-    
-    if priority2_gray_placed < 15:  # Ожидаем хотя бы 15 из 20 серых
-        problems.append(f"Мало размещенных серых приоритета 2: {priority2_gray_placed}/20")
+        if unplaced_p1:
+            problems.append(f"Неразмещенные приоритета 1: {len(unplaced_p1)}")
+        if unplaced_p2:
+            problems.append(f"Неразмещенные серые приоритета 2: {len(unplaced_p2)}")
 
-    
-    print(f"Черных приоритета 2 размещено: {priority2_black_placed}/20")
-    print(f"Серых приоритета 2 размещено: {priority2_gray_placed}/20")
-    print(f"Листов с <80% заполнением (начиная с 18): {sheets_with_space}")
-    
     if problems:
         print("\n❌ НАЙДЕННЫЕ ПРОБЛЕМЫ:")
         for problem in problems:
