@@ -1106,7 +1106,7 @@ def bin_packing_with_existing(
         # ПРОФИЛИРОВАНИЕ: Измеряем время обработки каждого полигона
         import time
         polygon_start_time = time.time()
-        
+
         polygon = carpet.polygon
         file_name = carpet.filename
         color = carpet.color
@@ -1195,7 +1195,7 @@ def bin_packing_with_existing(
 
         if not placed_successfully:
             unplaced.append((polygon, file_name, color, order_id))
-        
+
         # ПРОФИЛИРОВАНИЕ: Логируем время обработки медленных полигонов
         polygon_elapsed = time.time() - polygon_start_time
         if polygon_elapsed > 2.0:  # Логируем полигоны, обрабатывающиеся дольше 2 секунд
@@ -1433,12 +1433,12 @@ def find_bottom_left_position_with_obstacles(
 
     # ОПТИМИЗАЦИЯ: Увеличиваем шаг сетки для ускорения поиска
     grid_step = 15  # Увеличено с 5mm до 15mm для 3x ускорения
-    
+
     # Bottom edge positions
     for x in np.arange(0, sheet_width - poly_width + 1, grid_step):
         candidate_positions.append((x, 0))
 
-    # Left edge positions  
+    # Left edge positions
     for y in np.arange(0, sheet_height - poly_height + 1, grid_step):
         candidate_positions.append((0, y))
 
@@ -1461,7 +1461,7 @@ def find_bottom_left_position_with_obstacles(
     # ОПТИМИЗАЦИЯ: Ограничиваем количество кандидатов для предотвращения взрывного роста
     candidate_positions = list(set(candidate_positions))  # Удаляем дубликаты
     candidate_positions.sort(key=lambda pos: (pos[1], pos[0]))  # Sort by bottom-left preference
-    
+
     # Ограничиваем до 100 лучших позиций для ускорения
     #max_candidates = 100
     #if len(candidate_positions) > max_candidates:
@@ -1647,13 +1647,13 @@ def bin_packing_with_inventory(
     carpets: list[Carpet],
     available_sheets: list[dict],
     verbose: bool = True,
-    max_sheets_per_order: int = None,
+    max_sheet_range_per_order: int = None,
     progress_callback=None,
 ) -> tuple[list[dict], list[tuple]]:
     """Optimize placement of polygons on available sheets with inventory tracking."""
     logger.info("=== НАЧАЛО bin_packing_with_inventory ===")
     logger.info(
-        f"Входные параметры: {len(carpets)} полигонов, {len(available_sheets)} типов листов, max_sheets_per_order={max_sheets_per_order}"
+        f"Входные параметры: {len(carpets)} полигонов, {len(available_sheets)} типов листов, max_sheet_range_per_order={max_sheet_range_per_order}"
     )
 
     placed_layouts = []
@@ -1669,8 +1669,8 @@ def bin_packing_with_inventory(
         st.info(
             f"Начинаем размещение {len(carpets)} полигонов на {total_available} доступных листах"
         )
-        if max_sheets_per_order:
-            st.info(f"Ограничение: максимум {max_sheets_per_order} листов на заказ")
+        if max_sheet_range_per_order:
+            st.info(f"Ограничение: максимум {max_sheet_range_per_order} листов на заказ")
 
     # Group polygons by order_id and separate by priority
     logger.info("Группировка полигонов по order_id и приоритету...")
@@ -1737,7 +1737,7 @@ def bin_packing_with_inventory(
 
         return placed_layouts, all_unplaced
 
-    # NEW LOGIC: Priority queue for orders based on MAX_SHEETS_PER_ORDER constraint
+    # NEW LOGIC: Priority queue for orders based on MAX_SHEET_RANGE_PER_ORDER constraint
     # Track which order was placed first and its starting sheet
     order_first_sheet = {}  # order_id -> first_sheet_number
 
@@ -1747,12 +1747,12 @@ def bin_packing_with_inventory(
         50, len(remaining_orders) * 25
     )  # Safety limit with higher multiplier
     iteration_count = 0
-    
+
     # Детектор зависших итераций
     consecutive_no_progress = 0
     max_no_progress = 3  # Прерывать после 3 итераций без размещений
 
-    while (remaining_orders and 
+    while (remaining_orders and
            any(sheet["count"] - sheet["used"] > 0 for sheet in sheet_inventory) and
            consecutive_no_progress < max_no_progress):
         iteration_count += 1
@@ -1807,12 +1807,12 @@ def bin_packing_with_inventory(
             new_orders = []
 
             for order_id, order_polygons in remaining_orders.items():
-                # Skip orders that don't apply to MAX_SHEETS_PER_ORDER constraint
+                # Skip orders that don't apply to MAX_SHEET_RANGE_PER_ORDER constraint
                 is_constrained = (
-                    max_sheets_per_order is not None
-                    and order_id != "additional"
-                    and order_id != "unknown"  # Manual uploads are not limited
-                    and not str(order_id).startswith(
+                        max_sheet_range_per_order is not None
+                        and order_id != "additional"
+                        and order_id != "unknown"  # Manual uploads are not limited
+                        and not str(order_id).startswith(
                         "group_"
                     )  # Group uploads are not limited
                 )
@@ -1825,7 +1825,7 @@ def bin_packing_with_inventory(
                 if order_id in order_first_sheet:
                     # Order already started - check if within range
                     first_sheet = order_first_sheet[order_id]
-                    max_allowed_sheet = first_sheet + max_sheets_per_order - 1
+                    max_allowed_sheet = first_sheet + max_sheet_range_per_order - 1
 
                     if next_sheet_number <= max_allowed_sheet:
                         # Within range - MAXIMUM priority (must complete this order)
@@ -1853,7 +1853,7 @@ def bin_packing_with_inventory(
             else:
                 # No priority orders - allow new orders to start
                 # IMPROVED STRATEGY: Sort new orders by carpet count (descending)
-                # Orders with more carpets should be processed first as they are harder to fit within MAX_SHEETS_PER_ORDER constraint
+                # Orders with more carpets should be processed first as they are harder to fit within MAX_SHEET_RANGE_PER_ORDER constraint
                 new_orders_sorted = sorted(
                     new_orders, key=lambda x: len(x[1]), reverse=True
                 )
@@ -1912,14 +1912,14 @@ def bin_packing_with_inventory(
                         # ПРОФИЛИРОВАНИЕ: Измеряем время bin_packing_with_existing
                         import time
                         start_time = time.time()
-                        
+
                         additional_placed, still_remaining = bin_packing_with_existing(
                             compatible_polygons,
                             existing_placed,
                             sheet_size,
                             verbose=False,
                         )
-                        
+
                         elapsed_time = time.time() - start_time
                         if elapsed_time > 1.0:  # Логируем только долгие операции
                             logger.warning(f"⏱️ bin_packing_with_existing: {elapsed_time:.2f}s для {len(compatible_polygons)} полигонов на лист #{existing_layout['sheet_number']}")
@@ -1929,8 +1929,8 @@ def bin_packing_with_inventory(
                                 f"✅ ДОЗАПОЛНЕНИЕ: Лист #{existing_layout['sheet_number']} получил +{len(additional_placed)} полигонов ({current_usage:.1f}% → {calculate_usage_percent(existing_placed + additional_placed, sheet_size):.1f}%)"
                             )
 
-                            # BACKFILL OPERATIONS ARE INHERENTLY SAFE FOR MAX_SHEETS_PER_ORDER
-                            # Since we're filling existing sheets (not creating new ones), 
+                            # BACKFILL OPERATIONS ARE INHERENTLY SAFE FOR MAX_SHEET_RANGE_PER_ORDER
+                            # Since we're filling existing sheets (not creating new ones),
                             # we cannot violate the sheet range constraint
                             # The constraint check is only needed for additional sheet creation
 
@@ -2012,7 +2012,7 @@ def bin_packing_with_inventory(
                                             if key not in carpet_index:
                                                 carpet_index[key] = []
                                             carpet_index[key].append((idx, carpet))
-                                        
+
                                         # Собираем индексы ковров для удаления
                                         indices_to_remove = set()
                                         for placed_poly in placed_from_order:
@@ -2023,12 +2023,12 @@ def bin_packing_with_inventory(
                                             else:
                                                 # Обычный полигон: (polygon, filename, color, order_id)
                                                 placed_key = (placed_poly[1], placed_poly[2], placed_poly[3])
-                                            
+
                                             # O(1) поиск и отметка для удаления
                                             if placed_key in carpet_index and carpet_index[placed_key]:
                                                 idx, carpet = carpet_index[placed_key].pop(0)  # Берем первый подходящий
                                                 indices_to_remove.add(idx)
-                                        
+
                                         # Удаляем отмеченные ковры (в обратном порядке индексов)
                                         for idx in sorted(indices_to_remove, reverse=True):
                                             if idx < len(remaining_carpets):
@@ -2068,7 +2068,7 @@ def bin_packing_with_inventory(
             # Otherwise, create a new sheet for remaining polygons
             if filled_existing_sheet and not compatible_polygons:
                 continue  # All polygons placed, move to next order/iteration
-            
+
             # If some polygons remain after backfilling, create a new sheet for them
 
             sheet_counter += 1
@@ -2132,7 +2132,7 @@ def bin_packing_with_inventory(
                     if order_id in order_sheet_usage:
                         order_sheet_usage[order_id] += 1
 
-                        # Track first sheet for MAX_SHEETS_PER_ORDER constraint
+                        # Track first sheet for MAX_SHEET_RANGE_PER_ORDER constraint
                         if order_id not in order_first_sheet:
                             order_first_sheet[order_id] = sheet_counter
                             logger.info(
@@ -2302,20 +2302,20 @@ def bin_packing_with_inventory(
     for order_id, sheets_used in order_sheet_usage.items():
         # Check sheet count constraint
         if (
-            max_sheets_per_order
+            max_sheet_range_per_order
             and order_id != "additional"
             and order_id != "unknown"  # Manual uploads are not limited
             and not str(order_id).startswith("group_")  # Group uploads are not limited
-            and sheets_used > max_sheets_per_order
+            and sheets_used > max_sheet_range_per_order
         ):
             violated_orders.append((order_id, sheets_used))
             logger.error(
-                f"НАРУШЕНИЕ ОГРАНИЧЕНИЙ: Заказ {order_id} использует {sheets_used} листов (лимит: {max_sheets_per_order})"
+                f"НАРУШЕНИЕ ОГРАНИЧЕНИЙ: Заказ {order_id} использует {sheets_used} листов (лимит: {max_sheet_range_per_order})"
             )
 
         # Check adjacency constraint
         if (
-            max_sheets_per_order
+            max_sheet_range_per_order
             and order_id != "additional"
             and order_id != "unknown"
             and not str(order_id).startswith("group_")
@@ -2331,7 +2331,7 @@ def bin_packing_with_inventory(
             if order_sheets:
                 min_sheet = min(order_sheets)
                 max_sheet = max(order_sheets)
-                expected_max_sheet = first_sheet + max_sheets_per_order - 1
+                expected_max_sheet = first_sheet + max_sheet_range_per_order - 1
 
                 if max_sheet > expected_max_sheet:
                     adjacency_violations.append(
@@ -2348,7 +2348,7 @@ def bin_packing_with_inventory(
             warning_parts.append("⚠️ Предупреждение: Нарушение ограничений заказов:")
             for order_id, sheets_used in violated_orders:
                 warning_parts.append(
-                    f"Заказ {order_id}: {sheets_used} листов (лимит: {max_sheets_per_order})"
+                    f"Заказ {order_id}: {sheets_used} листов (лимит: {max_sheet_range_per_order})"
                 )
 
         if adjacency_violations:
@@ -2514,7 +2514,7 @@ def bin_packing_with_inventory(
                         color_polygons,
                         [sheet for sheet in sheet_inventory if sheet["color"] == color],
                         verbose=False,
-                        max_sheets_per_order=max_sheets_per_order,
+                        max_sheet_range_per_order=max_sheet_range_per_order,
                     )
 
                     if new_layouts:
@@ -2652,7 +2652,7 @@ def bin_packing_with_inventory(
                 if order_id != "unknown":  # Only show real orders
                     status = (
                         "✅"
-                        if sheet_count <= (max_sheets_per_order or float("inf"))
+                        if sheet_count <= (max_sheet_range_per_order or float("inf"))
                         else "❌"
                     )
                     st.info(f"  {status} Заказ {order_id}: {sheet_count} листов")
