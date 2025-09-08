@@ -34,7 +34,7 @@ def create_available_sheets():
             "width": 140,
             "height": 200,
             "color": "чёрный", 
-            "count": 30,
+            "count": 20,
             "used": 0
         })
     
@@ -44,7 +44,7 @@ def create_available_sheets():
             "width": 140,
             "height": 200,
             "color": "серый", 
-            "count": 30,
+            "count": 20,
             "used": 0
         })
     
@@ -232,10 +232,13 @@ def test_streamlit_integration():
             elif p.priority == 2:
                 unplaced_p2.append(p)
         
-        # Проверяем неразмещенные заказы - должен быть только ZAKAZ_row_34
+        # Проверяем неразмещенные заказы - с правильным алгоритмом должен быть только ZAKAZ_row_34
         unplaced_orders = set(p.order_id for p in unplaced_excel)
-        if len(unplaced_orders) > 1 or (len(unplaced_orders) == 1 and "ZAKAZ_row_34" not in unplaced_orders):
-            problems.append(f"Неразмещенные заказы: {unplaced_orders} (ожидался только ZAKAZ_row_34)")
+        expected_unplaced = {"ZAKAZ_row_34"}
+        if not unplaced_orders.issubset(expected_unplaced):
+            problems.append(f"Неожиданные неразмещенные заказы: {unplaced_orders - expected_unplaced}")
+        if len(unplaced_orders) > 1:
+            problems.append(f"Слишком много неразмещенных заказов: {len(unplaced_orders)} > 1")
         if unplaced_p1:
             problems.append(f"Неразмещенные приоритета 1: {len(unplaced_p1)}")
         if unplaced_p2:
@@ -307,7 +310,8 @@ def test_streamlit_integration():
         assert False, f"Тест провалился из-за проблем: {problems}"
     else:
         print("\n✅ ТЕСТ ПРОЙДЕН УСПЕШНО")
-        print("   • Все основные заказы размещены")
+        print("   • Максимальное количество заказов размещено с соблюдением ограничений")
         print("   • Приоритет 2 работает корректно")
         print("   • Эффективное использование листов")
-        print(f"   • Все заказы соблюдают ограничение MAX_SHEET_RANGE_PER_ORDER = {MAX_SHEET_RANGE_PER_ORDER}")
+        print(f"   • Все размещенные заказы соблюдают ограничение MAX_SHEET_RANGE_PER_ORDER = {MAX_SHEET_RANGE_PER_ORDER}")
+        print(f"   • Неразмещенные заказы: {len(unplaced_orders)} (ожидаемо из-за ограничений)")
