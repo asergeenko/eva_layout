@@ -1927,7 +1927,7 @@ def bin_packing_with_inventory(
         # Update progress with more detail
         if progress_callback:
             progress = min(50, 50 * len(processed_orders) // len(order_groups))
-            progress_callback(progress, f"Первичное размещение...")
+            progress_callback(progress, f"Размещаем ковры...")
 
     # Step 3: Process unconstrained orders (can use any available sheets)
     logger.info(f"\n=== ОБРАБОТКА НЕОГРАНИЧЕННЫХ ЗАКАЗОВ: {len(unconstrained_orders)} ===")
