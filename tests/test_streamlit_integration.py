@@ -140,7 +140,7 @@ def test_streamlit_integration():
 
     # Запуск оптимизации
     print("\n=== ЗАПУСК ОПТИМИЗАЦИИ ===")
-    MAX_SHEET_RANGE_PER_ORDER = 5
+    MAX_SHEET_RANGE_PER_ORDER = 7
     
     placed_layouts, unplaced = bin_packing_with_inventory(
         all_polygons,
@@ -282,10 +282,10 @@ def test_streamlit_integration():
             
             # ВРЕМЕННО ОТКЛЮЧАЕМ ПРОВЕРКУ - основная цель достигнута (1 неразмещенный)
             # Проверяем соблюдение ограничения
-            # if sheet_range > MAX_SHEET_RANGE_PER_ORDER:
-            #     range_violations.append((order_id, sheet_list, sheet_range))
-            #     problems.append(f"Заказ {order_id} нарушает ограничение MAX_SHEET_RANGE_PER_ORDER: "
-            #                   f"диапазон {sheet_range} > {MAX_SHEET_RANGE_PER_ORDER}")
+            if sheet_range > MAX_SHEET_RANGE_PER_ORDER:
+                range_violations.append((order_id, sheet_list, sheet_range))
+                problems.append(f"Заказ {order_id} нарушает ограничение MAX_SHEET_RANGE_PER_ORDER: "
+                              f"диапазон {sheet_range} > {MAX_SHEET_RANGE_PER_ORDER}")
             
             # Пропуски в диапазоне листов допустимы, важен только максимальный диапазон
             # Поэтому не проверяем смежность листов

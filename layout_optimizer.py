@@ -1924,10 +1924,10 @@ def bin_packing_with_inventory(
         
         processed_orders.add(order_id)
         
-        # Update progress
+        # Update progress with more detail
         if progress_callback:
-            progress = 50 * len(processed_orders) // len(order_groups)
-            progress_callback(progress, f"Размещение заказов...")
+            progress = min(50, 50 * len(processed_orders) // len(order_groups))
+            progress_callback(progress, f"Первичное размещение...")
 
     # Step 3: Process unconstrained orders (can use any available sheets)
     logger.info(f"\n=== ОБРАБОТКА НЕОГРАНИЧЕННЫХ ЗАКАЗОВ: {len(unconstrained_orders)} ===")
@@ -1950,6 +1950,13 @@ def bin_packing_with_inventory(
             logger.info(f"Заказ {order_id}: {len(placed_carpets)} ковров размещено на листах {sheet_numbers}")
         
         processed_orders.add(order_id)
+        
+        # Update progress for unconstrained orders
+        if progress_callback:
+            total_unconstrained = len(unconstrained_orders)
+            completed_unconstrained = len([o for o in unconstrained_orders if o[0] in processed_orders])
+            progress = min(70, int(50 + (completed_unconstrained / total_unconstrained * 20)))
+            progress_callback(int(progress), "Размещение дополнительных ковров приоритета 1")
 
     # Step 3.5: Try to place remaining unplaced carpets from constrained orders on new sheets
     # This is for carpets that couldn't fit within the range constraint
@@ -2014,11 +2021,11 @@ def bin_packing_with_inventory(
                             current_carpets = color_carpets[sheet_color]
                             if current_carpets:
                                 # Convert to tuples for bin_packing_with_existing
-                                current_carpet_tuples = [(c.polygon, c.filename, c.color, c.order_id) for c in current_carpets]
+                                #current_carpet_tuples = [(c.polygon, c.filename, c.color, c.order_id) for c in current_carpets]
                                 
                                 try:
                                     additional_placed, remaining_tuples = bin_packing_with_existing(
-                                        current_carpet_tuples, layout["placed_polygons"], 
+                                        current_carpets, layout["placed_polygons"],
                                         layout["sheet_size"], verbose=False
                                     )
                                     
@@ -2098,6 +2105,13 @@ def bin_packing_with_inventory(
                     
                     priority2_placed += len(additional_placed)
                     
+                    # Update progress for each placed priority 2 carpet
+                    if progress_callback:
+                        total_polygons = len(carpets)
+                        placed_so_far = total_polygons - len(all_unplaced) - len(priority2_carpets) + priority2_placed
+                        progress = min(95, int(70 + (placed_so_far / total_polygons * 25)))  # 70-95% range for priority 2
+                        progress_callback(progress, "Размещение ковров приоритета 2")
+                    
                     # Remove placed carpets from priority2_carpets
                     placed_keys = set()
                     for placed_poly in additional_placed:
@@ -2124,110 +2138,72 @@ def bin_packing_with_inventory(
         if priority2_carpets:
             logger.info(f"  Приоритет 2: размещено {priority2_placed}, не размещено {len(priority2_carpets)}")
 
-    # Step 5: Renumber sheets by color groups (black, then gray, then others)
-    if placed_layouts:
-        logger.info(f"Перенумеровываем {len(placed_layouts)} листов по цветовым группам")
-        
-        sheets_by_color = {"чёрный": [], "серый": [], "other": []}
-        
-        for layout in placed_layouts:
-            color = layout.get("sheet_color", "серый")
-            if color == "чёрный":
-                sheets_by_color["чёрный"].append(layout)
-            elif color == "серый":
-                sheets_by_color["серый"].append(layout)
-            else:
-                sheets_by_color["other"].append(layout)
-        
-        # Renumber by groups
-        new_sheet_number = 1
-        renumbered_layouts = []
-        
-        # Black sheets first
-        for layout in sheets_by_color["чёрный"]:
-            layout["sheet_number"] = new_sheet_number
-            renumbered_layouts.append(layout)
-            new_sheet_number += 1
-        
-        # Gray sheets second
-        for layout in sheets_by_color["серый"]:
-            layout["sheet_number"] = new_sheet_number
-            renumbered_layouts.append(layout)
-            new_sheet_number += 1
-        
-        # Other colors last
-        for layout in sheets_by_color["other"]:
-            layout["sheet_number"] = new_sheet_number
-            renumbered_layouts.append(layout)
-            new_sheet_number += 1
-        
-        placed_layouts = renumbered_layouts
-        
-        logger.info(f"Перенумеровано: {len(sheets_by_color['чёрный'])} чёрных, "
-                   f"{len(sheets_by_color['серый'])} серых, {len(sheets_by_color['other'])} других")
+    # Цветовая группировка и соблюдение ограничений будет выполнено в умной перенумерации
 
-    # УМНАЯ ПЕРЕНУМЕРАЦИЯ ЛИСТОВ для соблюдения MAX_SHEET_RANGE_PER_ORDER
+    # УМНАЯ ПЕРЕНУМЕРАЦИЯ ЛИСТОВ с соблюдением цветовой группировки И MAX_SHEET_RANGE_PER_ORDER
     logger.info("=== УМНАЯ ПЕРЕНУМЕРАЦИЯ ЛИСТОВ ===")
     
-    # Анализируем текущие нарушения
-    violations_before = []
-    order_sheet_mapping = {}
+    # Сначала разделяем листы по цветам
+    sheets_by_color = {"чёрный": [], "серый": [], "other": []}
     
     for layout in placed_layouts:
-        sheet_num = layout.get("sheet_number", 0)
-        for order_id in layout.get("orders_on_sheet", []):
-            if order_id.startswith("ZAKAZ"):
-                if order_id not in order_sheet_mapping:
-                    order_sheet_mapping[order_id] = []
-                order_sheet_mapping[order_id].append(sheet_num)
-    
-    # Проверяем нарушения до перенумерации
-    for order_id, sheets in order_sheet_mapping.items():
-        if len(sheets) > 0:
-            sheet_range = max(sheets) - min(sheets) + 1
-            if sheet_range > max_sheet_range_per_order:
-                violations_before.append(f"{order_id}: диапазон {sheet_range}")
-    
-    logger.info(f"Нарушения до перенумерации: {violations_before}")
-    
-    # ПРОСТАЯ СТРАТЕГИЯ: Переназначаем номера всем листам последовательно
-    # Листы с одинаковыми заказами будут рядом
-    
-    # Группируем листы по основному заказу (первому в списке)
-    layout_groups = {}
-    ungrouped_layouts = []
-    
-    for layout in placed_layouts:
-        orders_on_sheet = [oid for oid in layout.get("orders_on_sheet", []) if oid.startswith("ZAKAZ")]
-        if orders_on_sheet:
-            primary_order = orders_on_sheet[0]  # Берем первый Excel заказ как основной
-            if primary_order not in layout_groups:
-                layout_groups[primary_order] = []
-            layout_groups[primary_order].append(layout)
+        color = layout.get("sheet_color", "серый")
+        if color == "чёрный":
+            sheets_by_color["чёрный"].append(layout)
+        elif color == "серый":
+            sheets_by_color["серый"].append(layout)
         else:
-            ungrouped_layouts.append(layout)
+            sheets_by_color["other"].append(layout)
     
-    # Переназначаем номера последовательно
+    logger.info(f"Цветовые группы: {len(sheets_by_color['чёрный'])} черных, {len(sheets_by_color['серый'])} серых, {len(sheets_by_color['other'])} других")
+    
+    # Перенумеровываем каждую цветовую группу отдельно с соблюдением ограничений
+    renumbered_layouts = []
     next_sheet_number = 1
     
-    # Сначала группы заказов (сортированные по количеству листов)
-    for order_id in sorted(layout_groups.keys(), key=lambda x: len(layout_groups[x])):
-        layouts = layout_groups[order_id]
-        for layout in layouts:
-            layout["sheet_number"] = next_sheet_number
-            next_sheet_number += 1
+    # Обрабатываем цветовые группы в порядке: черные, серые, остальные
+    for color_name in ["чёрный", "серый", "other"]:
+        color_layouts = sheets_by_color[color_name]
+        if not color_layouts:
+            continue
+            
+        logger.info(f"Перенумерация {color_name} листов ({len(color_layouts)} шт.)")
         
-        logger.info(f"Заказ {order_id}: листы {next_sheet_number - len(layouts)}-{next_sheet_number - 1} (диапазон: {len(layouts)})")
+        # Группируем листы этого цвета по заказам
+        color_layout_groups = {}
+        color_ungrouped_layouts = []
+        
+        for layout in color_layouts:
+            orders_on_sheet = [oid for oid in layout.get("orders_on_sheet", []) if oid.startswith("ZAKAZ")]
+            if orders_on_sheet:
+                primary_order = orders_on_sheet[0]  # Берем первый Excel заказ как основной
+                if primary_order not in color_layout_groups:
+                    color_layout_groups[primary_order] = []
+                color_layout_groups[primary_order].append(layout)
+            else:
+                color_ungrouped_layouts.append(layout)
+        
+        # Переназначаем номера для этой цветовой группы
+        # Сначала заказы (сортированные по количеству листов)
+        for order_id in sorted(color_layout_groups.keys(), key=lambda x: len(color_layout_groups[x])):
+            layouts = color_layout_groups[order_id]
+            for layout in layouts:
+                layout["sheet_number"] = next_sheet_number
+                next_sheet_number += 1
+            
+            logger.info(f"  Заказ {order_id}: листы {next_sheet_number - len(layouts)}-{next_sheet_number - 1} (диапазон: {len(layouts)})")
+            renumbered_layouts.extend(layouts)
+        
+        # Затем листы без Excel заказов для этого цвета
+        for layout in color_ungrouped_layouts:
+            layout["sheet_number"] = next_sheet_number  
+            next_sheet_number += 1
+            renumbered_layouts.append(layout)
     
-    # Затем листы без Excel заказов
-    for layout in ungrouped_layouts:
-        layout["sheet_number"] = next_sheet_number  
-        next_sheet_number += 1
+    # Обновляем placed_layouts отсортированными результатами
+    placed_layouts[:] = renumbered_layouts
     
-    # Сортируем по новым номерам
-    placed_layouts.sort(key=lambda x: x["sheet_number"])
-    
-    logger.info(f"Перенумерация завершена: назначено {next_sheet_number - 1} листов")
+    logger.info(f"Цветовая перенумерация завершена: {next_sheet_number - 1} листов (черные->серые->другие)")
 
     logger.info(f"=== ФИНАЛЬНЫЙ РЕЗУЛЬТАТ ===")
     logger.info(f"Листов создано: {len(placed_layouts)}, не размещено: {len(all_unplaced)}")
