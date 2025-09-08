@@ -43,15 +43,7 @@ jobs:
           exit 1
         fi
         echo "✅ tests/sample_input_test.xlsx found"
-    
-    - name: Run integration tests
-      run: |
-        pytest tests/test_streamlit_integration.py -v --tb=short --cov=layout_optimizer --cov-report=term-missing
-    
-    - name: Run priority 2 tests
-      run: |
-        pytest tests/test_priority2_real_case.py tests/test_progress_callback.py -v --tb=short
-    
+
     - name: Run all tests
       run: |
         pytest tests/ -v --tb=short --cov=layout_optimizer --cov-report=term-missing

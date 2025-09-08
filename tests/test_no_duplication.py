@@ -78,7 +78,7 @@ def test_no_duplication():
         polygons,
         available_sheets,
         verbose=False,
-        max_sheets_per_order=5,
+        max_sheet_range_per_order=5,
     )
     
     print("\n=== РЕЗУЛЬТАТ ===")
@@ -200,7 +200,7 @@ def test_specific_sample_input():
         polygons,
         available_sheets,
         verbose=False,
-        max_sheets_per_order=3,
+        max_sheet_range_per_order=3,
     )
     
     # Count unique placements
