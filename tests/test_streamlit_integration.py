@@ -140,7 +140,7 @@ def test_streamlit_integration():
 
     # Запуск оптимизации
     print("\n=== ЗАПУСК ОПТИМИЗАЦИИ ===")
-    MAX_SHEET_RANGE_PER_ORDER = 7
+    MAX_SHEET_RANGE_PER_ORDER = 10
     
     placed_layouts, unplaced = bin_packing_with_inventory(
         all_polygons,
