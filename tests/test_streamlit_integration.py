@@ -34,7 +34,7 @@ def create_available_sheets():
             "width": 140,
             "height": 200,
             "color": "чёрный", 
-            "count": 30,
+            "count": 20,
             "used": 0
         })
     
@@ -44,7 +44,7 @@ def create_available_sheets():
             "width": 140,
             "height": 200,
             "color": "серый", 
-            "count": 30,
+            "count": 20,
             "used": 0
         })
     
@@ -232,13 +232,13 @@ def test_streamlit_integration():
             elif p.priority == 2:
                 unplaced_p2.append(p)
         
-        # Проверяем неразмещенные заказы - с правильным алгоритмом могут быть ZAKAZ_row_29 и ZAKAZ_row_34
+        # Проверяем неразмещенные заказы - с правильным алгоритмом должен быть только ZAKAZ_row_34
         unplaced_orders = set(p.order_id for p in unplaced_excel)
-        expected_unplaced = {"ZAKAZ_row_29", "ZAKAZ_row_34"}
+        expected_unplaced = {"ZAKAZ_row_34"}
         if not unplaced_orders.issubset(expected_unplaced):
             problems.append(f"Неожиданные неразмещенные заказы: {unplaced_orders - expected_unplaced}")
-        if len(unplaced_orders) > 2:
-            problems.append(f"Слишком много неразмещенных заказов: {len(unplaced_orders)} > 2")
+        if len(unplaced_orders) > 1:
+            problems.append(f"Слишком много неразмещенных заказов: {len(unplaced_orders)} > 1")
         if unplaced_p1:
             problems.append(f"Неразмещенные приоритета 1: {len(unplaced_p1)}")
         if unplaced_p2:

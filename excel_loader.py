@@ -10,7 +10,8 @@ TARGET_SHEET = "ZAKAZ"
 
 logger = logging.getLogger(__name__)
 
-#@st.cache_data(ttl=600)  # Cache for 10 minutes
+
+# @st.cache_data(ttl=600)  # Cache for 10 minutes
 def load_excel_file(file_content: Buffer) -> dict[str, pd.DataFrame] | pd.DataFrame:
     """Load and cache Excel file processing - optimized for speed"""
     # Only load the ZAKAZ sheet instead of all sheets for faster loading
@@ -36,7 +37,10 @@ def load_excel_file(file_content: Buffer) -> dict[str, pd.DataFrame] | pd.DataFr
         )
         return excel_data
 
-def parse_orders_from_excel(excel_data: dict[str, pd.DataFrame]) -> list[dict[str,Any]] | None:
+
+def parse_orders_from_excel(
+    excel_data: dict[str, pd.DataFrame],
+) -> list[dict[str, Any]] | None:
     # Process only the "ZAKAZ" sheet
     all_orders = []
 
@@ -51,11 +55,11 @@ def parse_orders_from_excel(excel_data: dict[str, pd.DataFrame]) -> list[dict[st
             if df.shape[1] > 3:  # Make sure we have enough columns
                 pending_orders = data_rows[
                     data_rows.iloc[:, 2].isna() | (data_rows.iloc[:, 2] == "")
-                    ]
+                ]
 
                 for idx, row in pending_orders.iterrows():
                     if pd.notna(
-                            row.iloc[3]
+                        row.iloc[3]
                     ):  # Check if Артикул (column D) is not empty
                         # Get color from column I (index 8)
                         color = (
@@ -77,9 +81,7 @@ def parse_orders_from_excel(excel_data: dict[str, pd.DataFrame]) -> list[dict[st
                         order = {
                             "sheet": TARGET_SHEET,
                             "row_index": idx,
-                            "date": str(row.iloc[0])
-                            if pd.notna(row.iloc[0])
-                            else "",
+                            "date": str(row.iloc[0]) if pd.notna(row.iloc[0]) else "",
                             "article": str(row.iloc[3]),
                             "product": str(row.iloc[4])
                             if pd.notna(row.iloc[4])
@@ -174,9 +176,7 @@ def find_product_folder(article, product_name):
                 for folder_name in special_mappings[brand]:
                     folder_path = os.path.join("dxf_samples", folder_name)
                     if os.path.exists(folder_path):
-                        logger.info(
-                            f"Найдено специальное соответствие: {folder_path}"
-                        )
+                        logger.info(f"Найдено специальное соответствие: {folder_path}")
                         return folder_path
 
             # For standard automotive brands, search the flat folder structure
@@ -208,7 +208,8 @@ def find_product_folder(article, product_name):
 
     return None
 
-def calculate_folder_match_score(search_term:str, folder_name:str) -> float:
+
+def calculate_folder_match_score(search_term: str, folder_name: str) -> float:
     """Calculate how well a folder name matches the search term."""
     import re
 
@@ -243,8 +244,11 @@ def calculate_folder_match_score(search_term:str, folder_name:str) -> float:
 
     return score
 
-#@st.cache_data(ttl=300)  # Cache for 5 minutes
-def find_dxf_files_for_article(id:str, product_name:str="", product_type:str="") -> list[str]:
+
+# @st.cache_data(ttl=300)  # Cache for 5 minutes
+def find_dxf_files_for_article(
+    id: str, product_name: str = "", product_type: str = ""
+) -> list[str]:
     """Find DXF files for a given article using the new product type mapping."""
     if product_type:
         return get_dxf_files_for_product_type(id, product_name, product_type)
@@ -254,9 +258,7 @@ def find_dxf_files_for_article(id:str, product_name:str="", product_type:str="")
         if base_folder:
             found_files = []
             dxf_folder = os.path.join(base_folder, "DXF")
-            search_folder = (
-                dxf_folder if os.path.exists(dxf_folder) else base_folder
-            )
+            search_folder = dxf_folder if os.path.exists(dxf_folder) else base_folder
 
             try:
                 for file in os.listdir(search_folder):
@@ -337,18 +339,13 @@ def get_dxf_files_for_product_type(id: str, product_name: str, product_type: str
 
         else:
             # Unknown product type - take all files as fallback
-            logger.warning(
-                f"Неизвестный тип изделия: {product_type}, берем все файлы"
-            )
+            logger.warning(f"Неизвестный тип изделия: {product_type}, берем все файлы")
             found_files = all_dxf_files
 
     logger.info(
         f"Результат поиска для типа '{product_type}': найдено {len(found_files)} файлов"
     )
     if found_files:
-        logger.debug(
-            f"Найденные файлы: {[os.path.basename(f) for f in found_files]}"
-        )
+        logger.debug(f"Найденные файлы: {[os.path.basename(f) for f in found_files]}")
 
     return found_files
-

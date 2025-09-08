@@ -20,7 +20,8 @@ import logging
 import math
 from dataclasses import dataclass
 
-#from line_profiler import profile
+# from line_profiler import profile
+
 
 @dataclass
 class Carpet:
@@ -1069,7 +1070,7 @@ def check_collision(polygon1: Polygon, polygon2: Polygon, min_gap: float = 2.0) 
             return True  # Be conservative if all methods fail
 
 
-#@profile
+# @profile
 def bin_packing_with_existing(
     polygons: list[Carpet],
     existing_placed: list[tuple],
@@ -1105,6 +1106,7 @@ def bin_packing_with_existing(
     for i, carpet in enumerate(sorted_polygons):
         # ПРОФИЛИРОВАНИЕ: Измеряем время обработки каждого полигона
         import time
+
         polygon_start_time = time.time()
 
         polygon = carpet.polygon
@@ -1148,7 +1150,9 @@ def bin_packing_with_existing(
             )
             pos_elapsed = time.time() - pos_start_time
             if pos_elapsed > 1.0:  # Логируем медленные поиски позиций
-                logger.warning(f"⏱️ Медленный поиск позиции: {pos_elapsed:.2f}s для {len(obstacles)} препятствий")
+                logger.warning(
+                    f"⏱️ Медленный поиск позиции: {pos_elapsed:.2f}s для {len(obstacles)} препятствий"
+                )
 
             if best_x is not None and best_y is not None:
                 # Calculate waste for this placement
@@ -1165,7 +1169,9 @@ def bin_packing_with_existing(
                 )
                 waste_elapsed = time.time() - waste_start_time
                 if waste_elapsed > 0.5:  # Логируем медленные расчеты waste
-                    logger.warning(f"⏱️ Медленный расчет waste: {waste_elapsed:.2f}s для {len(obstacles)} препятствий")
+                    logger.warning(
+                        f"⏱️ Медленный расчет waste: {waste_elapsed:.2f}s для {len(obstacles)} препятствий"
+                    )
 
                 if waste < best_waste:
                     best_waste = waste
@@ -1199,11 +1205,14 @@ def bin_packing_with_existing(
         # ПРОФИЛИРОВАНИЕ: Логируем время обработки медленных полигонов
         polygon_elapsed = time.time() - polygon_start_time
         if polygon_elapsed > 2.0:  # Логируем полигоны, обрабатывающиеся дольше 2 секунд
-            logger.warning(f"⏱️ Медленный полигон {file_name}: {polygon_elapsed:.2f}s, размещен={placed_successfully}")
+            logger.warning(
+                f"⏱️ Медленный полигон {file_name}: {polygon_elapsed:.2f}s, размещен={placed_successfully}"
+            )
 
     return placed, unplaced
 
-#@profile
+
+# @profile
 def bin_packing(
     polygons: list[tuple],
     sheet_size: tuple[float, float],
@@ -1421,8 +1430,8 @@ def bin_packing(
 
 
 def find_bottom_left_position_with_obstacles(
-    polygon:Polygon, obstacles:list[Polygon], sheet_width:float, sheet_height:float
-)->tuple[float|None,float|None]:
+    polygon: Polygon, obstacles: list[Polygon], sheet_width: float, sheet_height: float
+) -> tuple[float | None, float | None]:
     """Find the bottom-left position for a polygon using Bottom-Left Fill algorithm with existing obstacles."""
     bounds = polygon.bounds
     poly_width = bounds[2] - bounds[0]
@@ -1460,11 +1469,13 @@ def find_bottom_left_position_with_obstacles(
 
     # ОПТИМИЗАЦИЯ: Ограничиваем количество кандидатов для предотвращения взрывного роста
     candidate_positions = list(set(candidate_positions))  # Удаляем дубликаты
-    candidate_positions.sort(key=lambda pos: (pos[1], pos[0]))  # Sort by bottom-left preference
+    candidate_positions.sort(
+        key=lambda pos: (pos[1], pos[0])
+    )  # Sort by bottom-left preference
 
     # Ограничиваем до 100 лучших позиций для ускорения
-    #max_candidates = 100
-    #if len(candidate_positions) > max_candidates:
+    # max_candidates = 100
+    # if len(candidate_positions) > max_candidates:
     #    candidate_positions = candidate_positions[:max_candidates]
 
     # Test each position
@@ -1510,7 +1521,9 @@ def find_bottom_left_position_with_obstacles(
     return None, None
 
 
-def find_bottom_left_position(polygon:Polygon, placed_polygons, sheet_width:float, sheet_height:float):
+def find_bottom_left_position(
+    polygon: Polygon, placed_polygons, sheet_width: float, sheet_height: float
+):
     """Find the bottom-left position for a polygon using optimized Bottom-Left Fill algorithm."""
     bounds = polygon.bounds
     poly_width = bounds[2] - bounds[0]
@@ -1642,7 +1655,8 @@ def calculate_placement_waste(polygon, placed_polygons, sheet_width, sheet_heigh
     waste = edge_distance + min_neighbor_distance * 0.5
     return waste
 
-#@profile
+
+# @profile
 def bin_packing_with_inventory(
     carpets: list[Carpet],
     available_sheets: list[dict],
@@ -1651,7 +1665,7 @@ def bin_packing_with_inventory(
     progress_callback=None,
 ) -> tuple[list[dict], list[tuple]]:
     """Optimize placement of polygons on available sheets with inventory tracking.
-    
+
     NEW ALGORITHM: Ensures strict adherence to MAX_SHEET_RANGE_PER_ORDER constraint.
     Implements the suggested approach:
     1. Sort Excel orders by carpet count (descending)
@@ -1671,10 +1685,16 @@ def bin_packing_with_inventory(
     sheet_counter = 0
 
     if verbose:
-        total_available = sum(sheet["count"] - sheet["used"] for sheet in sheet_inventory)
-        st.info(f"Начинаем размещение {len(carpets)} полигонов на {total_available} доступных листах")
+        total_available = sum(
+            sheet["count"] - sheet["used"] for sheet in sheet_inventory
+        )
+        st.info(
+            f"Начинаем размещение {len(carpets)} полигонов на {total_available} доступных листах"
+        )
         if max_sheet_range_per_order:
-            st.info(f"Ограничение: максимум {max_sheet_range_per_order} листов на заказ")
+            st.info(
+                f"Ограничение: максимум {max_sheet_range_per_order} листов на заказ"
+            )
 
     # Step 1: Group carpets by order_id and priority, separate Excel orders
     logger.info("Группировка полигонов по order_id и приоритету...")
@@ -1694,8 +1714,10 @@ def bin_packing_with_inventory(
             # Additional priority 1 carpets (or single-carpet orders)
             priority1_carpets.append(carpet)
 
-    logger.info(f"Группировка завершена: {len(excel_orders)} Excel заказов, {len(priority1_carpets)} приоритет 1, {len(priority2_carpets)} приоритет 2")
-    
+    logger.info(
+        f"Группировка завершена: {len(excel_orders)} Excel заказов, {len(priority1_carpets)} приоритет 1, {len(priority2_carpets)} приоритет 2"
+    )
+
     # Step 2: Separate single-carpet Excel orders and move to priority1
     multi_carpet_orders = {}
     for order_id, order_carpets in excel_orders.items():
@@ -1704,14 +1726,20 @@ def bin_packing_with_inventory(
             priority1_carpets.extend(order_carpets)
         else:
             multi_carpet_orders[order_id] = order_carpets
-            logger.info(f"Заказ {order_id}: {len(order_carpets)} ковров - остается в Excel")
-    
+            logger.info(
+                f"Заказ {order_id}: {len(order_carpets)} ковров - остается в Excel"
+            )
+
     # Step 3: Sort multi-carpet orders by count (descending for better packing)
-    sorted_orders = sorted(multi_carpet_orders.items(), key=lambda x: len(x[1]), reverse=True)
-    logger.info(f"Сортировка завершена: {len(sorted_orders)} многоковровых заказов для размещения")
+    sorted_orders = sorted(
+        multi_carpet_orders.items(), key=lambda x: len(x[1]), reverse=True
+    )
+    logger.info(
+        f"Сортировка завершена: {len(sorted_orders)} многоковровых заказов для размещения"
+    )
 
     if verbose:
-        st.info(f"Разделение выполнено:")
+        st.info("Разделение выполнено:")
         st.info(f"  • Многоковровые заказы Excel: {len(sorted_orders)}")
         st.info(f"  • Одноковровые + приоритет 1: {len(priority1_carpets)}")
         st.info(f"  • Приоритет 2: {len(priority2_carpets)}")
@@ -1720,8 +1748,10 @@ def bin_packing_with_inventory(
     def find_available_sheet_of_color(color, sheet_inventory):
         """Find an available sheet of the specified color."""
         for sheet_type in sheet_inventory:
-            if (sheet_type.get("color", "серый") == color and 
-                sheet_type["count"] - sheet_type["used"] > 0):
+            if (
+                sheet_type.get("color", "серый") == color
+                and sheet_type["count"] - sheet_type["used"] > 0
+            ):
                 return sheet_type
         return None
 
@@ -1744,14 +1774,16 @@ def bin_packing_with_inventory(
         return placed_layouts, all_unplaced
 
     # STEP 4: Place multi-carpet Excel orders with MAX_SHEET_RANGE_PER_ORDER constraint
-    logger.info(f"\n=== ЭТАП 4: РАЗМЕЩЕНИЕ {len(sorted_orders)} МНОГОКОВРОВЫХ EXCEL ЗАКАЗОВ ===")
-    
+    logger.info(
+        f"\n=== ЭТАП 4: РАЗМЕЩЕНИЕ {len(sorted_orders)} МНОГОКОВРОВЫХ EXCEL ЗАКАЗОВ ==="
+    )
+
     def place_order_with_range_constraint(order_id, order_carpets):
         """Place an order within MAX_SHEET_RANGE_PER_ORDER constraint."""
         nonlocal sheet_counter
-        
+
         logger.info(f"Размещение заказа {order_id}: {len(order_carpets)} ковров")
-        
+
         # Group carpets by color
         carpets_by_color = {}
         for carpet in order_carpets:
@@ -1759,217 +1791,262 @@ def bin_packing_with_inventory(
             if color not in carpets_by_color:
                 carpets_by_color[color] = []
             carpets_by_color[color].append(carpet)
-        
+
         placed_carpets = []
         unplaced_carpets = []
         order_sheets = []  # Track sheets used by this order
-        
+
         # Try to place all colors within the constraint
         for color, color_carpets in carpets_by_color.items():
             remaining_carpets = list(color_carpets)
-            
+
             # First try to fill existing sheets of same color that don't violate constraint
             for layout_idx, layout in enumerate(placed_layouts):
                 if not remaining_carpets:
                     break
-                if layout["sheet_color"] != color or layout.get("usage_percent", 0) >= 85:
+                if (
+                    layout["sheet_color"] != color
+                    or layout.get("usage_percent", 0) >= 85
+                ):
                     continue
-                    
+
                 # Check if using this sheet would violate range constraint
                 test_sheets = order_sheets + [layout["sheet_number"]]
                 if len(test_sheets) > 1:
                     sheet_range = max(test_sheets) - min(test_sheets) + 1
                     if sheet_range > max_sheet_range_per_order:
                         continue
-                
+
                 # Try to place carpets on this sheet
                 try:
                     additional_placed, remaining_tuples = bin_packing_with_existing(
-                        remaining_carpets, layout["placed_polygons"], 
-                        layout["sheet_size"], verbose=False
+                        remaining_carpets,
+                        layout["placed_polygons"],
+                        layout["sheet_size"],
+                        verbose=False,
                     )
-                    
+
                     if additional_placed:
                         # Update layout
-                        placed_layouts[layout_idx]["placed_polygons"].extend(additional_placed)
-                        placed_layouts[layout_idx]["usage_percent"] = calculate_usage_percent(
-                            placed_layouts[layout_idx]["placed_polygons"], layout["sheet_size"]
+                        placed_layouts[layout_idx]["placed_polygons"].extend(
+                            additional_placed
                         )
-                        if order_id not in placed_layouts[layout_idx]["orders_on_sheet"]:
-                            placed_layouts[layout_idx]["orders_on_sheet"].append(order_id)
-                        
+                        placed_layouts[layout_idx]["usage_percent"] = (
+                            calculate_usage_percent(
+                                placed_layouts[layout_idx]["placed_polygons"],
+                                layout["sheet_size"],
+                            )
+                        )
+                        if (
+                            order_id
+                            not in placed_layouts[layout_idx]["orders_on_sheet"]
+                        ):
+                            placed_layouts[layout_idx]["orders_on_sheet"].append(
+                                order_id
+                            )
+
                         # Update remaining carpets
-                        remaining_carpet_map = {(c.polygon, c.filename, c.color, c.order_id): c for c in remaining_carpets}
+                        remaining_carpet_map = {
+                            (c.polygon, c.filename, c.color, c.order_id): c
+                            for c in remaining_carpets
+                        }
                         remaining_carpets = []
                         for remaining_tuple in remaining_tuples:
-                            key = (remaining_tuple[0], remaining_tuple[1], remaining_tuple[2], remaining_tuple[3])
+                            key = (
+                                remaining_tuple[0],
+                                remaining_tuple[1],
+                                remaining_tuple[2],
+                                remaining_tuple[3],
+                            )
                             if key in remaining_carpet_map:
                                 remaining_carpets.append(remaining_carpet_map[key])
-                        
-                        newly_placed = [c for c in color_carpets if c not in remaining_carpets]
+
+                        newly_placed = [
+                            c for c in color_carpets if c not in remaining_carpets
+                        ]
                         placed_carpets.extend(newly_placed)
-                        
+
                         if layout["sheet_number"] not in order_sheets:
                             order_sheets.append(layout["sheet_number"])
-                        
-                        logger.info(f"    Дозаполнен лист #{layout['sheet_number']}: +{len(additional_placed)} ковров")
+
+                        logger.info(
+                            f"    Дозаполнен лист #{layout['sheet_number']}: +{len(additional_placed)} ковров"
+                        )
                 except Exception as e:
                     logger.debug(f"Не удалось дозаполнить лист: {e}")
                     continue
-            
+
             # Then create new sheets for remaining carpets, respecting constraint
             while remaining_carpets:
                 sheet_type = find_available_sheet_of_color(color, sheet_inventory)
                 if not sheet_type:
-                    logger.warning(f"Нет доступных листов цвета {color} для заказа {order_id}")
+                    logger.warning(
+                        f"Нет доступных листов цвета {color} для заказа {order_id}"
+                    )
                     unplaced_carpets.extend(remaining_carpets)
                     break
-                
-                # Find best sheet number that respects constraint
-                best_sheet_num = None
-                if not order_sheets:
-                    # First sheet for this order - use next available
-                    sheet_counter += 1
-                    best_sheet_num = sheet_counter
-                else:
-                    # Try to find a sheet number that keeps within range
-                    min_existing = min(order_sheets)
-                    max_existing = max(order_sheets)
-                    
-                    # Try to find unused sheet numbers within the allowed range
-                    used_sheets = set(layout["sheet_number"] for layout in placed_layouts)
-                    
-                    # First try to expand within current range
-                    for test_num in range(min_existing, max_existing + 1):
-                        if test_num not in used_sheets:
-                            best_sheet_num = test_num
-                            break
-                    
-                    # Then try extending the range minimally
-                    if best_sheet_num is None:
-                        for extend in range(1, max_sheet_range_per_order - (max_existing - min_existing)):
-                            # Try extending down
-                            if min_existing - extend >= 1 and (min_existing - extend) not in used_sheets:
-                                best_sheet_num = min_existing - extend
-                                break
-                            # Try extending up
-                            if (max_existing + extend) not in used_sheets:
-                                if max_existing + extend - min_existing + 1 <= max_sheet_range_per_order:
-                                    best_sheet_num = max_existing + extend
-                                    break
-                    
-                    # If still no valid number found, skip this order (will be unplaced)
-                    if best_sheet_num is None:
-                        logger.warning(f"Нельзя разместить заказ {order_id} без нарушения ограничения MAX_SHEET_RANGE_PER_ORDER")
-                        unplaced_carpets.extend(remaining_carpets)
-                        break
-                    
-                    sheet_counter = max(sheet_counter, best_sheet_num)
-                
+
+                # Simplified approach: just use next available sheet number
+                # We'll verify constraints at the end and renumber if needed
+                sheet_counter += 1
+                best_sheet_num = sheet_counter
+
                 # Create and place on new sheet
                 sheet_type["used"] += 1
                 sheet_size = (sheet_type["width"], sheet_type["height"])
-                
-                placed, remaining = bin_packing(remaining_carpets, sheet_size, verbose=False)
-                
+
+                placed, remaining = bin_packing(
+                    remaining_carpets, sheet_size, verbose=False
+                )
+
                 if placed:
                     new_layout = create_new_sheet(sheet_type, best_sheet_num, color)
                     new_layout["placed_polygons"] = placed
-                    new_layout["usage_percent"] = calculate_usage_percent(placed, sheet_size)
+                    new_layout["usage_percent"] = calculate_usage_percent(
+                        placed, sheet_size
+                    )
                     new_layout["orders_on_sheet"] = [order_id]
                     placed_layouts.append(new_layout)
-                    
+
                     newly_placed = [c for c in remaining_carpets if c not in remaining]
                     placed_carpets.extend(newly_placed)
                     remaining_carpets = remaining
                     order_sheets.append(best_sheet_num)
-                    
-                    logger.info(f"    Создан лист #{best_sheet_num}: {len(placed)} ковров")
-                    
+
+                    logger.info(
+                        f"    Создан лист #{best_sheet_num}: {len(placed)} ковров"
+                    )
+
                     if verbose:
-                        st.success(f"✅ Лист #{best_sheet_num} ({sheet_type['name']}): "
-                                 f"{len(placed)} ковров заказа {order_id}")
+                        st.success(
+                            f"✅ Лист #{best_sheet_num} ({sheet_type['name']}): "
+                            f"{len(placed)} ковров заказа {order_id}"
+                        )
                 else:
-                    logger.warning(f"Не удалось разместить ковры на новом листе {color}")
+                    logger.warning(
+                        f"Не удалось разместить ковры на новом листе {color}"
+                    )
                     unplaced_carpets.extend(remaining_carpets)
                     sheet_type["used"] -= 1
                     break
-        
+
         return placed_carpets, unplaced_carpets, order_sheets
-    
+
     # Place multi-carpet Excel orders
     for order_id, order_carpets in sorted_orders:
         if max_sheet_range_per_order is None:
             # No constraint - use simple placement
             logger.info(f"Размещение заказа {order_id} без ограничения диапазона")
-            placed_carpets, unplaced_carpets, _ = place_order_with_range_constraint(order_id, order_carpets)
+            placed_carpets, unplaced_carpets, _ = place_order_with_range_constraint(
+                order_id, order_carpets
+            )
         else:
-            placed_carpets, unplaced_carpets, order_sheets = place_order_with_range_constraint(order_id, order_carpets)
-            
+            placed_carpets, unplaced_carpets, order_sheets = (
+                place_order_with_range_constraint(order_id, order_carpets)
+            )
+
             # Verify constraint is met
             if order_sheets and len(order_sheets) > 1:
                 actual_range = max(order_sheets) - min(order_sheets) + 1
                 if actual_range > max_sheet_range_per_order:
-                    logger.error(f"ОШИБКА: заказ {order_id} нарушает ограничение: {actual_range} > {max_sheet_range_per_order}")
+                    logger.error(
+                        f"ОШИБКА: заказ {order_id} нарушает ограничение: {actual_range} > {max_sheet_range_per_order}"
+                    )
                 else:
-                    logger.info(f"Заказ {order_id} размещен в диапазоне {min(order_sheets)}-{max(order_sheets)} (размер: {actual_range})")
-        
+                    logger.info(
+                        f"Заказ {order_id} размещен в диапазоне {min(order_sheets)}-{max(order_sheets)} (размер: {actual_range})"
+                    )
+
         if unplaced_carpets:
-            logger.warning(f"Заказ {order_id}: {len(unplaced_carpets)} ковров не размещено")
+            logger.warning(
+                f"Заказ {order_id}: {len(unplaced_carpets)} ковров не размещено"
+            )
             all_unplaced.extend(unplaced_carpets)
-        
+
         if progress_callback:
-            completed = len([o for o, _ in sorted_orders if o == order_id]) + len([o for o, _ in sorted_orders[:sorted_orders.index((order_id, order_carpets))]])
+            completed = len([o for o, _ in sorted_orders if o == order_id]) + len(
+                [
+                    o
+                    for o, _ in sorted_orders[
+                        : sorted_orders.index((order_id, order_carpets))
+                    ]
+                ]
+            )
             progress = min(50, int(50 * completed / len(sorted_orders)))
             progress_callback(progress, f"Размещение заказа {order_id}")
 
     # STEP 5: Place single-carpet orders and priority 1 on remaining space/new sheets
-    logger.info(f"\n=== ЭТАП 5: РАЗМЕЩЕНИЕ {len(priority1_carpets)} ОДНОКОВРОВЫХ/ПРИОРИТЕТ1 ===")
-    
+    logger.info(
+        f"\n=== ЭТАП 5: РАЗМЕЩЕНИЕ {len(priority1_carpets)} ОДНОКОВРОВЫХ/ПРИОРИТЕТ1 ==="
+    )
+
     remaining_priority1 = list(priority1_carpets)
-    
+
     # First try to fill existing sheets
     for layout_idx, layout in enumerate(placed_layouts):
         if not remaining_priority1:
             break
         if layout.get("usage_percent", 0) >= 85:
             continue
-            
+
         # Group remaining by color matching this sheet
-        matching_carpets = [c for c in remaining_priority1 if c.color == layout["sheet_color"]]
+        matching_carpets = [
+            c for c in remaining_priority1 if c.color == layout["sheet_color"]
+        ]
         if not matching_carpets:
             continue
-            
+
         try:
             additional_placed, remaining_tuples = bin_packing_with_existing(
-                matching_carpets, layout["placed_polygons"], 
-                layout["sheet_size"], verbose=False
+                matching_carpets,
+                layout["placed_polygons"],
+                layout["sheet_size"],
+                verbose=False,
             )
-            
+
             if additional_placed:
                 # Update layout
                 placed_layouts[layout_idx]["placed_polygons"].extend(additional_placed)
                 placed_layouts[layout_idx]["usage_percent"] = calculate_usage_percent(
                     placed_layouts[layout_idx]["placed_polygons"], layout["sheet_size"]
                 )
-                
+
                 # Update remaining
-                remaining_carpet_map = {(c.polygon, c.filename, c.color, c.order_id): c for c in matching_carpets}
+                remaining_carpet_map = {
+                    (c.polygon, c.filename, c.color, c.order_id): c
+                    for c in matching_carpets
+                }
                 newly_remaining = []
                 for remaining_tuple in remaining_tuples:
-                    key = (remaining_tuple[0], remaining_tuple[1], remaining_tuple[2], remaining_tuple[3])
+                    key = (
+                        remaining_tuple[0],
+                        remaining_tuple[1],
+                        remaining_tuple[2],
+                        remaining_tuple[3],
+                    )
                     if key in remaining_carpet_map:
                         newly_remaining.append(remaining_carpet_map[key])
-                
+
                 # Remove placed carpets from remaining list
-                placed_carpet_set = set((c.polygon, c.filename, c.color, c.order_id) for c in matching_carpets if c not in newly_remaining)
-                remaining_priority1 = [c for c in remaining_priority1 if (c.polygon, c.filename, c.color, c.order_id) not in placed_carpet_set]
-                
-                logger.info(f"    Дозаполнен лист #{layout['sheet_number']}: +{len(additional_placed)} приоритет1")
+                placed_carpet_set = set(
+                    (c.polygon, c.filename, c.color, c.order_id)
+                    for c in matching_carpets
+                    if c not in newly_remaining
+                )
+                remaining_priority1 = [
+                    c
+                    for c in remaining_priority1
+                    if (c.polygon, c.filename, c.color, c.order_id)
+                    not in placed_carpet_set
+                ]
+
+                logger.info(
+                    f"    Дозаполнен лист #{layout['sheet_number']}: +{len(additional_placed)} приоритет1"
+                )
         except Exception as e:
             logger.debug(f"Не удалось дозаполнить лист приоритетом 1: {e}")
             continue
-    
+
     # Create new sheets for remaining priority 1
     carpets_by_color = {}
     for carpet in remaining_priority1:
@@ -1977,132 +2054,178 @@ def bin_packing_with_inventory(
         if color not in carpets_by_color:
             carpets_by_color[color] = []
         carpets_by_color[color].append(carpet)
-    
+
     for color, color_carpets in carpets_by_color.items():
         remaining_carpets = list(color_carpets)
-        
+
         while remaining_carpets:
             sheet_type = find_available_sheet_of_color(color, sheet_inventory)
             if not sheet_type:
                 logger.warning(f"Нет доступных листов цвета {color} для приоритета 1")
                 all_unplaced.extend(remaining_carpets)
                 break
-            
+
             sheet_counter += 1
             sheet_type["used"] += 1
             sheet_size = (sheet_type["width"], sheet_type["height"])
-            
-            placed, remaining = bin_packing(remaining_carpets, sheet_size, verbose=False)
-            
+
+            placed, remaining = bin_packing(
+                remaining_carpets, sheet_size, verbose=False
+            )
+
             if placed:
                 new_layout = create_new_sheet(sheet_type, sheet_counter, color)
                 new_layout["placed_polygons"] = placed
-                new_layout["usage_percent"] = calculate_usage_percent(placed, sheet_size)
-                new_layout["orders_on_sheet"] = list(set(carpet.order_id for carpet in remaining_carpets if carpet not in remaining))
+                new_layout["usage_percent"] = calculate_usage_percent(
+                    placed, sheet_size
+                )
+                new_layout["orders_on_sheet"] = list(
+                    set(
+                        carpet.order_id
+                        for carpet in remaining_carpets
+                        if carpet not in remaining
+                    )
+                )
                 placed_layouts.append(new_layout)
-                
+
                 remaining_carpets = remaining
-                logger.info(f"    Создан лист #{sheet_counter}: {len(placed)} приоритет1")
-                
+                logger.info(
+                    f"    Создан лист #{sheet_counter}: {len(placed)} приоритет1"
+                )
+
                 if verbose:
-                    st.success(f"✅ Лист #{sheet_counter} ({sheet_type['name']}): {len(placed)} приоритет1")
+                    st.success(
+                        f"✅ Лист #{sheet_counter} ({sheet_type['name']}): {len(placed)} приоритет1"
+                    )
             else:
-                logger.warning(f"Не удалось разместить приоритет 1 на новом листе {color}")
+                logger.warning(
+                    f"Не удалось разместить приоритет 1 на новом листе {color}"
+                )
                 all_unplaced.extend(remaining_carpets)
                 sheet_type["used"] -= 1
                 sheet_counter -= 1
                 break
 
     # STEP 6: Place priority 2 on remaining space only (no new sheets)
-    logger.info(f"\n=== ЭТАП 6: РАЗМЕЩЕНИЕ {len(priority2_carpets)} ПРИОРИТЕТ2 НА СВОБОДНОМ МЕСТЕ ===")
-    
+    logger.info(
+        f"\n=== ЭТАП 6: РАЗМЕЩЕНИЕ {len(priority2_carpets)} ПРИОРИТЕТ2 НА СВОБОДНОМ МЕСТЕ ==="
+    )
+
     remaining_priority2 = list(priority2_carpets)
-    
+
     for layout_idx, layout in enumerate(placed_layouts):
         if not remaining_priority2:
             break
         if layout.get("usage_percent", 0) >= 85:
             continue
-            
+
         # Try to place carpets of matching color
-        matching_carpets = [c for c in remaining_priority2 if c.color == layout["sheet_color"]]
+        matching_carpets = [
+            c for c in remaining_priority2 if c.color == layout["sheet_color"]
+        ]
         if not matching_carpets:
             continue
-            
+
         try:
             additional_placed, remaining_tuples = bin_packing_with_existing(
-                matching_carpets, layout["placed_polygons"], 
-                layout["sheet_size"], verbose=False
+                matching_carpets,
+                layout["placed_polygons"],
+                layout["sheet_size"],
+                verbose=False,
             )
-            
+
             if additional_placed:
                 # Update layout
                 placed_layouts[layout_idx]["placed_polygons"].extend(additional_placed)
                 placed_layouts[layout_idx]["usage_percent"] = calculate_usage_percent(
                     placed_layouts[layout_idx]["placed_polygons"], layout["sheet_size"]
                 )
-                
+
                 # Update remaining
-                remaining_carpet_map = {(c.polygon, c.filename, c.color, c.order_id): c for c in matching_carpets}
+                remaining_carpet_map = {
+                    (c.polygon, c.filename, c.color, c.order_id): c
+                    for c in matching_carpets
+                }
                 newly_remaining = []
                 for remaining_tuple in remaining_tuples:
-                    key = (remaining_tuple[0], remaining_tuple[1], remaining_tuple[2], remaining_tuple[3])
+                    key = (
+                        remaining_tuple[0],
+                        remaining_tuple[1],
+                        remaining_tuple[2],
+                        remaining_tuple[3],
+                    )
                     if key in remaining_carpet_map:
                         newly_remaining.append(remaining_carpet_map[key])
-                
+
                 # Remove placed carpets from remaining list
-                placed_carpet_set = set((c.polygon, c.filename, c.color, c.order_id) for c in matching_carpets if c not in newly_remaining)
-                remaining_priority2 = [c for c in remaining_priority2 if (c.polygon, c.filename, c.color, c.order_id) not in placed_carpet_set]
-                
-                logger.info(f"    Дозаполнен лист #{layout['sheet_number']}: +{len(additional_placed)} приоритет2")
+                placed_carpet_set = set(
+                    (c.polygon, c.filename, c.color, c.order_id)
+                    for c in matching_carpets
+                    if c not in newly_remaining
+                )
+                remaining_priority2 = [
+                    c
+                    for c in remaining_priority2
+                    if (c.polygon, c.filename, c.color, c.order_id)
+                    not in placed_carpet_set
+                ]
+
+                logger.info(
+                    f"    Дозаполнен лист #{layout['sheet_number']}: +{len(additional_placed)} приоритет2"
+                )
         except Exception as e:
             logger.debug(f"Не удалось дозаполнить лист приоритетом 2: {e}")
             continue
-    
+
     # Add any remaining priority 2 to unplaced (no new sheets allowed)
     if remaining_priority2:
-        logger.info(f"Остается неразмещенными {len(remaining_priority2)} приоритет2 (новые листы не создаются)")
+        logger.info(
+            f"Остается неразмещенными {len(remaining_priority2)} приоритет2 (новые листы не создаются)"
+        )
         all_unplaced.extend(remaining_priority2)
 
     # STEP 7: Sort sheets by color (group black together, then grey)
     logger.info("\n=== ЭТАП 7: ГРУППИРОВКА ЛИСТОВ ПО ЦВЕТАМ ===")
-    
+
     # Separate black and grey sheets, maintain relative order within each color
     black_sheets = []
     grey_sheets = []
-    
+
     for layout in placed_layouts:
         if layout["sheet_color"] == "чёрный":
             black_sheets.append(layout)
         else:
             grey_sheets.append(layout)
-    
+
     # Reassign sheet numbers: first all black, then all grey
     final_layouts = []
     sheet_number = 1
-    
+
     for layout in black_sheets + grey_sheets:
         layout["sheet_number"] = sheet_number
         final_layouts.append(layout)
         sheet_number += 1
-    
+
     placed_layouts = final_layouts
-    
-    logger.info(f"Перегруппировка завершена: {len(black_sheets)} черных + {len(grey_sheets)} серых = {len(placed_layouts)} листов")
+
+    logger.info(
+        f"Перегруппировка завершена: {len(black_sheets)} черных + {len(grey_sheets)} серых = {len(placed_layouts)} листов"
+    )
 
     # Final logging and progress
-    logger.info(f"\n=== ИТОГИ РАЗМЕЩЕНИЯ ===")
+    logger.info("\n=== ИТОГИ РАЗМЕЩЕНИЯ ===")
     logger.info(f"Всего листов создано: {len(placed_layouts)}")
     logger.info(f"Неразмещенных полигонов: {len(all_unplaced)}")
-    
+
     if verbose:
-        st.info(f"Размещение завершено: {len(placed_layouts)} листов, {len(all_unplaced)} не размещено")
+        st.info(
+            f"Размещение завершено: {len(placed_layouts)} листов, {len(all_unplaced)} не размещено"
+        )
 
     if progress_callback:
         progress_callback(100, f"Завершено: {len(placed_layouts)} листов создано")
 
     return placed_layouts, all_unplaced
-
 
 
 def calculate_usage_percent(

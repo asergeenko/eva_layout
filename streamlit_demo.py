@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import os
@@ -12,17 +11,19 @@ from layout_optimizer import (
     parse_dxf_complete,
     bin_packing_with_inventory,
     plot_layout,
-    plot_input_polygons,
     save_dxf_layout_complete,
     Carpet,
 )
 
-from excel_loader import TARGET_SHEET, load_excel_file, parse_orders_from_excel, find_dxf_files_for_article
+from excel_loader import (
+    TARGET_SHEET,
+    load_excel_file,
+    parse_orders_from_excel,
+    find_dxf_files_for_article,
+)
 
 # Константы
-MAX_SHEET_RANGE_PER_ORDER = (
-    7 # Максимальный диапазон листов одного цвета, на которых должен быть размещен один заказ
-)
+MAX_SHEET_RANGE_PER_ORDER = 7  # Максимальный диапазон листов одного цвета, на которых должен быть размещен один заказ
 
 # Настройка логирования
 logging.basicConfig(
@@ -192,7 +193,6 @@ if "manual_files" not in st.session_state:
 excel_file = st.file_uploader(
     "Загрузите файл заказов Excel", type=["xlsx", "xls"], key="excel_upload"
 )
-
 
 
 if excel_file is not None:
@@ -463,6 +463,7 @@ if st.session_state.selected_orders:
 
         def seek(self, pos):
             return self.content.seek(pos)
+
 
 # Additional DXF files section (always available)
 st.subheader("📎 Загрузить вручную")
@@ -807,33 +808,6 @@ if st.button("🚀 Оптимизировать раскрой"):
         for order_id, count in order_counts.items():
             logger.info(f"  • Заказ {order_id}: {count} файлов")
 
-        # Optional input visualization (button-triggered)
-        if st.button("📊 Показать исходные файлы", key="show_input_visualization"):
-            st.subheader("🔍 Визуализация входных файлов")
-            input_plots = plot_input_polygons(carpets)
-            if input_plots:
-                # Show color legend
-                with st.expander("🎨 Цветовая схема файлов", expanded=False):
-                    legend_cols = st.columns(min(5, len(carpets)))
-                    for i, carpet in enumerate(carpets):
-                        with legend_cols[i % len(legend_cols)]:
-                            from layout_optimizer import get_color_for_file
-
-                            color = get_color_for_file(carpet.filename)
-                            # Convert RGB to hex for HTML
-                            color_hex = f"#{int(color[0]*255):02x}{int(color[1]*255):02x}{int(color[2]*255):02x}"
-                            st.markdown(
-                                f'<div style="background-color: {color_hex}; padding: 10px; border-radius: 5px; text-align: center; margin: 2px;"><b>{carpet.filename}</b></div>',
-                                unsafe_allow_html=True,
-                            )
-
-                cols = st.columns(min(3, len(input_plots)))
-                for i, (file_name, plot_buf) in enumerate(input_plots.items()):
-                    with cols[i % len(cols)]:
-                        st.image(
-                            plot_buf, caption=f"{file_name}", use_container_width=True
-                        )
-
         # Store original dimensions for comparison later
         original_dimensions = {}
 
@@ -932,7 +906,6 @@ if st.button("🚀 Оптимизировать раскрой"):
             def update_progress(percent, status_text):
                 optimization_progress.progress(int(percent))
                 optimization_status.text(status_text)
-
 
             placed_layouts, unplaced_polygons = bin_packing_with_inventory(
                 carpets,
