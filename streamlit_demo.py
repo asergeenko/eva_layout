@@ -79,8 +79,6 @@ for sheet in st.session_state.available_sheets:
     if "color" not in sheet:
         sheet["color"] = "серый"  # Default color for existing sheets
 
-# Add new sheet type
-st.subheader("Добавить тип листа")
 col1, col2, col3 = st.columns([2, 2, 1])
 
 with col1:
@@ -94,7 +92,7 @@ with col1:
         sheet_width = st.number_input(
             "Ширина (см)",
             min_value=50,
-            max_value=1000,
+            max_value=5000,
             step=1,
             value=140,
             key="custom_width",
@@ -102,7 +100,7 @@ with col1:
         sheet_height = st.number_input(
             "Высота (см)",
             min_value=50,
-            max_value=1000,
+            max_value=5000,
             step=1,
             value=200,
             key="custom_height",
@@ -111,36 +109,34 @@ with col1:
     else:
         selected_size = tuple(map(int, sheet_type_option.split("x")))
 
-    # Color selection
-    sheet_color = st.selectbox("Цвет листа", ["чёрный", "серый"], key="sheet_color")
 
 with col2:
     sheet_count = st.number_input(
-        "Количество листов", min_value=1, max_value=100, value=5, key="sheet_count"
+        "Количество листов", min_value=1, max_value=500, value=5, key="sheet_count"
     )
+    # Color selection
+    sheet_color = st.selectbox("Цвет листа", ["чёрный", "серый"], key="sheet_color")
+
     sheet_name = st.text_input(
         "Название типа листа (опционально)",
         value=f"Лист {selected_size[0]}x{selected_size[1]} {sheet_color}",
         key="sheet_name",
     )
 
-with col3:
-    st.write("")
-    st.write("")
-    if st.button("➕ Добавить", key="add_sheet"):
-        new_sheet = {
-            "name": sheet_name,
-            "width": selected_size[0],
-            "height": selected_size[1],
-            "color": sheet_color,
-            "count": sheet_count,
-            "used": 0,
-        }
-        st.session_state.available_sheets.append(new_sheet)
-        st.success(
-            f"Добавлен тип листа: {new_sheet['name']} ({new_sheet['count']} шт.)"
-        )
-        st.rerun()
+if st.button("➕ Добавить", key="add_sheet"):
+    new_sheet = {
+        "name": sheet_name,
+        "width": selected_size[0],
+        "height": selected_size[1],
+        "color": sheet_color,
+        "count": sheet_count,
+        "used": 0,
+    }
+    st.session_state.available_sheets.append(new_sheet)
+    st.success(
+        f"Добавлен тип листа: {new_sheet['name']} ({new_sheet['count']} шт.)"
+    )
+    st.rerun()
 
 # Display current sheet inventory
 if st.session_state.available_sheets:
@@ -1339,23 +1335,11 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
             if os.path.exists(report_file):
                 zipf.write(report_file, os.path.basename(report_file))
 
-        # Download buttons
-        col1, col2 = st.columns([1, 1])
 
-        with col1:
-            with open(report_file, "rb") as f:
-                st.download_button(
-                    label="📊 Скачать отчет Excel",
-                    data=f,
-                    file_name=os.path.basename(report_file),
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
-
-        with col2:
-            with open(zip_path, "rb") as f:
-                st.download_button(
-                    label="📦 Скачать все файлы (ZIP)",
-                    data=f,
-                    file_name=zip_filename,
-                    mime="application/zip",
-                )
+        with open(zip_path, "rb") as f:
+            st.download_button(
+                label="📦 Скачать все файлы (ZIP)",
+                data=f,
+                file_name=zip_filename,
+                mime="application/zip",
+            )
