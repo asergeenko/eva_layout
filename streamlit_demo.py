@@ -39,6 +39,16 @@ logger = logging.getLogger(__name__)
 logger.info("=== НАЧАЛО СЕССИИ EVA LAYOUT ===")
 logger.info("Работа без ограничений на диапазон листов - максимальная плотность раскладки")
 
+# Проверяем доступность улучшенного алгоритма
+try:
+    from layout_optimizer import IMPROVED_PACKING_AVAILABLE
+    if IMPROVED_PACKING_AVAILABLE:
+        logger.info("✨ Улучшенный алгоритм размещения доступен")
+    else:
+        logger.info("⚠️ Улучшенный алгоритм размещения недоступен")
+except ImportError:
+    logger.warning("Ошибка импорта настроек алгоритма")
+
 # Configuration
 DEFAULT_SHEET_TYPES = [
     (140, 200),

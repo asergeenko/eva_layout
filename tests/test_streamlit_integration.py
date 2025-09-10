@@ -280,7 +280,14 @@ def test_streamlit_integration():
     if len(placed_orders) < total_excel_orders_unique:
         missing_orders = total_excel_orders_unique - len(placed_orders)
         # Проверяем что не размещен только известный проблемный заказ
-        unplaced_excel_ids = set(p.order_id for p in unplaced if p.order_id.startswith("ZAKAZ"))
+        unplaced_excel_ids = set()
+        for p in unplaced:
+            if hasattr(p, 'order_id') and p.order_id.startswith("ZAKAZ"):
+                unplaced_excel_ids.add(p.order_id)
+            elif isinstance(p, tuple) and len(p) > 3:
+                order_id = p[3] if len(p) > 3 else (p[6] if len(p) > 6 else "unknown")
+                if str(order_id).startswith("ZAKAZ"):
+                    unplaced_excel_ids.add(order_id)
         known_problematic_orders = {"ZAKAZ_row_34"}  # Лодка AKVA 2800 - слишком большая
         
         if unplaced_excel_ids.issubset(known_problematic_orders) and missing_orders <= 1:
