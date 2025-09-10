@@ -205,30 +205,45 @@ class AdvancedCarpetPacker:
             ):
                 candidates.add((0, y))
 
-        # 2. Простые позиции около уже размещенных полигонов
+        # 2. Плотные позиции около уже размещенных полигонов
         for placed_polygon in self.placed_polygons:
             placed_bounds = placed_polygon.bounds
-            gap = 5.0  # Увеличенный зазор для надежности
+            gap = 1.0  # Уменьшенный зазор для лучшего размещения
 
             # Справа от размещенного полигона
             x = placed_bounds[2] + gap
             if x + poly_width <= self.sheet_width:
                 candidates.add((x, placed_bounds[1]))  # На той же высоте
                 candidates.add((x, 0))  # У нижнего края
-                # Добавляем больше позиций по вертикали
-                for offset_y in [10, 20, 50, 100]:
-                    if placed_bounds[1] + offset_y + poly_height <= self.sheet_height:
-                        candidates.add((x, placed_bounds[1] + offset_y))
+                # Добавляем плотную сетку позиций по вертикали
+                for offset_y in range(0, int(self.sheet_height - poly_height - placed_bounds[1]), 12):
+                    y_pos = placed_bounds[1] + offset_y
+                    if y_pos + poly_height <= self.sheet_height:
+                        candidates.add((x, y_pos))
 
             # Сверху от размещенного полигона
             y = placed_bounds[3] + gap
             if y + poly_height <= self.sheet_height:
                 candidates.add((placed_bounds[0], y))  # На той же позиции X
                 candidates.add((0, y))  # У левого края
-                # Добавляем больше позиций по горизонтали
-                for offset_x in [10, 20, 50, 100]:
-                    if placed_bounds[0] + offset_x + poly_width <= self.sheet_width:
-                        candidates.add((placed_bounds[0] + offset_x, y))
+                # Добавляем плотную сетку позиций по горизонтали
+                for offset_x in range(0, int(self.sheet_width - poly_width - placed_bounds[0]), 12):
+                    x_pos = placed_bounds[0] + offset_x
+                    if x_pos + poly_width <= self.sheet_width:
+                        candidates.add((x_pos, y))
+                        
+            # Добавляем позиции для плотной упаковки в зазорах
+            # Левее от размещенного полигона (если есть место)
+            if placed_bounds[0] >= poly_width + gap:
+                x = placed_bounds[0] - poly_width - gap
+                candidates.add((x, placed_bounds[1]))
+                candidates.add((x, 0))
+                
+            # Ниже от размещенного полигона (если есть место)  
+            if placed_bounds[1] >= poly_height + gap:
+                y = placed_bounds[1] - poly_height - gap
+                candidates.add((placed_bounds[0], y))
+                candidates.add((0, y))
 
         # 3. Случайные позиции для исследования пространства (Monte Carlo) - отключено для скорости
         # if len(self.placed_polygons) > 3:  # Только когда уже есть несколько полигонов
@@ -245,7 +260,7 @@ class AdvancedCarpetPacker:
         )  # Сначала по Y, потом по X
 
         # Ограничиваем количество кандидатов для производительности
-        max_candidates = 50  # Сокращено для скорости
+        max_candidates = 200  # Увеличено для лучшего размещения
         if len(candidates_list) > max_candidates:
             candidates_list = candidates_list[:max_candidates]
 
@@ -410,12 +425,10 @@ class AdvancedCarpetPacker:
     def _has_collisions(self, test_polygon: Polygon) -> bool:
         """Проверяет пересечения с уже размещенными полигонами."""
         for i, placed_polygon in enumerate(self.placed_polygons):
-            # Проверяем реальное пересечение площадей (не касание)
-            if test_polygon.intersects(placed_polygon):
-                intersection = test_polygon.intersection(placed_polygon)
-                # Только значительные пересечения считаем коллизией
-                if hasattr(intersection, "area") and intersection.area > 5.0:  # > 5 мм²
-                    return True
+            # Сначала быстрая проверка через distance для минимального зазора
+            distance = test_polygon.distance(placed_polygon)
+            if distance < 0.8:  # Уменьшенный зазор 0.8мм для лучшего размещения
+                return True
         return False
 
 

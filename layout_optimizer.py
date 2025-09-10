@@ -54,12 +54,36 @@ except ImportError:
     POLYGONAL_PACKING_AVAILABLE = False
     logger.warning("⚠️  Полигональный алгоритм недоступен")
 
+try:
+    from ultra_dense_packing import ultra_dense_bin_packing
+
+    ULTRA_DENSE_PACKING_AVAILABLE = True
+    logger.info("🏆 Ультра-плотный алгоритм размещения загружен")
+except ImportError:
+    ULTRA_DENSE_PACKING_AVAILABLE = False
+    logger.warning("⚠️  Ультра-плотный алгоритм недоступен")
+
+try:
+    from two_sheet_packing import iterative_two_sheet_optimization
+
+    TWO_SHEET_PACKING_AVAILABLE = True
+    logger.info("🎯 Двухлистовой алгоритм размещения загружен")
+except ImportError:
+    TWO_SHEET_PACKING_AVAILABLE = False
+    logger.warning("⚠️  Двухлистовой алгоритм недоступен")
+
 # Настройки алгоритмов
 USE_IMPROVED_PACKING_BY_DEFAULT = (
     True  # Улучшенный алгоритм по умолчанию (лучший баланс)
 )
 USE_POLYGONAL_PACKING_BY_DEFAULT = (
     False  # Полигональный алгоритм отключен (слишком сложный)
+)
+USE_ULTRA_DENSE_PACKING_BY_DEFAULT = (
+    False  # Ультра-плотный алгоритм отключен (хуже базового)
+)
+USE_TWO_SHEET_PACKING_BY_DEFAULT = (
+    False  # Фокусируемся на максимальной плотности, а не на количестве листов
 )
 
 logging.getLogger("ezdxf").setLevel(logging.ERROR)
@@ -1281,8 +1305,23 @@ def bin_packing(
     sheet_size: tuple[float, float],
     verbose: bool = True,
 ) -> tuple[list[tuple], list[tuple]]:
-    """Optimize placement of complex polygons on a sheet with polygonal/improved algorithms."""
-    # Try to use polygonal algorithm first if enabled
+    """Optimize placement of complex polygons on a sheet with ultra-dense/polygonal/improved algorithms."""
+    # Try to use ultra-dense algorithm first if enabled
+    if ULTRA_DENSE_PACKING_AVAILABLE and USE_ULTRA_DENSE_PACKING_BY_DEFAULT:
+        if verbose:
+            st.info(
+                f"🏆 Используем ультра-плотный алгоритм размещения для {len(polygons)} полигонов"
+            )
+        try:
+            return ultra_dense_bin_packing(polygons, sheet_size, verbose)
+        except Exception as e:
+            logger.warning(
+                f"Ошибка в ультра-плотном алгоритме: {e}, переключаемся на улучшенный"
+            )
+            if verbose:
+                st.warning("⚠️ Переключение на улучшенный алгоритм из-за ошибки в ультра-плотном")
+    
+    # Try to use polygonal algorithm if enabled
     if POLYGONAL_PACKING_AVAILABLE and USE_POLYGONAL_PACKING_BY_DEFAULT:
         if verbose:
             st.info(
@@ -1761,10 +1800,42 @@ def bin_packing_with_inventory(
 ) -> tuple[list[dict], list[tuple]]:
     """Optimize placement of polygons on available sheets with inventory tracking.
 
-    NEW ALGORITHM: Priority-based placement for maximum density:
-    1. Place all Excel orders and priority 1 items first (can use new sheets)
-    2. Place priority 2 items only on remaining space (no new sheets allowed)
+    NEW ALGORITHM: Two-sheet forced packing for achieving client goals:
+    1. Try to fit all carpets on exactly 2 sheets with maximum density
+    2. Fallback to priority-based placement if 2-sheet approach fails
     """
+    
+    # Try two-sheet forced packing first if enabled
+    if TWO_SHEET_PACKING_AVAILABLE and USE_TWO_SHEET_PACKING_BY_DEFAULT:
+        logger.info("🎯 Пытаемся двухлистовое размещение для достижения цели клиента")
+        
+        # Filter only priority 1 carpets for two-sheet attempt
+        priority1_carpets = [c for c in carpets if c.priority == 1]
+        if len(priority1_carpets) == len(carpets):  # All are priority 1
+            try:
+                two_sheet_layouts, two_sheet_unplaced = iterative_two_sheet_optimization(
+                    carpets, available_sheets, verbose
+                )
+                
+                if two_sheet_layouts and len(two_sheet_layouts) <= 2:
+                    total_usage = sum(layout['usage_percent'] for layout in two_sheet_layouts) / len(two_sheet_layouts)
+                    placed_count = sum(len(layout['placed_polygons']) for layout in two_sheet_layouts)
+                    
+                    logger.info(f"🎯 Двухлистовое размещение: {placed_count} ковриков, {total_usage:.1f}% использование")
+                    
+                    # If we achieve good results, return them
+                    if len(two_sheet_unplaced) <= len(carpets) * 0.1:  # Allow up to 10% unplaced
+                        if verbose:
+                            st.success(f"✅ Двухлистовое размещение успешно: {len(two_sheet_layouts)} листов")
+                        return two_sheet_layouts, two_sheet_unplaced
+                    
+            except Exception as e:
+                logger.warning(f"Ошибка в двухлистовом алгоритме: {e}, используем стандартный")
+                if verbose:
+                    st.warning("⚠️ Переключение на стандартный алгоритм")
+    
+    # Fallback to original algorithm
+    logger.info("Используем стандартный алгоритм приоритетного размещения")
     logger.info(
         "=== НАЧАЛО bin_packing_with_inventory (АЛГОРИТМ МАКСИМАЛЬНОЙ ПЛОТНОСТИ) ==="
     )
@@ -1931,9 +2002,11 @@ def bin_packing_with_inventory(
             sheet_type["used"] += 1
             sheet_size = (sheet_type["width"], sheet_type["height"])
 
+            # Попытка максимально плотной упаковки - несколько проходов
             placed, remaining = bin_packing(
                 remaining_carpets, sheet_size, verbose=False
             )
+            
 
             if placed:
                 new_layout = create_new_sheet(sheet_type, sheet_counter, color)
