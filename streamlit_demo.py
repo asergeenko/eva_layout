@@ -23,7 +23,7 @@ from excel_loader import (
 )
 
 # Константы
-MAX_SHEET_RANGE_PER_ORDER = 7  # Максимальный диапазон листов одного цвета, на которых должен быть размещен один заказ
+# Константа MAX_SHEET_RANGE_PER_ORDER удалена - теперь фокус на максимальной плотности раскладки
 
 # Настройка логирования
 logging.basicConfig(
@@ -37,7 +37,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 logger.info("=== НАЧАЛО СЕССИИ EVA LAYOUT ===")
-logger.info(f"MAX_SHEET_RANGE_PER_ORDER = {MAX_SHEET_RANGE_PER_ORDER}")
+logger.info("Работа без ограничений на диапазон листов - максимальная плотность раскладки")
 
 # Configuration
 DEFAULT_SHEET_TYPES = [
@@ -877,9 +877,7 @@ if st.button("🚀 Оптимизировать раскрой"):
             optimization_progress.progress(10)
             optimization_status.text("Подготовка данных для оптимизации...")
 
-            logger.info(
-                f"Вызываем bin_packing_with_inventory с MAX_SHEETS_PER_ORDER={MAX_SHEET_RANGE_PER_ORDER}"
-            )
+            logger.info("Вызываем bin_packing_with_inventory без ограничений на диапазон листов")
             logger.info(
                 f"Входные параметры: {len(carpets)} полигонов, {len(st.session_state.available_sheets)} типов листов"
             )
@@ -907,7 +905,6 @@ if st.button("🚀 Оптимизировать раскрой"):
                 carpets,
                 st.session_state.available_sheets,
                 verbose=False,
-                max_sheet_range_per_order=MAX_SHEET_RANGE_PER_ORDER,
                 progress_callback=update_progress,
             )
 
@@ -931,16 +928,9 @@ if st.button("🚀 Оптимизировать раскрой"):
             optimization_status.empty()
 
         except ValueError as e:
-            # Handle order constraint violations
-            if "Нарушение ограничений заказов" in str(e):
-                st.error(f"❌ {str(e)}")
-                st.info(
-                    f"💡 **Решение**: Увеличьте константу MAX_SHEETS_PER_ORDER (сейчас: {MAX_SHEET_RANGE_PER_ORDER}) или разделите файлы заказа на несколько частей."
-                )
-                st.stop()
-            else:
-                # Re-raise other ValueError exceptions
-                raise
+            # Handle any other ValueError exceptions
+            st.error(f"❌ Ошибка при оптимизации: {str(e)}")
+            st.stop()
 
         # Convert to old format for compatibility with existing display code
         st.info("🔨 Создание выходных файлов и визуализаций...")
