@@ -1265,27 +1265,33 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
 
         # Sheet visualizations
         st.subheader("📐 Схемы раскроя листов")
-        for layout in all_layouts:
-            # Add color indicator emoji
-            color_emoji = (
-                "⚫"
-                if layout["Sheet Color"] == "чёрный"
-                else "⚪"
-                if layout["Sheet Color"] == "серый"
-                else "🔘"
-            )
+        
+        # Group layouts into pairs for two-column display
+        for i in range(0, len(all_layouts), 2):
+            sheet_col1, sheet_col2 = st.columns(2)
+            
+            # First sheet in the pair
+            with sheet_col1:
+                layout = all_layouts[i]
+                # Add color indicator emoji
+                color_emoji = (
+                    "⚫"
+                    if layout["Sheet Color"] == "чёрный"
+                    else "⚪"
+                    if layout["Sheet Color"] == "серый"
+                    else "🔘"
+                )
 
-            st.write(
-                f"**Лист №{layout['Sheet']}: {color_emoji} {layout['Sheet Type']} ({layout['Sheet Size']}) - {layout['Shapes Placed']} объектов - {layout['Material Usage (%)']}% расход**"
-            )
-            col1, col2 = st.columns([2, 1])
-            with col1:
+                st.write(
+                    f"**Лист №{layout['Sheet']}: {color_emoji} {layout['Sheet Type']} ({layout['Sheet Size']}) - {layout['Shapes Placed']} объектов - {layout['Material Usage (%)']}% расход**"
+                )
+                
                 st.image(
                     layout["Plot"],
                     caption=f"Раскрой листа №{layout['Sheet']} ({layout['Sheet Type']})",
                     use_container_width=True,
                 )
-            with col2:
+                
                 st.write(f"**Тип листа:** {layout['Sheet Type']}")
                 st.write(f"**Цвет листа:** {color_emoji} {layout['Sheet Color']}")
                 st.write(f"**Размер листа:** {layout['Sheet Size']}")
@@ -1299,7 +1305,45 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
                         mime="application/dxf",
                         key=f"download_{layout['Sheet']}",
                     )
-            st.divider()  # Add visual separator between sheets
+            
+            # Second sheet in the pair (if exists)
+            with sheet_col2:
+                if i + 1 < len(all_layouts):
+                    layout = all_layouts[i + 1]
+                    # Add color indicator emoji
+                    color_emoji = (
+                        "⚫"
+                        if layout["Sheet Color"] == "чёрный"
+                        else "⚪"
+                        if layout["Sheet Color"] == "серый"
+                        else "🔘"
+                    )
+
+                    st.write(
+                        f"**Лист №{layout['Sheet']}: {color_emoji} {layout['Sheet Type']} ({layout['Sheet Size']}) - {layout['Shapes Placed']} объектов - {layout['Material Usage (%)']}% расход**"
+                    )
+                    
+                    st.image(
+                        layout["Plot"],
+                        caption=f"Раскрой листа №{layout['Sheet']} ({layout['Sheet Type']})",
+                        use_container_width=True,
+                    )
+                    
+                    st.write(f"**Тип листа:** {layout['Sheet Type']}")
+                    st.write(f"**Цвет листа:** {color_emoji} {layout['Sheet Color']}")
+                    st.write(f"**Размер листа:** {layout['Sheet Size']}")
+                    st.write(f"**Размещено объектов:** {layout['Shapes Placed']}")
+                    st.write(f"**Расход материала:** {layout['Material Usage (%)']}%")
+                    with open(layout["Output File"], "rb") as f:
+                        st.download_button(
+                            label="📥 Скачать DXF",
+                            data=f,
+                            file_name=os.path.basename(layout["Output File"]),
+                            mime="application/dxf",
+                            key=f"download_{layout['Sheet']}_2",
+                        )
+            
+            st.divider()  # Add visual separator between sheet pairs
     else:
         st.error(
             "❌ Не было создано ни одного листа. Проверьте отладочную информацию выше."

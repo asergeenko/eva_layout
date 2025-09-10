@@ -1730,7 +1730,7 @@ def bin_packing_with_inventory(
     2. Fallback to priority-based placement if 2-sheet approach fails
     """
 
-    
+
     # Fallback to original algorithm
     logger.info("Используем стандартный алгоритм приоритетного размещения")
     logger.info(
@@ -1903,7 +1903,7 @@ def bin_packing_with_inventory(
             placed, remaining = bin_packing(
                 remaining_carpets, sheet_size, verbose=False
             )
-            
+
 
             if placed:
                 new_layout = create_new_sheet(sheet_type, sheet_counter, color)
@@ -1938,18 +1938,18 @@ def bin_packing_with_inventory(
                 sheet_counter -= 1
                 break
 
-        if progress_callback:
-            progress = min(
-                70,
-                int(
-                    70
-                    * len(placed_layouts)
-                    / (len(placed_layouts) + len(priority2_carpets))
-                ),
-            )
-            progress_callback(
-                progress, f"Размещение приоритет 1+Excel: {len(placed_layouts)} листов"
-            )
+        #if progress_callback:
+        #    progress = min(
+        #        70,
+        #        int(
+        #            70
+        #            * len(placed_layouts)
+        #            / (len(placed_layouts) + len(priority2_carpets))
+        #        ),
+        #    )
+        #    progress_callback(
+        #        progress, f"Размещение приоритет 1+Excel: {len(placed_layouts)} листов"
+        #    )
 
     # STEP 3: Place priority 2 on remaining space only (no new sheets)
     logger.info(
