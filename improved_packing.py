@@ -1,6 +1,6 @@
 """
 Улучшенный алгоритм раскладки с использованием No-Fit Polygon (NFP) подходов
-для максимальной плотности размещения автомобильных ковриков.
+для максимальной плотности размещения автомобильных ковриков с приоритетом заполнения пространства.
 """
 
 import numpy as np
@@ -11,18 +11,21 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
 class AdvancedCarpetPacker:
-    """Продвинутый алгоритм размещения ковриков с использованием NFP подходов."""
+    """Продвинутый алгоритм размещения ковриков с акцентом на максимальное заполнение пространства."""
 
     def __init__(self, sheet_width_mm: float, sheet_height_mm: float):
         self.sheet_width = sheet_width_mm
         self.sheet_height = sheet_height_mm
         self.placed_polygons = []
         self.placed_positions = []
+        self.occupied_min_x = float('inf')
+        self.occupied_max_x = float('-inf')
+        self.occupied_min_y = float('inf')
+        self.occupied_max_y = float('-inf')
 
     def pack_carpets(self, carpets, progress_callback=None) -> Tuple[List, List]:
-        """Основная функция размещения ковриков."""
+        """Основная функция размещения ковриков на одном листе с максимальным заполнением."""
         placed = []
         unplaced = []
 
@@ -37,362 +40,230 @@ class AdvancedCarpetPacker:
                     f"Размещение коврика {i+1}/{total_carpets}",
                 )
 
-            best_placement = self._find_best_placement(carpet)
+            placement = self._try_standard_placement(carpet)
 
-            if best_placement:
-                placed.append(best_placement)
-                self.placed_polygons.append(best_placement[0])
-                self.placed_positions.append((best_placement[1], best_placement[2]))
-                # Extract density from the metadata if available
+            if placement:
+                placed.append(placement)
+                self.placed_polygons.append(placement[0])
+                self.placed_positions.append((placement[1], placement[2]))
+                # Обновляем занятые границы
+                bounds = placement[0].bounds
+                self.occupied_min_x = min(self.occupied_min_x, bounds[0])
+                self.occupied_max_x = max(self.occupied_max_x, bounds[2])
+                self.occupied_min_y = min(self.occupied_min_y, bounds[1])
+                self.occupied_max_y = max(self.occupied_max_y, bounds[3])
                 density = (
-                    best_placement[7].get("density", 0)
-                    if len(best_placement) > 7 and isinstance(best_placement[7], dict)
+                    placement[7].get("density", 0)
+                    if len(placement) > 7 and isinstance(placement[7], dict)
                     else 0
                 )
                 logger.info(f"Размещен {carpet.filename} с плотностью {density:.2f}")
             else:
-                # FALLBACK: Попытка стандартного размещения для неразмещенных полигонов
-                fallback_placement = self._try_standard_placement(carpet)
-                if fallback_placement:
-                    placed.append(fallback_placement)
-                    self.placed_polygons.append(fallback_placement[0])
-                    self.placed_positions.append((fallback_placement[1], fallback_placement[2]))
-                    logger.info(f"Размещен {carpet.filename} с fallback алгоритмом")
-                else:
-                    unplaced.append(carpet)
-                    logger.warning(f"Не удалось разместить {carpet.filename}")
+                unplaced.append(carpet)
+                logger.warning(f"Не удалось разместить {carpet.filename}")
 
         return placed, unplaced
 
     def _sort_carpets_advanced(self, carpets):
         """Улучшенная сортировка ковриков для оптимального размещения."""
-
         def carpet_priority(carpet):
             bounds = carpet.polygon.bounds
             width = bounds[2] - bounds[0]
             height = bounds[3] - bounds[1]
             area = carpet.polygon.area
-
-            # Коэффициент сложности формы (отношение площади к площади ограничивающего прямоугольника)
             bbox_area = width * height
             complexity = area / bbox_area if bbox_area > 0 else 0
-
-            # Коэффициент соотношения сторон (чем ближе к квадрату, тем легче размещать)
-            aspect_ratio = (
-                max(width, height) / min(width, height)
-                if min(width, height) > 0
-                else float("inf")
-            )
-
-            # Приоритет: крупные, сложные, близкие к квадрату формы размещаем первыми
+            aspect_ratio = max(width, height) / min(width, height) if min(width, height) > 0 else float("inf")
             return (area * 1000, complexity * 500, -aspect_ratio * 100)
-
         return sorted(carpets, key=carpet_priority, reverse=True)
 
-    def _find_best_placement(self, carpet):
-        """Поиск лучшего размещения для коврика с учетом всех ориентаций."""
+    def _try_standard_placement(self, carpet):
+        """Улучшенный стандартный алгоритм размещения с фокусом на заполнение пространства."""
         best_placement = None
         best_score = float("-inf")
-
-        # Тестируем все возможные углы поворота
         rotation_angles = [0, 90, 180, 270]
 
         for angle in rotation_angles:
             rotated_polygon = self._rotate_carpet(carpet.polygon, angle)
+            rotated_bounds = rotated_polygon.bounds
+            rotated_width = rotated_bounds[2] - rotated_bounds[0]
+            rotated_height = rotated_bounds[3] - rotated_bounds[1]
 
-            # Проверяем, помещается ли повернутый коврик на лист
-            if not self._fits_on_sheet(rotated_polygon):
+            if rotated_width > self.sheet_width or rotated_height > self.sheet_height:
                 continue
 
-            # Ищем оптимальное положение для этой ориентации
-            position, score = self._find_optimal_position(rotated_polygon, carpet)
+            candidates = self._generate_placement_candidates(rotated_polygon, rotated_width, rotated_height)
 
-            if position and score > best_score:
-                best_score = score
-                # Создаем окончательно размещенный полигон
-                final_polygon = self._translate_polygon(
-                    rotated_polygon, position[0], position[1]
-                )
-                best_placement = (
-                    final_polygon,
-                    position[0],
-                    position[1],
-                    angle,
-                    carpet.filename,
-                    carpet.color,
-                    carpet.order_id,
-                    {"density": score},  # Дополнительная информация
-                )
+            for x, y in candidates:
+                if x + rotated_width > self.sheet_width or y + rotated_height > self.sheet_height:
+                    continue
+
+                dx = x - rotated_bounds[0]
+                dy = y - rotated_bounds[1]
+                test_polygon = self._translate_polygon(rotated_polygon, dx, dy)
+
+                if self._has_collisions(test_polygon):
+                    continue
+
+                score = self._evaluate_placement(test_polygon, x, y)
+
+                if score > best_score:
+                    best_score = score
+                    best_placement = (
+                        test_polygon,
+                        x, y, angle,
+                        carpet.filename,
+                        carpet.color,
+                        carpet.order_id,
+                        {"density": score, "algorithm": "standard"}
+                    )
 
         return best_placement
 
-    def _find_optimal_position(
-        self, polygon: Polygon, carpet
-    ) -> Tuple[Optional[Tuple[float, float]], float]:
-        """Поиск оптимального положения полигона используя улучшенный алгоритм."""
-        bounds = polygon.bounds
-        poly_width = bounds[2] - bounds[0]
-        poly_height = bounds[3] - bounds[1]
-
-        # Генерируем кандидатов для размещения
-        candidates = self._generate_placement_candidates(polygon)
-
-        best_position = None
-        best_score = float("-inf")
-        tested_positions = 0
-        valid_positions = 0
-
-        for x, y in candidates:
-            tested_positions += 1
-            # Быстрая проверка границ листа
-            if (
-                x + poly_width > self.sheet_width
-                or y + poly_height > self.sheet_height
-                or x < 0
-                or y < 0
-            ):
-                continue
-
-            # Создаем тестовый полигон в этой позиции
-            # x,y - это где должен быть левый нижний угол bounding box
-            # нужно перенести полигон туда
-            dx = x - bounds[0]  # сдвиг по X
-            dy = y - bounds[1]  # сдвиг по Y
-            test_polygon = self._translate_polygon(polygon, dx, dy)
-
-            # Проверяем пересечения с уже размещенными полигонами
-            if self._has_collisions(test_polygon):
-                continue
-
-            valid_positions += 1
-            # Оцениваем качество этого размещения
-            score = self._evaluate_placement(test_polygon, x, y)
-
-            if score > best_score:
-                best_score = score
-                best_position = (dx, dy)  # Используем уже вычисленные dx, dy
-
-        # Debug info
-        if best_position is None and len(self.placed_polygons) > 0:
-            logger.debug(
-                f"Не найдено место для {carpet.filename} (размер {poly_width:.0f}x{poly_height:.0f}): {tested_positions} кандидатов, {valid_positions} прошли проверки"
-            )
-            # Debug first few candidates
-            placed_bounds = (
-                self.placed_polygons[0].bounds if self.placed_polygons else None
-            )
-            if placed_bounds:
-                logger.debug(
-                    f"Первый размещенный полигон: {placed_bounds[2]-placed_bounds[0]:.0f}x{placed_bounds[3]-placed_bounds[1]:.0f} в ({placed_bounds[0]:.0f},{placed_bounds[1]:.0f})"
-                )
-            if len(candidates) > 0:
-                logger.debug(f"Первые кандидаты: {candidates[:5]}")
-
-        return best_position, best_score
-
-    def _generate_placement_candidates(
-        self, polygon: Polygon
-    ) -> List[Tuple[float, float]]:
-        """Генерирует кандидатов для размещения полигона."""
+    def _generate_placement_candidates(self, polygon: Polygon, width: float, height: float) -> List[Tuple[float, float]]:
+        """Генерирует кандидатов для размещения с акцентом на заполнение пустого пространства."""
         candidates = set()
         bounds = polygon.bounds
-        poly_width = bounds[2] - bounds[0]
-        poly_height = bounds[3] - bounds[1]
+        gap = 0.5
+        dynamic_step = max(20.0, min(width, height) / 5)  # Адаптивный шаг
 
-        # 1. Позиции по краям листа (bottom-left fill) - только если нет размещенных полигонов
-        if len(self.placed_polygons) == 0:
-            step_size = min(20.0, min(poly_width, poly_height) / 5)  # Увеличенный шаг
-
-            # Нижний край
-            for x in np.arange(0, self.sheet_width - poly_width + step_size, step_size):
+        if not self.placed_polygons:
+            candidates.add((0, 0))
+            for x in np.arange(0, self.sheet_width - width + dynamic_step, dynamic_step):
                 candidates.add((x, 0))
-
-            # Левый край
-            for y in np.arange(
-                0, self.sheet_height - poly_height + step_size, step_size
-            ):
+            for y in np.arange(0, self.sheet_height - height + dynamic_step, dynamic_step):
                 candidates.add((0, y))
+        else:
+            # Плотное размещение рядом с существующими
+            for placed in self.placed_polygons:
+                p_bounds = placed.bounds
+                # Справа
+                x = p_bounds[2] + gap
+                if x + width <= self.sheet_width:
+                    for dy in np.arange(-height, height + 10, 10):  # Мелкий шаг для плотности
+                        y = p_bounds[1] + dy
+                        if 0 <= y <= self.sheet_height - height:
+                            candidates.add((x, y))
 
-        # 2. Плотные позиции около уже размещенных полигонов
-        for placed_polygon in self.placed_polygons:
-            placed_bounds = placed_polygon.bounds
-            gap = 1.0  # Уменьшенный зазор для лучшего размещения
+                # Сверху
+                y = p_bounds[3] + gap
+                if y + height <= self.sheet_height:
+                    for dx in np.arange(-width, width + 10, 10):  # Мелкий шаг
+                        x = p_bounds[0] + dx
+                        if 0 <= x <= self.sheet_width - width:
+                            candidates.add((x, y))
 
-            # Справа от размещенного полигона
-            x = placed_bounds[2] + gap
-            if x + poly_width <= self.sheet_width:
-                candidates.add((x, placed_bounds[1]))  # На той же высоте
-                candidates.add((x, 0))  # У нижнего края
-                # Добавляем плотную сетку позиций по вертикали
-                for offset_y in range(0, int(self.sheet_height - poly_height - placed_bounds[1]), 12):
-                    y_pos = placed_bounds[1] + offset_y
-                    if y_pos + poly_height <= self.sheet_height:
-                        candidates.add((x, y_pos))
+                # Левее
+                x = p_bounds[0] - width - gap
+                if x >= 0:
+                    for dy in np.arange(-height, height + 10, 10):
+                        y = p_bounds[1] + dy
+                        if 0 <= y <= self.sheet_height - height:
+                            candidates.add((x, y))
 
-            # Сверху от размещенного полигона
-            y = placed_bounds[3] + gap
-            if y + poly_height <= self.sheet_height:
-                candidates.add((placed_bounds[0], y))  # На той же позиции X
-                candidates.add((0, y))  # У левого края
-                # Добавляем плотную сетку позиций по горизонтали
-                for offset_x in range(0, int(self.sheet_width - poly_width - placed_bounds[0]), 12):
-                    x_pos = placed_bounds[0] + offset_x
-                    if x_pos + poly_width <= self.sheet_width:
-                        candidates.add((x_pos, y))
-                        
-            # Добавляем позиции для плотной упаковки в зазорах
-            # Левее от размещенного полигона (если есть место)
-            if placed_bounds[0] >= poly_width + gap:
-                x = placed_bounds[0] - poly_width - gap
-                candidates.add((x, placed_bounds[1]))
-                candidates.add((x, 0))
-                
-            # Ниже от размещенного полигона (если есть место)  
-            if placed_bounds[1] >= poly_height + gap:
-                y = placed_bounds[1] - poly_height - gap
-                candidates.add((placed_bounds[0], y))
-                candidates.add((0, y))
+                # Ниже
+                y = p_bounds[1] - height - gap
+                if y >= 0:
+                    for dx in np.arange(-width, width + 10, 10):
+                        x = p_bounds[0] + dx
+                        if 0 <= x <= self.sheet_width - width:
+                            candidates.add((x, y))
 
-        # 3. Оптимизированная сетка по листу (сокращено для скорости)
-        if len(self.placed_polygons) > 0:
-            # Основная сетка с адаптивным шагом
-            grid_step = max(20.0, min(poly_width, poly_height) / 2)
-            
-            # Основная сетка по всему листу (разреженная)
-            for y in np.arange(0, self.sheet_height - poly_height + grid_step, grid_step):
-                for x in np.arange(0, self.sheet_width - poly_width + grid_step, grid_step):
-                    candidates.add((x, y))
+            # Точная сетка для больших пустых областей
+            unoccupied_width = self.sheet_width - (self.occupied_max_x - self.occupied_min_x)
+            unoccupied_height = self.sheet_height - (self.occupied_max_y - self.occupied_min_y)
+            fine_step = max(10.0, min(width, height) / 10)  # Еще более мелкий шаг
 
-        # Сортируем кандидатов по принципу bottom-left
+            if unoccupied_width > width or unoccupied_height > height:
+                # Проверяем оставшееся пространство
+                for y in np.arange(0, self.sheet_height - height + fine_step, fine_step):
+                    for x in np.arange(0, self.sheet_width - width + fine_step, fine_step):
+                        if not any(self._quick_overlap_check(x, y, width, height, placed.bounds) for placed in self.placed_polygons):
+                            candidates.add((x, y))
+
         candidates_list = list(candidates)
-        candidates_list.sort(
-            key=lambda pos: (pos[1], pos[0])
-        )  # Сначала по Y, потом по X
-
-        # Ограничиваем количество кандидатов для производительности
-        max_candidates = 150  # Баланс между скоростью и качеством
+        candidates_list.sort(key=lambda pos: (pos[1], pos[0]))
+        max_candidates = 200
         if len(candidates_list) > max_candidates:
             candidates_list = candidates_list[:max_candidates]
 
         return candidates_list
 
+    def _quick_overlap_check(self, x: float, y: float, width: float, height: float, placed_bounds):
+        """Быстрая проверка пересечения с bounding box."""
+        return not (x + width <= placed_bounds[0] or x >= placed_bounds[2] or
+                    y + height <= placed_bounds[1] or y >= placed_bounds[3])
+
     def _evaluate_placement(self, polygon: Polygon, x: float, y: float) -> float:
-        """Оценивает качество размещения полигона (больше = лучше)."""
+        """Оценивает качество размещения с акцентом на заполнение пространства."""
         score = 0.0
         bounds = polygon.bounds
 
-        # 1. Базовый бонус за bottom-left (уменьшен для баланса)
-        corner_score = 500 - (x * 0.1 + y * 0.15)  # Уменьшен в пользу расширения
+        # Усиленный бонус за bottom-left
+        corner_score = 1200 - (x * 0.4 + y * 0.5)
         score += corner_score
 
-        # 2. Балансированный бонус за компактность (но не доминирующий)
+        # Бонус за компактность и заполнение
         if self.placed_polygons:
-            min_distance = float("inf")
+            min_distance = float('inf')
+            avg_distance = 0.0
+            count = 0
             for placed_polygon in self.placed_polygons:
                 placed_bounds = placed_polygon.bounds
-                dx = max(
-                    0, max(bounds[0] - placed_bounds[2], placed_bounds[0] - bounds[2])
-                )
-                dy = max(
-                    0, max(bounds[1] - placed_bounds[3], placed_bounds[1] - bounds[3])
-                )
+                dx = max(0, max(bounds[0] - placed_bounds[2], placed_bounds[0] - bounds[2]))
+                dy = max(0, max(bounds[1] - placed_bounds[3], placed_bounds[1] - bounds[3]))
                 distance = np.sqrt(dx * dx + dy * dy)
                 min_distance = min(min_distance, distance)
+                avg_distance += distance
+                count += 1
 
-            # Уменьшенный бонус за компактность
-            if min_distance < 150:  # 15 см
-                compactness_bonus = 100 * (1 - min_distance / 150)  # Уменьшен
-                score += compactness_bonus
+            avg_distance /= count if count > 0 else 1
 
-        # 3. МАССИВНЫЙ бонус за максимальное использование пространства
-        utilization_bonus = self._calculate_space_utilization_bonus(polygon)
-        score += utilization_bonus * 2  # Удвоенный вес!
+            if min_distance < 40:
+                score += 600 * (1 - min_distance / 40)  # Усилен бонус за близость
 
-        # 4. Небольшой штраф за создание узких зазоров
+            if avg_distance > 80:
+                score -= 250 * (avg_distance / 80 - 1)  # Усилен штраф
+
+        # Сильный бонус за использование оставшегося пространства
+        space_bonus = self._calculate_space_utilization_bonus(polygon)
+        score += space_bonus * 2  # Удвоен вес для приоритета заполнения
+
+        # Бонус за заполнение зазоров
+        gap_bonus = self._calculate_gap_fill_bonus(polygon)
+        score += gap_bonus * 4
+
+        # Штраф за отходы
         waste_penalty = self._calculate_waste_penalty(polygon)
-        score -= waste_penalty * 0.5  # Уменьшен штраф
+        score -= waste_penalty * 2
 
         return score
 
-    def _calculate_waste_penalty(self, polygon: Polygon) -> float:
-        """Рассчитывает штраф за создание непригодных областей (упрощенная версия)."""
-        # Упрощенный подход - минимальный штраф, чтобы не блокировать размещение
-        bounds = polygon.bounds
-
-        # Небольшой штраф если полигон создает очень узкие зазоры у краев
-        penalty = 0.0
-
-        # Проверяем только критически узкие зазоры (менее 5 см)
-        min_useful_size = 50  # 5 см в мм
-
-        # Зазор справа
-        right_gap = self.sheet_width - bounds[2]
-        if 0 < right_gap < min_useful_size:
-            penalty += 5
-
-        # Зазор сверху
-        top_gap = self.sheet_height - bounds[3]
-        if 0 < top_gap < min_useful_size:
-            penalty += 5
-
-        return penalty
-
     def _calculate_space_utilization_bonus(self, polygon: Polygon) -> float:
-        """Мощный бонус за максимальное и равномерное использование пространства."""
+        """Бонус за использование оставшегося пространства."""
         bounds = polygon.bounds
         bonus = 0.0
-        
-        # Мощный бонус за использование незанятых областей листа
-        if len(self.placed_polygons) > 0:
-            # Определяем занятые области
-            min_x = min(p.bounds[0] for p in self.placed_polygons)
-            max_x = max(p.bounds[2] for p in self.placed_polygons)
-            min_y = min(p.bounds[1] for p in self.placed_polygons)
-            max_y = max(p.bounds[3] for p in self.placed_polygons)
-            
-            # Бонус за расширение занятой области во всех направлениях
-            expansion_bonus = 0.0
-            
-            # Расширение вправо
-            if bounds[2] > max_x:
-                expansion = bounds[2] - max_x
-                expansion_bonus += min(200, expansion * 0.5)  # Макс 200 очков
-                
-            # Расширение вверх
-            if bounds[3] > max_y:
-                expansion = bounds[3] - max_y
-                expansion_bonus += min(200, expansion * 0.5)
-                
-            # Расширение влево (только если есть смысл)
-            if bounds[0] < min_x and min_x > 50:  # Оставляем место для bottom-left
-                expansion = min_x - bounds[0]
-                expansion_bonus += min(100, expansion * 0.3)
-                
-            # Расширение вниз (только если есть смысл)
-            if bounds[1] < min_y and min_y > 50:
-                expansion = min_y - bounds[1]
-                expansion_bonus += min(100, expansion * 0.3)
-                
-            bonus += expansion_bonus
-            
-        # Бонус за заполнение промежутков
-        if len(self.placed_polygons) >= 2:
-            gap_fill_bonus = self._calculate_gap_fill_bonus(polygon)
-            bonus += gap_fill_bonus
-            
-        # Массивный бонус за использование крайних областей листа
+        unoccupied_width = self.sheet_width - (self.occupied_max_x - self.occupied_min_x)
+        unoccupied_height = self.sheet_height - (self.occupied_max_y - self.occupied_min_y)
+
+        # Бонус за заполнение горизонтального пространства
+        if bounds[2] > self.occupied_max_x and unoccupied_width > 0:
+            bonus += 200 * (1 - (self.sheet_width - bounds[2]) / unoccupied_width)
+
+        # Бонус за заполнение вертикального пространства
+        if bounds[3] > self.occupied_max_y and unoccupied_height > 0:
+            bonus += 200 * (1 - (self.sheet_height - bounds[3]) / unoccupied_height)
+
+        # Бонус за использование краев
         edge_bonus = 0.0
-        
-        # Правый край - самый важный
-        right_distance = self.sheet_width - bounds[2]
-        if right_distance < 150:  # 15 см
-            edge_bonus += 100 * (1 - right_distance / 150)
-            
-        # Верхний край
-        top_distance = self.sheet_height - bounds[3] 
-        if top_distance < 150:
-            edge_bonus += 100 * (1 - top_distance / 150)
-            
+        if bounds[0] < 50:  # Близко к левому краю
+            edge_bonus += 100
+        if bounds[1] < 50:  # Близко к нижнему краю
+            edge_bonus += 100
+        if self.sheet_width - bounds[2] < 50:  # Близко к правому краю
+            edge_bonus += 100
+        if self.sheet_height - bounds[3] < 50:  # Близко к верхнему краю
+            edge_bonus += 100
         bonus += edge_bonus
 
         return bonus
@@ -401,150 +272,60 @@ class AdvancedCarpetPacker:
         """Бонус за заполнение промежутков между полигонами."""
         bounds = polygon.bounds
         bonus = 0.0
-
-        # Ищем полигоны слева и справа
-        left_polygons = []
-        right_polygons = []
+        left_count = right_count = above_count = below_count = 0
 
         for placed_polygon in self.placed_polygons:
             placed_bounds = placed_polygon.bounds
-            # Полигон слева если его правый край левее нашего левого края
-            if placed_bounds[2] < bounds[0]:
-                left_polygons.append(placed_polygon)
-            # Полигон справа если его левый край правее нашего правого края
-            elif placed_bounds[0] > bounds[2]:
-                right_polygons.append(placed_polygon)
+            if placed_bounds[2] < bounds[0] + 25 and abs(placed_bounds[1] - bounds[1]) < 40:
+                left_count += 1
+            elif placed_bounds[0] > bounds[2] - 25 and abs(placed_bounds[1] - bounds[1]) < 40:
+                right_count += 1
+            if placed_bounds[3] < bounds[1] + 25 and abs(placed_bounds[0] - bounds[0]) < 40:
+                below_count += 1
+            elif placed_bounds[1] > bounds[3] - 25 and abs(placed_bounds[0] - bounds[0]) < 40:
+                above_count += 1
 
-        # Если есть полигоны и слева и справа - это хорошее заполнение промежутка
-        if left_polygons and right_polygons:
-            bonus += 50
-
-        return bonus
-
-    def _calculate_corner_usage_bonus(self, polygon: Polygon) -> float:
-        """Бонус за эффективное использование углов листа."""
-        bonus = 0.0
-        bounds = polygon.bounds
-
-        # Углы листа
-        corners = [
-            (0, 0),  # Нижний левый
-            (self.sheet_width, 0),  # Нижний правый
-            (0, self.sheet_height),  # Верхний левый
-            (self.sheet_width, self.sheet_height),  # Верхний правый
-        ]
-
-        for corner_x, corner_y in corners:
-            # Проверяем, перекрывает ли полигон угол
-            corner_point = Point(corner_x, corner_y)
-            if polygon.contains(corner_point) or polygon.touches(corner_point):
-                bonus += 25  # Бонус за использование угла
-            else:
-                # Бонус за близость к углу
-                distance_to_corner = np.sqrt(
-                    (bounds[0] - corner_x) ** 2 + (bounds[1] - corner_y) ** 2
-                )
-                if distance_to_corner < 50:  # В пределах 5 см
-                    bonus += 10 * (1 - distance_to_corner / 50)
+        neighbor_count = bool(left_count) + bool(right_count) + bool(above_count) + bool(below_count)
+        bonus += 250 * neighbor_count
+        bonus += 60 * (left_count + right_count + above_count + below_count)
 
         return bonus
 
-    def _try_standard_placement(self, carpet):
-        """Быстрый fallback алгоритм для размещения неудачных полигонов."""
-        polygon = carpet.polygon
+    def _calculate_waste_penalty(self, polygon: Polygon) -> float:
+        """Рассчитывает штраф за создание непригодных областей."""
         bounds = polygon.bounds
-        poly_width = bounds[2] - bounds[0]
-        poly_height = bounds[3] - bounds[1]
-        
-        # Простая стратегия: проверяем сначала крупные шаги, потом мелкие
-        step_sizes = [50, 20, 10]  # От грубого к тонкому
-        
-        for step in step_sizes:
-            for y in np.arange(0, self.sheet_height - poly_height + step, step):
-                for x in np.arange(0, self.sheet_width - poly_width + step, step):
-                    # Проверяем границы
-                    if (x + poly_width > self.sheet_width or y + poly_height > self.sheet_height):
-                        continue
-                        
-                    # Создаем тестовый полигон
-                    dx = x - bounds[0]
-                    dy = y - bounds[1] 
-                    test_polygon = self._translate_polygon(polygon, dx, dy)
-                    
-                    # Простая проверка коллизий - снисходительная
-                    collision = False
-                    for placed_polygon in self.placed_polygons:
-                        if test_polygon.distance(placed_polygon) < 0.1:  # Минимальный зазор
-                            collision = True
-                            break
-                            
-                    if not collision:
-                        # Нашли место!
-                        return (
-                            test_polygon,
-                            x, y, 0,  # x, y, angle
-                            carpet.filename,
-                            carpet.color, 
-                            carpet.order_id,
-                            {"density": 100, "algorithm": f"fallback_step{step}"}
-                        )
-        
-        # Если не удалось без поворота, попробуем поворот 90°
-        rotated_polygon = self._rotate_carpet(polygon, 90)
-        rotated_bounds = rotated_polygon.bounds
-        rotated_width = rotated_bounds[2] - rotated_bounds[0]
-        rotated_height = rotated_bounds[3] - rotated_bounds[1]
-        
-        if rotated_width <= self.sheet_width and rotated_height <= self.sheet_height:
-            # Проверяем поворот только одним шагом для скорости
-            for y in np.arange(0, self.sheet_height - rotated_height + 20, 20):
-                for x in np.arange(0, self.sheet_width - rotated_width + 20, 20):
-                    dx = x - rotated_bounds[0]
-                    dy = y - rotated_bounds[1]
-                    test_polygon = self._translate_polygon(rotated_polygon, dx, dy)
-                    
-                    # Простая проверка коллизий
-                    collision = False
-                    for placed_polygon in self.placed_polygons:
-                        if test_polygon.distance(placed_polygon) < 0.1:
-                            collision = True
-                            break
-                            
-                    if not collision:
-                        return (
-                            test_polygon,
-                            x, y, 90,  # x, y, angle
-                            carpet.filename,
-                            carpet.color, 
-                            carpet.order_id,
-                            {"density": 100, "algorithm": "fallback_rotated"}
-                        )
-                        
-        return None  # Действительно не удалось
+        penalty = 0.0
+        min_useful = 25
+
+        if 0 < self.sheet_width - bounds[2] < min_useful:
+            penalty += 15
+        if 0 < self.sheet_height - bounds[3] < min_useful:
+            penalty += 15
+
+        return penalty
 
     def _rotate_carpet(self, polygon: Polygon, angle: float) -> Polygon:
-        """Поворачивает коврик на заданный угол."""
         if angle == 0:
             return polygon
         return affinity.rotate(polygon, angle, origin="centroid")
 
     def _translate_polygon(self, polygon: Polygon, dx: float, dy: float) -> Polygon:
-        """Перемещает полигон на заданное смещение."""
         return affinity.translate(polygon, dx, dy)
 
     def _fits_on_sheet(self, polygon: Polygon) -> bool:
-        """Проверяет, помещается ли полигон на лист."""
         bounds = polygon.bounds
-        width = bounds[2] - bounds[0]
-        height = bounds[3] - bounds[1]
-        return width <= self.sheet_width and height <= self.sheet_height
+        return (bounds[2] - bounds[0] <= self.sheet_width and
+                bounds[3] - bounds[1] <= self.sheet_height)
 
     def _has_collisions(self, test_polygon: Polygon) -> bool:
-        """Проверяет пересечения с уже размещенными полигонами."""
-        for i, placed_polygon in enumerate(self.placed_polygons):
-            # Сначала быстрая проверка через distance для минимального зазора
-            distance = test_polygon.distance(placed_polygon)
-            if distance < 0.8:  # Уменьшенный зазор 0.8мм для лучшего размещения
+        test_bounds = test_polygon.bounds
+        for placed_polygon in self.placed_polygons:
+            placed_bounds = placed_polygon.bounds
+            dx = max(0, max(test_bounds[0] - placed_bounds[2], placed_bounds[0] - test_bounds[2]))
+            dy = max(0, max(test_bounds[1] - placed_bounds[3], placed_bounds[1] - test_bounds[3]))
+            if np.sqrt(dx * dx + dy * dy) > 1.0:
+                continue
+            if test_polygon.distance(placed_polygon) < 0.5:
                 return True
         return False
 
