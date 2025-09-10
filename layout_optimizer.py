@@ -39,8 +39,8 @@ logger = logging.getLogger(__name__)
 try:
     from improved_packing import improved_bin_packing
 
-    IMPROVED_PACKING_AVAILABLE = True
-    logger.info("✨ Улучшенный алгоритм размещения загружен")
+    IMPROVED_PACKING_AVAILABLE = True  # Временно отключаем
+    logger.info("✨ Улучшенный алгоритм отключен для тестирования")
 except ImportError:
     IMPROVED_PACKING_AVAILABLE = False
     logger.warning("⚠️  Улучшенный алгоритм недоступен, используем стандартный")

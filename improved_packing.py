@@ -51,8 +51,16 @@ class AdvancedCarpetPacker:
                 )
                 logger.info(f"Размещен {carpet.filename} с плотностью {density:.2f}")
             else:
-                unplaced.append(carpet)
-                logger.warning(f"Не удалось разместить {carpet.filename}")
+                # FALLBACK: Попытка стандартного размещения для неразмещенных полигонов
+                fallback_placement = self._try_standard_placement(carpet)
+                if fallback_placement:
+                    placed.append(fallback_placement)
+                    self.placed_polygons.append(fallback_placement[0])
+                    self.placed_positions.append((fallback_placement[1], fallback_placement[2]))
+                    logger.info(f"Размещен {carpet.filename} с fallback алгоритмом")
+                else:
+                    unplaced.append(carpet)
+                    logger.warning(f"Не удалось разместить {carpet.filename}")
 
         return placed, unplaced
 
@@ -245,13 +253,15 @@ class AdvancedCarpetPacker:
                 candidates.add((placed_bounds[0], y))
                 candidates.add((0, y))
 
-        # 3. Случайные позиции для исследования пространства (Monte Carlo) - отключено для скорости
-        # if len(self.placed_polygons) > 3:  # Только когда уже есть несколько полигонов
-        #     np.random.seed(42)  # Для воспроизводимости
-        #     for _ in range(5):  # Сокращено для скорости
-        #         x = np.random.uniform(0, self.sheet_width - poly_width)
-        #         y = np.random.uniform(0, self.sheet_height - poly_height)
-        #         candidates.add((x, y))
+        # 3. Оптимизированная сетка по листу (сокращено для скорости)
+        if len(self.placed_polygons) > 0:
+            # Основная сетка с адаптивным шагом
+            grid_step = max(20.0, min(poly_width, poly_height) / 2)
+            
+            # Основная сетка по всему листу (разреженная)
+            for y in np.arange(0, self.sheet_height - poly_height + grid_step, grid_step):
+                for x in np.arange(0, self.sheet_width - poly_width + grid_step, grid_step):
+                    candidates.add((x, y))
 
         # Сортируем кандидатов по принципу bottom-left
         candidates_list = list(candidates)
@@ -260,7 +270,7 @@ class AdvancedCarpetPacker:
         )  # Сначала по Y, потом по X
 
         # Ограничиваем количество кандидатов для производительности
-        max_candidates = 200  # Увеличено для лучшего размещения
+        max_candidates = 150  # Баланс между скоростью и качеством
         if len(candidates_list) > max_candidates:
             candidates_list = candidates_list[:max_candidates]
 
@@ -271,16 +281,14 @@ class AdvancedCarpetPacker:
         score = 0.0
         bounds = polygon.bounds
 
-        # 1. Сильный бонус за близость к нижнему левому углу (bottom-left принцип)
-        corner_score = 1000 - (x * 0.2 + y * 0.2)  # Увеличен коэффициент
+        # 1. Базовый бонус за bottom-left (уменьшен для баланса)
+        corner_score = 500 - (x * 0.1 + y * 0.15)  # Уменьшен в пользу расширения
         score += corner_score
 
-        # 2. Мощный бонус за компактность размещения
+        # 2. Балансированный бонус за компактность (но не доминирующий)
         if self.placed_polygons:
-            # Находим ближайший размещенный полигон
             min_distance = float("inf")
             for placed_polygon in self.placed_polygons:
-                # Используем distance между bounding boxes для скорости
                 placed_bounds = placed_polygon.bounds
                 dx = max(
                     0, max(bounds[0] - placed_bounds[2], placed_bounds[0] - bounds[2])
@@ -291,14 +299,14 @@ class AdvancedCarpetPacker:
                 distance = np.sqrt(dx * dx + dy * dy)
                 min_distance = min(min_distance, distance)
 
-            # Большой бонус за близость к уже размещенным полигонам
-            if min_distance < 200:  # В пределах 20 см
-                compactness_bonus = 200 * (1 - min_distance / 200)  # Увеличен бонус
+            # Уменьшенный бонус за компактность
+            if min_distance < 150:  # 15 см
+                compactness_bonus = 100 * (1 - min_distance / 150)  # Уменьшен
                 score += compactness_bonus
 
-        # 3. Бонус за максимальное использование пространства
+        # 3. МАССИВНЫЙ бонус за максимальное использование пространства
         utilization_bonus = self._calculate_space_utilization_bonus(polygon)
-        score += utilization_bonus
+        score += utilization_bonus * 2  # Удвоенный вес!
 
         # 4. Небольшой штраф за создание узких зазоров
         waste_penalty = self._calculate_waste_penalty(polygon)
@@ -330,26 +338,62 @@ class AdvancedCarpetPacker:
         return penalty
 
     def _calculate_space_utilization_bonus(self, polygon: Polygon) -> float:
-        """Бонус за максимальное использование пространства листа."""
+        """Мощный бонус за максимальное и равномерное использование пространства."""
         bounds = polygon.bounds
-
-        # Бонус за размещение близко к краям листа
         bonus = 0.0
-
-        # Бонус за близость к правому краю
-        right_distance = self.sheet_width - bounds[2]
-        if right_distance < 100:  # В пределах 10 см от края
-            bonus += 20 * (1 - right_distance / 100)
-
-        # Бонус за близость к верхнему краю
-        top_distance = self.sheet_height - bounds[3]
-        if top_distance < 100:  # В пределах 10 см от края
-            bonus += 20 * (1 - top_distance / 100)
-
-        # Бонус за заполнение промежутков между размещенными полигонами
+        
+        # Мощный бонус за использование незанятых областей листа
+        if len(self.placed_polygons) > 0:
+            # Определяем занятые области
+            min_x = min(p.bounds[0] for p in self.placed_polygons)
+            max_x = max(p.bounds[2] for p in self.placed_polygons)
+            min_y = min(p.bounds[1] for p in self.placed_polygons)
+            max_y = max(p.bounds[3] for p in self.placed_polygons)
+            
+            # Бонус за расширение занятой области во всех направлениях
+            expansion_bonus = 0.0
+            
+            # Расширение вправо
+            if bounds[2] > max_x:
+                expansion = bounds[2] - max_x
+                expansion_bonus += min(200, expansion * 0.5)  # Макс 200 очков
+                
+            # Расширение вверх
+            if bounds[3] > max_y:
+                expansion = bounds[3] - max_y
+                expansion_bonus += min(200, expansion * 0.5)
+                
+            # Расширение влево (только если есть смысл)
+            if bounds[0] < min_x and min_x > 50:  # Оставляем место для bottom-left
+                expansion = min_x - bounds[0]
+                expansion_bonus += min(100, expansion * 0.3)
+                
+            # Расширение вниз (только если есть смысл)
+            if bounds[1] < min_y and min_y > 50:
+                expansion = min_y - bounds[1]
+                expansion_bonus += min(100, expansion * 0.3)
+                
+            bonus += expansion_bonus
+            
+        # Бонус за заполнение промежутков
         if len(self.placed_polygons) >= 2:
             gap_fill_bonus = self._calculate_gap_fill_bonus(polygon)
             bonus += gap_fill_bonus
+            
+        # Массивный бонус за использование крайних областей листа
+        edge_bonus = 0.0
+        
+        # Правый край - самый важный
+        right_distance = self.sheet_width - bounds[2]
+        if right_distance < 150:  # 15 см
+            edge_bonus += 100 * (1 - right_distance / 150)
+            
+        # Верхний край
+        top_distance = self.sheet_height - bounds[3] 
+        if top_distance < 150:
+            edge_bonus += 100 * (1 - top_distance / 150)
+            
+        bonus += edge_bonus
 
         return bonus
 
@@ -404,6 +448,79 @@ class AdvancedCarpetPacker:
                     bonus += 10 * (1 - distance_to_corner / 50)
 
         return bonus
+
+    def _try_standard_placement(self, carpet):
+        """Быстрый fallback алгоритм для размещения неудачных полигонов."""
+        polygon = carpet.polygon
+        bounds = polygon.bounds
+        poly_width = bounds[2] - bounds[0]
+        poly_height = bounds[3] - bounds[1]
+        
+        # Простая стратегия: проверяем сначала крупные шаги, потом мелкие
+        step_sizes = [50, 20, 10]  # От грубого к тонкому
+        
+        for step in step_sizes:
+            for y in np.arange(0, self.sheet_height - poly_height + step, step):
+                for x in np.arange(0, self.sheet_width - poly_width + step, step):
+                    # Проверяем границы
+                    if (x + poly_width > self.sheet_width or y + poly_height > self.sheet_height):
+                        continue
+                        
+                    # Создаем тестовый полигон
+                    dx = x - bounds[0]
+                    dy = y - bounds[1] 
+                    test_polygon = self._translate_polygon(polygon, dx, dy)
+                    
+                    # Простая проверка коллизий - снисходительная
+                    collision = False
+                    for placed_polygon in self.placed_polygons:
+                        if test_polygon.distance(placed_polygon) < 0.1:  # Минимальный зазор
+                            collision = True
+                            break
+                            
+                    if not collision:
+                        # Нашли место!
+                        return (
+                            test_polygon,
+                            x, y, 0,  # x, y, angle
+                            carpet.filename,
+                            carpet.color, 
+                            carpet.order_id,
+                            {"density": 100, "algorithm": f"fallback_step{step}"}
+                        )
+        
+        # Если не удалось без поворота, попробуем поворот 90°
+        rotated_polygon = self._rotate_carpet(polygon, 90)
+        rotated_bounds = rotated_polygon.bounds
+        rotated_width = rotated_bounds[2] - rotated_bounds[0]
+        rotated_height = rotated_bounds[3] - rotated_bounds[1]
+        
+        if rotated_width <= self.sheet_width and rotated_height <= self.sheet_height:
+            # Проверяем поворот только одним шагом для скорости
+            for y in np.arange(0, self.sheet_height - rotated_height + 20, 20):
+                for x in np.arange(0, self.sheet_width - rotated_width + 20, 20):
+                    dx = x - rotated_bounds[0]
+                    dy = y - rotated_bounds[1]
+                    test_polygon = self._translate_polygon(rotated_polygon, dx, dy)
+                    
+                    # Простая проверка коллизий
+                    collision = False
+                    for placed_polygon in self.placed_polygons:
+                        if test_polygon.distance(placed_polygon) < 0.1:
+                            collision = True
+                            break
+                            
+                    if not collision:
+                        return (
+                            test_polygon,
+                            x, y, 90,  # x, y, angle
+                            carpet.filename,
+                            carpet.color, 
+                            carpet.order_id,
+                            {"density": 100, "algorithm": "fallback_rotated"}
+                        )
+                        
+        return None  # Действительно не удалось
 
     def _rotate_carpet(self, polygon: Polygon, angle: float) -> Polygon:
         """Поворачивает коврик на заданный угол."""
