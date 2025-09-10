@@ -22,9 +22,6 @@ from excel_loader import (
     find_dxf_files_for_article,
 )
 
-# Константы
-# Константа MAX_SHEET_RANGE_PER_ORDER удалена - теперь фокус на максимальной плотности раскладки
-
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
@@ -37,11 +34,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 logger.info("=== НАЧАЛО СЕССИИ EVA LAYOUT ===")
-logger.info("Работа без ограничений на диапазон листов - максимальная плотность раскладки")
+logger.info(
+    "Работа без ограничений на диапазон листов - максимальная плотность раскладки"
+)
 
 # Проверяем доступность улучшенного алгоритма
 try:
     from layout_optimizer import IMPROVED_PACKING_AVAILABLE
+
     if IMPROVED_PACKING_AVAILABLE:
         logger.info("✨ Улучшенный алгоритм размещения доступен")
     else:
@@ -71,8 +71,10 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 # Streamlit App
 # Display logo at the very top
+st.set_page_config(layout="wide")
+
 try:
-    st.image("logo.png", use_container_width=True)
+    st.image("logo.png", width=600, use_container_width=False)
 except FileNotFoundError:
     pass  # Skip logo if file not found
 
@@ -143,9 +145,7 @@ if st.button("➕ Добавить", key="add_sheet"):
         "used": 0,
     }
     st.session_state.available_sheets.append(new_sheet)
-    st.success(
-        f"Добавлен тип листа: {new_sheet['name']} ({new_sheet['count']} шт.)"
-    )
+    st.success(f"Добавлен тип листа: {new_sheet['name']} ({new_sheet['count']} шт.)")
     st.rerun()
 
 # Display current sheet inventory
@@ -212,12 +212,7 @@ if excel_file is not None:
 
         all_orders = parse_orders_from_excel(excel_data)
 
-        if all_orders is None:
-            st.warning(
-                f"⚠️ Лист '{TARGET_SHEET}' не найден в Excel файле. Доступные листы: {list(excel_data.keys())}"
-            )
-
-        elif all_orders:
+        if all_orders:
             st.success(f"✅ Найдено {len(all_orders)} невыполненных заказов")
             logger.info(f"Найдено {len(all_orders)} невыполненных заказов в Excel")
 
@@ -225,22 +220,34 @@ if excel_file is not None:
             st.subheader("📝 Выберите заказы для раскроя")
 
             # Add search/filter options
-            col_filter1, col_filter2 = st.columns([1, 1])
+            col_filter1, col_filter2, col_filter3 = st.columns([1, 1, 1])
             with col_filter1:
-                search_article = st.text_input(
-                    "🔍 Поиск по артикулу:",
-                    placeholder="Введите часть артикула",
-                    key="search_article",
+                search_marketplace = st.text_input(
+                    "🔍 Поиск по маркетплейсу:",
+                    placeholder="Введите маркетлейс",
+                    key="search_marketplace",
                 )
             with col_filter2:
+                search_article = st.text_input(
+                    "🔍 Поиск по артикулу:",
+                    placeholder="Введите артикул",
+                    key="search_article",
+                )
+            with col_filter3:
                 search_product = st.text_input(
                     "🔍 Поиск по товару:",
-                    placeholder="Введите часть названия",
+                    placeholder="Введите название",
                     key="search_product",
                 )
 
             # Filter orders based on search
             filtered_orders = all_orders
+            if search_marketplace:
+                filtered_orders = [
+                    order
+                    for order in filtered_orders
+                    if search_marketplace.lower() in order["marketplace"].lower()
+                ]
             if search_article:
                 filtered_orders = [
                     order
@@ -305,62 +312,83 @@ if excel_file is not None:
                             if order.get("date", "")
                             else "",
                             "Кант цвет": order.get("border_color", ""),
+                            "Маркетплейс": order.get("marketplace", ""),
                         }
                     )
 
-                # Create columns for interactive controls
-                for i, order in enumerate(orders_to_show):
-                    actual_idx = start_idx + i
-
-                    cols = st.columns([1, 2, 10, 6, 3, 3])
-
-                    # Selection checkbox
-                    with cols[0]:
-                        is_selected = st.checkbox(
-                            f"№{actual_idx + 1}",
-                            value=st.session_state.get(f"order_{actual_idx}", False),
-                            key=f"select_{actual_idx}",
-                            label_visibility="collapsed",
-                        )
-                        st.session_state[f"order_{actual_idx}"] = is_selected
-
-                    # Quantity number input
+                ###########################################33
+                with st.container(height=400):
+                    cols = st.columns([1, 2, 10, 6, 3, 3, 3])
                     with cols[1]:
-                        quantity = st.number_input(
-                            f"Количество для заказа {actual_idx + 1}",
-                            min_value=1,
-                            max_value=100,
-                            value=st.session_state.get(f"quantity_{actual_idx}", 1),
-                            key=f"qty_{actual_idx}",
-                            label_visibility="collapsed",
-                        )
-                        st.session_state[f"quantity_{actual_idx}"] = quantity
-
-                    # Display order info for reference
+                        st.write("**Количество**")
                     with cols[2]:
-                        st.write(f"**{order['article']}**")
-
+                        st.write("**Артикул**")
                     with cols[3]:
-                        product_text = (
-                            order["product"][:30] + "..."
-                            if len(order["product"]) > 30
-                            else order["product"]
-                        )
-                        st.write(product_text)
-
+                        st.write("**Товар**")
                     with cols[4]:
-                        color = order.get("color", "серый")
-                        color_emoji = (
-                            "⚫"
-                            if color == "чёрный"
-                            else "⚪"
-                            if color == "серый"
-                            else "🔘"
-                        )
-                        st.write(f"{color_emoji} {order.get('product_type', '')}")
-
+                        st.write("**Изделие**")
                     with cols[5]:
-                        st.write(order.get("border_color", ""))
+                        st.write("**Кант цвет**")
+                    with cols[6]:
+                        st.write("**Маркетплейс**")
+
+                    # Create columns for interactive controls
+                    for i, order in enumerate(orders_to_show):
+                        actual_idx = start_idx + i
+
+                        cols = st.columns([1, 2, 10, 6, 3, 3, 3])
+
+                        # Selection checkbox
+                        with cols[0]:
+                            is_selected = st.checkbox(
+                                f"№{actual_idx + 1}",
+                                value=st.session_state.get(f"order_{actual_idx}", False),
+                                key=f"select_{actual_idx}",
+                                label_visibility="collapsed",
+                            )
+                            st.session_state[f"order_{actual_idx}"] = is_selected
+
+                        # Quantity number input
+                        with cols[1]:
+                            quantity = st.number_input(
+                                f"Количество для заказа {actual_idx + 1}",
+                                min_value=1,
+                                max_value=100,
+                                value=st.session_state.get(f"quantity_{actual_idx}", 1),
+                                key=f"qty_{actual_idx}",
+                                label_visibility="collapsed",
+                            )
+                            st.session_state[f"quantity_{actual_idx}"] = quantity
+
+                        # Display order info for reference
+                        with cols[2]:
+                            st.write(f"**{order['article']}**")
+
+                        with cols[3]:
+                            product_text = (
+                                order["product"][:30] + "..."
+                                if len(order["product"]) > 30
+                                else order["product"]
+                            )
+                            st.write(product_text)
+
+                        with cols[4]:
+                            color = order.get("color", "серый")
+                            color_emoji = (
+                                "⚫"
+                                if color == "чёрный"
+                                else "⚪"
+                                if color == "серый"
+                                else "🔘"
+                            )
+                            st.write(f"{color_emoji} {order.get('product_type', '')}")
+
+                        with cols[5]:
+                            st.write(order.get("border_color", ""))
+
+                        with cols[6]:
+                            st.write(order.get("marketplace", ""))
+                ####################################################
 
                 # Bulk controls
                 col1, col2 = st.columns([1, 1])
@@ -438,15 +466,6 @@ if excel_file is not None:
     except Exception as e:
         st.error(f"❌ Ошибка обработки Excel файла: {e}")
         logger.error(f"Ошибка при обработке Excel: {e}")
-        import traceback
-
-        logger.error(f"Полная трассировка ошибки: {traceback.format_exc()}")
-        st.error("💡 **Возможные решения:**")
-        st.error("• Сохраните Excel файл в новом формате (.xlsx)")
-        st.error("• Проверьте правильность дат в файле")
-        st.error(
-            "• Убедитесь, что в датах нет некорректных значений (например, 30 февраля)"
-        )
 
 # Initialize auto_loaded_files
 auto_loaded_files = []
@@ -887,7 +906,9 @@ if st.button("🚀 Оптимизировать раскрой"):
             optimization_progress.progress(10)
             optimization_status.text("Подготовка данных для оптимизации...")
 
-            logger.info("Вызываем bin_packing_with_inventory без ограничений на диапазон листов")
+            logger.info(
+                "Вызываем bin_packing_with_inventory без ограничений на диапазон листов"
+            )
             logger.info(
                 f"Входные параметры: {len(carpets)} полигонов, {len(st.session_state.available_sheets)} типов листов"
             )
@@ -1301,23 +1322,6 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
 
     # Save report
     if all_layouts:
-        report_file = os.path.join(
-            OUTPUT_FOLDER,
-            f"layout_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-        )
-
-        # Use enhanced report if available, otherwise simple report
-        if enhanced_report_data:
-            enhanced_df.to_excel(report_file, index=False)
-        elif "report_df" in locals():
-            report_df.to_excel(report_file, index=False)
-        else:
-            # Fallback: create simple report from report_data
-            fallback_df = pd.DataFrame(
-                report_data, columns=["DXF файл", "Номер листа", "Выходной файл"]
-            )
-            fallback_df.to_excel(report_file, index=False)
-
         # Create ZIP archive with all DXF files
         zip_filename = f"layout_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
         zip_path = os.path.join(OUTPUT_FOLDER, zip_filename)
@@ -1330,11 +1334,6 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
                     # Use the new naming format for files in zip
                     arcname = os.path.basename(dxf_file_path)
                     zipf.write(dxf_file_path, arcname)
-
-            # Add report file
-            if os.path.exists(report_file):
-                zipf.write(report_file, os.path.basename(report_file))
-
 
         with open(zip_path, "rb") as f:
             st.download_button(

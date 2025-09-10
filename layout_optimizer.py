@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 # from line_profiler import profile
 
+
 @dataclass
 class Carpet:
     polygon: Polygon
@@ -37,6 +38,7 @@ logger = logging.getLogger(__name__)
 # Import improved packing algorithms after logger is defined
 try:
     from improved_packing import improved_bin_packing
+
     IMPROVED_PACKING_AVAILABLE = True
     logger.info("✨ Улучшенный алгоритм размещения загружен")
 except ImportError:
@@ -45,6 +47,7 @@ except ImportError:
 
 try:
     from polygonal_packing import polygonal_bin_packing
+
     POLYGONAL_PACKING_AVAILABLE = True
     logger.info("🔷 Полигональный алгоритм размещения загружен")
 except ImportError:
@@ -52,8 +55,12 @@ except ImportError:
     logger.warning("⚠️  Полигональный алгоритм недоступен")
 
 # Настройки алгоритмов
-USE_IMPROVED_PACKING_BY_DEFAULT = True  # Улучшенный алгоритм по умолчанию (лучший баланс)
-USE_POLYGONAL_PACKING_BY_DEFAULT = False  # Полигональный алгоритм отключен (слишком сложный)
+USE_IMPROVED_PACKING_BY_DEFAULT = (
+    True  # Улучшенный алгоритм по умолчанию (лучший баланс)
+)
+USE_POLYGONAL_PACKING_BY_DEFAULT = (
+    False  # Полигональный алгоритм отключен (слишком сложный)
+)
 
 logging.getLogger("ezdxf").setLevel(logging.ERROR)
 
@@ -1099,26 +1106,39 @@ def bin_packing_with_existing(
 ) -> tuple[list[tuple], list[tuple]]:
     """Bin packing that considers already placed polygons on the sheet."""
     # Try improved algorithm for existing placement if available and enabled
-    if IMPROVED_PACKING_AVAILABLE and USE_IMPROVED_PACKING_BY_DEFAULT and len(existing_placed) > 0:
+    if (
+        IMPROVED_PACKING_AVAILABLE
+        and USE_IMPROVED_PACKING_BY_DEFAULT
+        and len(existing_placed) > 0
+    ):
         if verbose:
-            st.info(f"🚀 Дозаполняем лист улучшенным алгоритмом: +{len(polygons)} к {len(existing_placed)} существующим")
+            st.info(
+                f"🚀 Дозаполняем лист улучшенным алгоритмом: +{len(polygons)} к {len(existing_placed)} существующим"
+            )
         try:
             # Create a packer with existing polygons pre-placed
             from improved_packing import AdvancedCarpetPacker
+
             sheet_width_mm = sheet_size[0] * 10
             sheet_height_mm = sheet_size[1] * 10
-            
+
             packer = AdvancedCarpetPacker(sheet_width_mm, sheet_height_mm)
             # Add existing polygons to packer
-            packer.placed_polygons = [placed_tuple[0] for placed_tuple in existing_placed]
-            packer.placed_positions = [(placed_tuple[1], placed_tuple[2]) for placed_tuple in existing_placed]
-            
+            packer.placed_polygons = [
+                placed_tuple[0] for placed_tuple in existing_placed
+            ]
+            packer.placed_positions = [
+                (placed_tuple[1], placed_tuple[2]) for placed_tuple in existing_placed
+            ]
+
             # Pack new polygons
             placed, unplaced = packer.pack_carpets(polygons)
             return placed, unplaced
-            
+
         except Exception as e:
-            logger.warning(f"Ошибка в улучшенном алгоритме дозаполнения: {e}, используем стандартный")
+            logger.warning(
+                f"Ошибка в улучшенном алгоритме дозаполнения: {e}, используем стандартный"
+            )
             if verbose:
                 st.warning("⚠️ Используем стандартный алгоритм дозаполнения")
     # Convert sheet size from cm to mm to match DXF polygon units
@@ -1265,25 +1285,35 @@ def bin_packing(
     # Try to use polygonal algorithm first if enabled
     if POLYGONAL_PACKING_AVAILABLE and USE_POLYGONAL_PACKING_BY_DEFAULT:
         if verbose:
-            st.info(f"🔷 Используем полигональный алгоритм размещения для {len(polygons)} полигонов")
+            st.info(
+                f"🔷 Используем полигональный алгоритм размещения для {len(polygons)} полигонов"
+            )
         try:
             return polygonal_bin_packing(polygons, sheet_size, verbose)
         except Exception as e:
-            logger.warning(f"Ошибка в полигональном алгоритме: {e}, переключаемся на улучшенный")
+            logger.warning(
+                f"Ошибка в полигональном алгоритме: {e}, переключаемся на улучшенный"
+            )
             if verbose:
                 st.warning("⚠️ Переключение на улучшенный алгоритм из-за ошибки")
-    
+
     # Try to use improved algorithm as fallback
-    if IMPROVED_PACKING_AVAILABLE and (USE_IMPROVED_PACKING_BY_DEFAULT or not POLYGONAL_PACKING_AVAILABLE):
+    if IMPROVED_PACKING_AVAILABLE and (
+        USE_IMPROVED_PACKING_BY_DEFAULT or not POLYGONAL_PACKING_AVAILABLE
+    ):
         if verbose:
-            st.info(f"🚀 Используем улучшенный алгоритм размещения для {len(polygons)} полигонов")
+            st.info(
+                f"🚀 Используем улучшенный алгоритм размещения для {len(polygons)} полигонов"
+            )
         try:
             return improved_bin_packing(polygons, sheet_size, verbose)
         except Exception as e:
-            logger.warning(f"Ошибка в улучшенном алгоритме: {e}, переключаемся на стандартный")
+            logger.warning(
+                f"Ошибка в улучшенном алгоритме: {e}, переключаемся на стандартный"
+            )
             if verbose:
                 st.warning("⚠️ Переключение на стандартный алгоритм из-за ошибки")
-    
+
     # Fallback to standard algorithm
     # Convert sheet size from cm to mm to match DXF polygon units
     sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
@@ -1735,7 +1765,9 @@ def bin_packing_with_inventory(
     1. Place all Excel orders and priority 1 items first (can use new sheets)
     2. Place priority 2 items only on remaining space (no new sheets allowed)
     """
-    logger.info("=== НАЧАЛО bin_packing_with_inventory (АЛГОРИТМ МАКСИМАЛЬНОЙ ПЛОТНОСТИ) ===")
+    logger.info(
+        "=== НАЧАЛО bin_packing_with_inventory (АЛГОРИТМ МАКСИМАЛЬНОЙ ПЛОТНОСТИ) ==="
+    )
     logger.info(
         f"Входные параметры: {len(carpets)} полигонов, {len(available_sheets)} типов листов"
     )
@@ -1811,7 +1843,7 @@ def bin_packing_with_inventory(
 
     # Group priority 1 carpets by color for efficient processing
     remaining_priority1 = list(priority1_carpets)
-    
+
     # First try to fill existing sheets with priority 1 carpets
     for layout_idx, layout in enumerate(placed_layouts):
         if not remaining_priority1:
@@ -1937,8 +1969,17 @@ def bin_packing_with_inventory(
                 break
 
         if progress_callback:
-            progress = min(70, int(70 * len(placed_layouts) / (len(placed_layouts) + len(priority2_carpets))))
-            progress_callback(progress, f"Размещение приоритет 1+Excel: {len(placed_layouts)} листов")
+            progress = min(
+                70,
+                int(
+                    70
+                    * len(placed_layouts)
+                    / (len(placed_layouts) + len(priority2_carpets))
+                ),
+            )
+            progress_callback(
+                progress, f"Размещение приоритет 1+Excel: {len(placed_layouts)} листов"
+            )
 
     # STEP 3: Place priority 2 on remaining space only (no new sheets)
     logger.info(

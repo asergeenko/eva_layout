@@ -8,6 +8,8 @@
 
 import sys
 import os
+from pathlib import Path
+
 import pandas as pd
 import logging
 from excel_loader import load_excel_file, parse_orders_from_excel, find_dxf_files_for_article
@@ -316,3 +318,5 @@ def test_streamlit_integration():
         
         unplaced_count = len(unplaced) if unplaced else 0
         print(f"   • Неразмещенных полигонов: {unplaced_count} (в основном приоритет 2)")
+
+

@@ -12,95 +12,77 @@ logger = logging.getLogger(__name__)
 
 
 # @st.cache_data(ttl=600)  # Cache for 10 minutes
-def load_excel_file(file_content: Buffer) -> dict[str, pd.DataFrame] | pd.DataFrame:
+def load_excel_file(file_content: Buffer) -> pd.DataFrame:
     """Load and cache Excel file processing - optimized for speed"""
     # Only load the ZAKAZ sheet instead of all sheets for faster loading
-    try:
-        excel_data = pd.read_excel(
-            BytesIO(file_content),
-            sheet_name="ZAKAZ",  # Load only ZAKAZ sheet
-            header=None,
-            date_format=None,
-            parse_dates=False,
-            engine="openpyxl",  # Use faster engine
-        )
-        return {TARGET_SHEET: excel_data}
-    except ValueError:
-        # If ZAKAZ sheet doesn't exist, load all sheets to show available ones
-        excel_data = pd.read_excel(
-            BytesIO(file_content),
-            sheet_name=None,
-            header=None,
-            date_format=None,
-            parse_dates=False,
-            engine="openpyxl",
-        )
-        return excel_data
-
+    excel_data = pd.read_excel(
+        BytesIO(file_content),
+        sheet_name=TARGET_SHEET,  # Load only ZAKAZ sheet
+        header=None,
+        date_format=None,
+        parse_dates=False,
+        engine="openpyxl",  # Use faster engine
+    )
+    return excel_data
 
 def parse_orders_from_excel(
-    excel_data: dict[str, pd.DataFrame],
+    df: pd.DataFrame,
 ) -> list[dict[str, Any]] | None:
     # Process only the "ZAKAZ" sheet
     all_orders = []
 
-    if TARGET_SHEET in excel_data:
-        df = excel_data[TARGET_SHEET]
+    # Skip first 2 rows (headers), start from row 2 (index 2)
+    if df.shape[0] > 2:
+        data_rows = df.iloc[2:].copy()
 
-        # Skip first 2 rows (headers), start from row 2 (index 2)
-        if df.shape[0] > 2:
-            data_rows = df.iloc[2:].copy()
+        # Check for empty "Сделано" column (index 2)
+        if df.shape[1] > 3:  # Make sure we have enough columns
+            pending_orders = data_rows[
+                data_rows.iloc[:, 2].isna() | (data_rows.iloc[:, 2] == "")
+            ]
 
-            # Check for empty "Сделано" column (index 2)
-            if df.shape[1] > 3:  # Make sure we have enough columns
-                pending_orders = data_rows[
-                    data_rows.iloc[:, 2].isna() | (data_rows.iloc[:, 2] == "")
-                ]
+            for idx, row in pending_orders.iterrows():
+                if pd.notna(
+                    row.iloc[3]
+                ):  # Check if Артикул (column D) is not empty
+                    # Get color from column I (index 8)
+                    color = (
+                        str(row.iloc[8]).lower().strip()
+                        if pd.notna(row.iloc[8]) and df.shape[1] > 8
+                        else ""
+                    )
+                    # Normalize color values
+                    if "черн" in color or "black" in color:
+                        color = "чёрный"
+                    elif "сер" in color or "gray" in color or "grey" in color:
+                        color = "серый"
+                    else:
+                        color = "серый"  # Default color if not specified
 
-                for idx, row in pending_orders.iterrows():
-                    if pd.notna(
-                        row.iloc[3]
-                    ):  # Check if Артикул (column D) is not empty
-                        # Get color from column I (index 8)
-                        color = (
-                            str(row.iloc[8]).lower().strip()
-                            if pd.notna(row.iloc[8]) and df.shape[1] > 8
-                            else ""
-                        )
-                        # Normalize color values
-                        if "черн" in color or "black" in color:
-                            color = "чёрный"
-                        elif "сер" in color or "gray" in color or "grey" in color:
-                            color = "серый"
-                        else:
-                            color = "серый"  # Default color if not specified
+                    # Create unique order_id for each row (Excel row number + sheet name)
+                    unique_order_id = f"{TARGET_SHEET}_row_{idx}"
 
-                        # Create unique order_id for each row (Excel row number + sheet name)
-                        unique_order_id = f"{TARGET_SHEET}_row_{idx}"
-
-                        order = {
-                            "sheet": TARGET_SHEET,
-                            "row_index": idx,
-                            "date": str(row.iloc[0]) if pd.notna(row.iloc[0]) else "",
-                            "article": str(row.iloc[3]),
-                            "product": str(row.iloc[4])
-                            if pd.notna(row.iloc[4])
-                            else "",
-                            "client": str(row.iloc[5])
-                            if pd.notna(row.iloc[5])
-                            else ""
-                            if df.shape[1] > 5
-                            else "",
-                            "order_id": unique_order_id,  # Use unique ID for each Excel row
-                            "color": color,
-                            "product_type": str(row.iloc[7])
-                            if pd.notna(row.iloc[7]) and df.shape[1] > 7
-                            else "",
-                            "border_color": row.iloc[10],
-                        }
-                        all_orders.append(order)
-    else:
-        return None
+                    order = {
+                        "sheet": TARGET_SHEET,
+                        "row_index": idx,
+                        "date": str(row.iloc[0]) if pd.notna(row.iloc[0]) else "",
+                        "article": str(row.iloc[3]),
+                        "product": str(row.iloc[4])
+                        if pd.notna(row.iloc[4])
+                        else "",
+                        "marketplace": str(row.iloc[5])
+                        if pd.notna(row.iloc[5])
+                        else ""
+                        if df.shape[1] > 5
+                        else "",
+                        "order_id": unique_order_id,  # Use unique ID for each Excel row
+                        "color": color,
+                        "product_type": str(row.iloc[7])
+                        if pd.notna(row.iloc[7]) and df.shape[1] > 7
+                        else "",
+                        "border_color": row.iloc[10],
+                    }
+                    all_orders.append(order)
     return all_orders
 
 
