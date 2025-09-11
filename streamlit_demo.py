@@ -73,10 +73,40 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 # Display logo at the very top
 st.set_page_config(layout="wide")
 
-try:
-    st.image("logo.png", width=600, use_container_width=False)
-except FileNotFoundError:
-    pass  # Skip logo if file not found
+# Add "Clear All" button at the top
+col_logo, col_clear = st.columns([4, 1])
+
+with col_logo:
+    try:
+        st.image("logo.png", width=600, use_container_width=False)
+    except FileNotFoundError:
+        st.title("🎯 EVA Layout Optimizer")
+
+with col_clear:
+    st.write("")  # Add some spacing
+    st.write("")  # Add some spacing
+    if st.button("🗑️ Очистить всё", 
+                 help="Очистить все данные и начать заново",
+                 type="secondary"):
+        # Clear all session state
+        keys_to_clear = [
+            'available_sheets', 'selected_orders', 'manual_files', 
+            'file_groups', 'group_counter', 'optimization_results',
+            'manual_file_settings'
+        ]
+        
+        for key in keys_to_clear:
+            if key in st.session_state:
+                del st.session_state[key]
+        
+        # Clear all order selection states
+        keys_to_remove = [key for key in st.session_state.keys() 
+                         if key.startswith(('order_', 'quantity_', 'select_', 'qty_'))]
+        for key in keys_to_remove:
+            del st.session_state[key]
+        
+        st.success("✅ Все данные очищены!")
+        st.rerun()
 
 # Sheet Inventory Section
 st.header("📋 Настройка доступных листов")
@@ -180,7 +210,7 @@ if st.session_state.available_sheets:
     with col1:
         st.metric("Всего листов в наличии", total_sheets)
     with col2:
-        if st.button("🗑️ Очистить все", key="clear_sheets"):
+        if st.button("🗑️ Удалить все листы", key="clear_sheets"):
             st.session_state.available_sheets = []
             st.rerun()
 else:
@@ -200,6 +230,9 @@ excel_file = st.file_uploader(
     "Загрузите файл заказов Excel", type=["xlsx", "xls"], key="excel_upload"
 )
 
+# Track current Excel file to detect changes
+if "current_excel_hash" not in st.session_state:
+    st.session_state.current_excel_hash = None
 
 if excel_file is not None:
     try:
@@ -207,6 +240,23 @@ if excel_file is not None:
             # Read Excel file with caching - use file hash for cache key
             file_content = excel_file.read()
             file_hash = hash(file_content)
+            
+            # Check if this is a different Excel file
+            if st.session_state.current_excel_hash != file_hash:
+                # New file detected - clear all previous selections
+                st.session_state.current_excel_hash = file_hash
+                
+                # Clear all order selection states
+                keys_to_remove = [key for key in st.session_state.keys() 
+                                 if key.startswith(('order_', 'quantity_', 'select_', 'qty_'))]
+                for key in keys_to_remove:
+                    del st.session_state[key]
+                
+                # Clear selected orders
+                st.session_state.selected_orders = []
+                
+                logger.info(f"Новый Excel файл загружен, предыдущие выборы очищены")
+            
             excel_data = load_excel_file(file_content)
             logger.info(f"Excel файл загружен. Листы: {list(excel_data.keys())}")
 
@@ -644,7 +694,7 @@ if st.session_state.file_groups:
     with col1:
         st.metric("Всего объектов во всех группах", total_objects)
     with col2:
-        if st.button("🗑️ Очистить все группы", key="clear_all_groups"):
+        if st.button("🗑️ Удалить все группы", key="clear_all_groups"):
             st.session_state.file_groups = []
             st.session_state.group_counter = 1
             st.rerun()
@@ -923,14 +973,12 @@ if st.button("🚀 Оптимизировать раскрой"):
                     f"  Полигон {i}: файл={carpet.filename}, order_id={carpet.order_id}"
                 )
 
-            # Main optimization step
-            optimization_progress.progress(50)
-            optimization_status.text("Выполнение алгоритма размещения...")
-
-            # Progress callback function
+            # Progress callback function with more detailed updates
             def update_progress(percent, status_text):
-                optimization_progress.progress(int(percent))
-                optimization_status.text(status_text)
+                # Ensure percent is between 50-95 for main processing
+                adjusted_percent = 50 + (percent * 0.45)  # Scale to 50-95% range
+                optimization_progress.progress(min(95, int(adjusted_percent)))
+                optimization_status.text(f"🔄 {status_text}")
 
             placed_layouts, unplaced_polygons = bin_packing_with_inventory(
                 carpets,
@@ -1243,8 +1291,6 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
                     {
                         "DXF файл": file_name,
                         "Номер листа": layout["Sheet"],
-                        # "Размер (см)": size_comparison,
-                        # "Площадь (см²)": f"{area_cm2:.2f}",
                         "Поворот (°)": f"{angle:.0f}",
                         "Выходной файл": layout["Output File"],
                     }

@@ -1184,6 +1184,8 @@ def bin_packing_with_existing(
                 f"⏱️ Медленный полигон {file_name}: {polygon_elapsed:.2f}s, размещен={placed_successfully}"
             )
 
+    # Жадный сдвиг (greedy push) — прижимаем коврики максимально влево/вниз
+    placed = tighten_layout(placed, sheet_size, min_gap=0.1)
     return placed, unplaced
 
 
@@ -1193,6 +1195,7 @@ def bin_packing(
     sheet_size: tuple[float, float],
     verbose: bool = True,
     max_processing_time: float = 300.0,  # 5 minute timeout
+    progress_callback=None,  # Callback function for progress updates
 ) -> tuple[list[tuple], list[tuple]]:
     """Optimize placement of complex polygons on a sheet with ultra-dense/polygonal/improved algorithms."""
     import time
@@ -1234,11 +1237,8 @@ def bin_packing(
             unplaced.extend(sorted_polygons[i:])
             break
             
+
         placed_successfully = False
-        if verbose:
-            st.info(
-                f"Обрабатываем полигон {i+1}/{len(sorted_polygons)} из файла {carpet.filename}, площадь: {carpet.polygon.area:.2f}"
-            )
 
         # Check if polygon is too large for the sheet
         bounds = carpet.polygon.bounds
@@ -1457,6 +1457,9 @@ def bin_packing(
                 st.warning(f"❌ Не удалось разместить полигон из {carpet.filename}")
             unplaced.append(carpet)
 
+    # Применяем жадный сдвиг
+    placed = tighten_layout(placed, sheet_size)
+
     if verbose:
         usage_percent = calculate_usage_percent(placed, sheet_size)
         st.info(
@@ -1478,7 +1481,7 @@ def find_contour_following_position(
         dataset_size = getattr(find_bottom_left_position, '_dataset_size', 10)
     except:
         dataset_size = 10
-        
+
     if dataset_size > 30:
         # Very large dataset: Minimal candidates for speed
         max_obstacles = min(4, len(obstacles))
@@ -1494,7 +1497,8 @@ def find_contour_following_position(
         max_obstacles = min(8, len(obstacles))
         max_points_per_obstacle = 30
         max_candidates = 400
-    
+
+
     candidates = []
     
     # Process only the most relevant obstacles (largest ones)
@@ -2131,7 +2135,7 @@ def bin_packing_with_inventory(
 
             # Попытка максимально плотной упаковки - несколько проходов
             placed, remaining = bin_packing(
-                remaining_carpets, sheet_size, verbose=False
+                remaining_carpets, sheet_size, verbose=False, progress_callback=progress_callback
             )
 
 
@@ -2159,6 +2163,19 @@ def bin_packing_with_inventory(
                     st.success(
                         f"✅ Лист #{sheet_counter} ({sheet_type['name']}): {len(placed)} приоритет1+Excel"
                     )
+
+                if progress_callback:
+                    progress = min(
+                        70,
+                        int(
+                            70
+                            * len(placed_layouts)
+                            / (len(carpets))
+                        ),
+                    )
+                    progress_callback(
+                        progress, f"Создан лист #{sheet_counter}: {len(placed)} ковров размещено"
+                    )
             else:
                 logger.warning(
                     f"Не удалось разместить приоритет 1 на новом листе {color}"
@@ -2167,19 +2184,6 @@ def bin_packing_with_inventory(
                 sheet_type["used"] -= 1
                 sheet_counter -= 1
                 break
-
-        #if progress_callback:
-        #    progress = min(
-        #        70,
-        #        int(
-        #            70
-        #            * len(placed_layouts)
-        #            / (len(placed_layouts) + len(priority2_carpets))
-        #        ),
-        #    )
-        #    progress_callback(
-        #        progress, f"Размещение приоритет 1+Excel: {len(placed_layouts)} листов"
-        #    )
 
     # STEP 3: Place priority 2 on remaining space only (no new sheets)
     logger.info(
@@ -2505,3 +2509,121 @@ def plot_input_polygons(
         plots[carpet.filename] = plot_buf
 
     return plots
+
+def tighten_layout(placed, sheet_size=None, min_gap: float = 0.1, step: float = 1.0, max_passes: int = 3):
+    """
+    Жадный сдвиг (greedy push): для каждого полигона пробуем сдвинуть максимально
+    влево, затем максимально вниз, не нарушая коллизий с *любой* другой деталью.
+
+    Args:
+        placed: список кортежей полигонов в абсолютных координатах.
+                Формат кортежа ожидается как минимум (polygon, x_off, y_off, angle, filename, color, order_id)
+                — но функция работает и если у вас немного другой набор полей: она всегда
+                возвращает 7-элементный кортеж.
+        sheet_size: оставлен для совместимости сигнатур (не используется внутри).
+        min_gap: минимальный зазор в мм (передавайте 0.0 или 0.1).
+        step: шаг сдвига в мм (1.0 — точный, можно поставить 2.0 для ускорения).
+        max_passes: число проходов по всем полигонам (обычно 2–3 достаточно).
+    Returns:
+        Новый список placed в том же формате (каждый элемент — 7-ка), где полигоны сдвинуты.
+    """
+    # Защитная проверка
+    if not placed:
+        return placed
+
+    # Создаём список текущих полигонов (будем обновлять)
+    current_polys = [item[0] for item in placed]
+    # Сохраняем сопут. данные (x_off, y_off, angle, filename, color, order_id) с запасом по длине
+    meta = []
+    for item in placed:
+        # Удобное разбиение: берём значения по позициям, если отсутствуют — подставляем None/0
+        x_off = item[1] if len(item) > 1 else 0.0
+        y_off = item[2] if len(item) > 2 else 0.0
+        angle = item[3] if len(item) > 3 else 0.0
+        filename = item[4] if len(item) > 4 else None
+        color = item[5] if len(item) > 5 else None
+        order_id = item[6] if len(item) > 6 else None
+        meta.append((x_off, y_off, angle, filename, color, order_id))
+
+    n = len(current_polys)
+
+    # Несколько проходов, пока происходят сдвиги или пока не исчерпаны max_passes
+    for pass_idx in range(max_passes):
+        moved_any = False
+
+        for i in range(n):
+            poly = current_polys[i]
+            orig_bounds = poly.bounds
+            moved = poly
+
+            # --- Сдвигаем влево по шагам ---
+            while True:
+                test = translate_polygon(moved, -step, 0)
+                # Пробуем выйти за левую границу? Останавливаемся
+                if test.bounds[0] < -0.01:
+                    break
+
+                # Проверяем столкновения со всеми остальными полигонами
+                collision = False
+                for j in range(n):
+                    if j == i:
+                        continue
+                    other = current_polys[j]
+                    # Точная проверка: true если пересекается или ближе минимума
+                    if check_collision(test, other, min_gap=min_gap):
+                        collision = True
+                        break
+
+                if collision:
+                    break
+
+                # Нет столкновений — применяем сдвиг
+                moved = test
+                moved_any = True
+
+            # --- Сдвигаем вниз по шагам ---
+            while True:
+                test = translate_polygon(moved, 0, -step)
+                if test.bounds[1] < -0.01:
+                    break
+
+                collision = False
+                for j in range(n):
+                    if j == i:
+                        continue
+                    other = current_polys[j]
+                    if check_collision(test, other, min_gap=min_gap):
+                        collision = True
+                        break
+
+                if collision:
+                    break
+
+                moved = test
+                moved_any = True
+
+            # Обновляем текущую позицию полигона
+            current_polys[i] = moved
+
+        # Если за проход изменений не было — прекращаем
+        if not moved_any:
+            break
+
+    # Формируем новый список placed (возвращаем 7-элементные кортежи)
+    new_placed = []
+    for i in range(n):
+        new_poly = current_polys[i]
+        orig_poly = placed[i][0]
+        # Смещение в абсолютных координатах между исходным и новым
+        dx_total = new_poly.bounds[0] - orig_poly.bounds[0]
+        dy_total = new_poly.bounds[1] - orig_poly.bounds[1]
+
+        orig_x_off, orig_y_off, angle, filename, color, order_id = meta[i]
+        new_x_off = orig_x_off + dx_total
+        new_y_off = orig_y_off + dy_total
+
+        # Возвращаем стандартный 7-элементный кортеж
+        new_placed.append((new_poly, new_x_off, new_y_off, angle, filename, color, order_id))
+
+    return new_placed
+
