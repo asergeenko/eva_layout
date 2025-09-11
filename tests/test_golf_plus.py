@@ -8,7 +8,7 @@ def test_golf_plus():
     # Создаем листы
     available_sheets = [{
         "name": f"Черный лист",
-        "width": 144,
+        "width": 140,
         "height": 200,
         "color": "чёрный",
         "count": 20,
@@ -97,7 +97,7 @@ def test_golf_plus():
         print("   ❌ ЦЕЛЬ КЛИЕНТА НЕ ДОСТИГНУТА")
 
     # Проверяем улучшение плотности по сравнению с базовым уровнем
-    #assert len(unplaced) == 0, f"Все ковры должны быть размещены, неразмещенных: {len(unplaced)}"
+    assert len(unplaced) == 0, f"Все ковры должны быть размещены, неразмещенных: {len(unplaced)}"
     assert len(placed_layouts) <= 4, f"Нужно разместить заказы на 4 листах: {len(placed_layouts)}"
 
     return {
