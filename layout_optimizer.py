@@ -36,21 +36,6 @@ class Carpet:
 # Настройка логирования
 logger = logging.getLogger(__name__)
 
-# Import improved packing algorithms after logger is defined
-try:
-    from improved_packing import improved_bin_packing
-
-    IMPROVED_PACKING_AVAILABLE = True  # Временно отключаем
-    logger.info("✨ Улучшенный алгоритм отключен для тестирования")
-except ImportError:
-    IMPROVED_PACKING_AVAILABLE = False
-    logger.warning("⚠️  Улучшенный алгоритм недоступен, используем стандартный")
-
-
-# Настройки алгоритмов
-USE_IMPROVED_PACKING_BY_DEFAULT = (
-    True  # Улучшенный алгоритм по умолчанию (лучший баланс)
-)
 
 logging.getLogger("ezdxf").setLevel(logging.ERROR)
 
@@ -1083,42 +1068,6 @@ def bin_packing_with_existing(
     verbose: bool = True,
 ) -> tuple[list[tuple], list[tuple]]:
     """Bin packing that considers already placed polygons on the sheet."""
-    # Try improved algorithm for existing placement if available and enabled
-    if (
-        IMPROVED_PACKING_AVAILABLE
-        and USE_IMPROVED_PACKING_BY_DEFAULT
-        and len(existing_placed) > 0
-    ):
-        if verbose:
-            st.info(
-                f"🚀 Дозаполняем лист улучшенным алгоритмом: +{len(polygons)} к {len(existing_placed)} существующим"
-            )
-        try:
-            # Create a packer with existing polygons pre-placed
-            from improved_packing import AdvancedCarpetPacker
-
-            sheet_width_mm = sheet_size[0] * 10
-            sheet_height_mm = sheet_size[1] * 10
-
-            packer = AdvancedCarpetPacker(sheet_width_mm, sheet_height_mm)
-            # Add existing polygons to packer
-            packer.placed_polygons = [
-                placed_tuple[0] for placed_tuple in existing_placed
-            ]
-            packer.placed_positions = [
-                (placed_tuple[1], placed_tuple[2]) for placed_tuple in existing_placed
-            ]
-
-            # Pack new polygons
-            placed, unplaced = packer.pack_carpets(polygons)
-            return placed, unplaced
-
-        except Exception as e:
-            logger.warning(
-                f"Ошибка в улучшенном алгоритме дозаполнения: {e}, используем стандартный"
-            )
-            if verbose:
-                st.warning("⚠️ Используем стандартный алгоритм дозаполнения")
     # Convert sheet size from cm to mm to match DXF polygon units
     sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
 
@@ -1261,24 +1210,6 @@ def bin_packing(
 ) -> tuple[list[tuple], list[tuple]]:
     """Optimize placement of complex polygons on a sheet with ultra-dense/polygonal/improved algorithms."""
 
-    # Try to use improved algorithm as fallback
-    if IMPROVED_PACKING_AVAILABLE and (
-        USE_IMPROVED_PACKING_BY_DEFAULT
-    ):
-        if verbose:
-            st.info(
-                f"🚀 Используем улучшенный алгоритм размещения для {len(polygons)} полигонов"
-            )
-        try:
-            return improved_bin_packing(polygons, sheet_size, verbose)
-        except Exception as e:
-            logger.warning(
-                f"Ошибка в улучшенном алгоритме: {e}, переключаемся на стандартный"
-            )
-            if verbose:
-                st.warning("⚠️ Переключение на стандартный алгоритм из-за ошибки")
-
-    # Fallback to standard algorithm
     # Convert sheet size from cm to mm to match DXF polygon units
     sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
 

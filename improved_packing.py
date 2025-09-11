@@ -25,6 +25,14 @@ class AdvancedCarpetPacker:
         self.occupied_max_y = float('-inf')
         self.current_sheet = 1
 
+    #def _rotate_carpet(self, polygon: Polygon, angle: float) -> Polygon:
+    #    if angle == 0:
+    #        return polygon
+    #    return affinity.rotate(polygon, angle, origin="centroid")
+
+    #def _translate_polygon(self, polygon: Polygon, dx: float, dy: float) -> Polygon:
+    #    return affinity.translate(polygon, dx, dy)
+
     def pack_carpets(self, carpets, progress_callback=None) -> Tuple[List, List]:
         """Основная функция размещения ковриков с максимальной плотностью на всех листах."""
         placed = []
