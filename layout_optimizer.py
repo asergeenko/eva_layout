@@ -1207,8 +1207,11 @@ def bin_packing(
     polygons: list[tuple],
     sheet_size: tuple[float, float],
     verbose: bool = True,
+    max_processing_time: float = 300.0,  # 5 minute timeout
 ) -> tuple[list[tuple], list[tuple]]:
     """Optimize placement of complex polygons on a sheet with ultra-dense/polygonal/improved algorithms."""
+    import time
+    start_time = time.time()
 
     # Convert sheet size from cm to mm to match DXF polygon units
     sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
@@ -1235,6 +1238,13 @@ def bin_packing(
         st.info("✨ Сортировка полигонов по площади (сначала крупные)")
 
     for i, carpet in enumerate(sorted_polygons):
+        # Check timeout
+        if time.time() - start_time > max_processing_time:
+            if verbose:
+                st.warning(f"⏰ Превышено время обработки ({max_processing_time}s), остальные полигоны добавлены в неразмещенные")
+            unplaced.extend(sorted_polygons[i:])
+            break
+            
         placed_successfully = False
         if verbose:
             st.info(
@@ -1320,8 +1330,8 @@ def bin_packing(
             simple_width = simple_bounds[2] - simple_bounds[0]
             simple_height = simple_bounds[3] - simple_bounds[1]
 
-            # Optimized grid placement as fallback
-            max_grid_attempts = 10  # Reduced for better performance
+            # Optimized grid placement as fallback with timeout
+            max_grid_attempts = 5 if len(placed) > 10 else 10  # Further reduced for many obstacles
             if sheet_width_mm > simple_width:
                 x_positions = np.linspace(
                     0, sheet_width_mm - simple_width, max_grid_attempts
@@ -1344,7 +1354,7 @@ def bin_packing(
                     x_offset = grid_x - simple_bounds[0]
                     y_offset = grid_y - simple_bounds[1]
 
-                    # Fast bounds check
+                    # Fast bounds check with minimal tolerance for tight packing
                     test_bounds = (
                         simple_bounds[0] + x_offset,
                         simple_bounds[1] + y_offset,
@@ -1353,21 +1363,22 @@ def bin_packing(
                     )
 
                     if not (
-                        test_bounds[0] >= -0.1
-                        and test_bounds[1] >= -0.1
-                        and test_bounds[2] <= sheet_width_mm + 0.1
-                        and test_bounds[3] <= sheet_height_mm + 0.1
+                        test_bounds[0] >= -0.01
+                        and test_bounds[1] >= -0.01
+                        and test_bounds[2] <= sheet_width_mm + 0.01
+                        and test_bounds[3] <= sheet_height_mm + 0.01
                     ):
                         continue
 
-                    # OPTIMIZATION: Fast bounding box collision check first
+                    # OPTIMIZATION: Fast bounding box collision check with minimal gap
                     bbox_collision = False
+                    min_bbox_gap = 0.5  # Minimal gap for tight packing
                     for placed_bounds in placed_bounds_cache:
                         if not (
-                            test_bounds[2] + 2.0 <= placed_bounds[0]
-                            or test_bounds[0] >= placed_bounds[2] + 2.0
-                            or test_bounds[3] + 2.0 <= placed_bounds[1]
-                            or test_bounds[1] >= placed_bounds[3] + 2.0
+                            test_bounds[2] + min_bbox_gap <= placed_bounds[0]
+                            or test_bounds[0] >= placed_bounds[2] + min_bbox_gap
+                            or test_bounds[3] + min_bbox_gap <= placed_bounds[1]
+                            or test_bounds[1] >= placed_bounds[3] + min_bbox_gap
                         ):
                             bbox_collision = True
                             break
@@ -1420,10 +1431,101 @@ def bin_packing(
     return placed, unplaced
 
 
+def find_ultra_tight_position(
+    polygon: Polygon, obstacles: list[Polygon], sheet_width: float, sheet_height: float
+) -> tuple[float | None, float | None]:
+    """Find ultra-tight position using adaptive algorithm for maximum density with performance optimization."""
+    bounds = polygon.bounds
+    poly_width = bounds[2] - bounds[0]
+    poly_height = bounds[3] - bounds[1]
+    
+    # PERFORMANCE: Adaptive step size based on number of obstacles
+    num_obstacles = len(obstacles)
+    if num_obstacles > 10:
+        step_size = 2.0  # Larger steps for many obstacles
+        max_candidates = 500  # Limit total candidates
+    elif num_obstacles > 5:
+        step_size = 1.0  # Medium steps
+        max_candidates = 1000
+    else:
+        step_size = 0.5  # Fine steps for few obstacles
+        max_candidates = 2000
+    
+    # Step 1: Generate strategic candidate positions
+    candidate_positions = set()
+    
+    # OPTIMIZATION: Only process critical obstacle edges
+    critical_obstacles = obstacles[:min(10, len(obstacles))]  # Limit to first 10
+    
+    for obstacle in critical_obstacles:
+        obs_bounds = obstacle.bounds
+        
+        # Key positions around obstacle
+        key_positions = [
+            # Right edge
+            (obs_bounds[2] + 0.1, obs_bounds[1]),
+            (obs_bounds[2] + 0.1, obs_bounds[1] + (obs_bounds[3] - obs_bounds[1])/2),
+            (obs_bounds[2] + 0.1, obs_bounds[3] - poly_height),
+            # Top edge
+            (obs_bounds[0], obs_bounds[3] + 0.1),
+            (obs_bounds[0] + (obs_bounds[2] - obs_bounds[0])/2, obs_bounds[3] + 0.1),
+            (obs_bounds[2] - poly_width, obs_bounds[3] + 0.1),
+        ]
+        
+        for x, y in key_positions:
+            if (0 <= x <= sheet_width - poly_width and 
+                0 <= y <= sheet_height - poly_height):
+                candidate_positions.add((x, y))
+    
+    # Add edge positions with adaptive step
+    for x in np.arange(0, sheet_width - poly_width + 1, step_size):
+        candidate_positions.add((x, 0))
+    for y in np.arange(0, sheet_height - poly_height + 1, step_size):
+        candidate_positions.add((0, y))
+    
+    # PERFORMANCE: Limit total candidates
+    candidate_positions = list(candidate_positions)
+    if len(candidate_positions) > max_candidates:
+        # Keep bottom-left biased selection
+        candidate_positions.sort(key=lambda pos: (pos[1], pos[0]))
+        candidate_positions = candidate_positions[:max_candidates]
+    
+    # Test positions with early exit
+    for x, y in candidate_positions:
+        # Fast boundary check
+        if (x + poly_width <= sheet_width + 0.01 and 
+            y + poly_height <= sheet_height + 0.01 and 
+            x >= -0.01 and y >= -0.01):
+            
+            x_offset = x - bounds[0]
+            y_offset = y - bounds[1]
+            test_polygon = translate_polygon(polygon, x_offset, y_offset)
+            
+            # Check for collisions with adaptive tolerance
+            min_gap = 0.1 if num_obstacles <= 5 else 0.5
+            collision = False
+            for obstacle in obstacles:
+                if check_collision(test_polygon, obstacle, min_gap=min_gap):
+                    collision = True
+                    break
+            
+            if not collision:
+                return x, y
+    
+    return None, None
+
+
 def find_bottom_left_position_with_obstacles(
     polygon: Polygon, obstacles: list[Polygon], sheet_width: float, sheet_height: float
 ) -> tuple[float | None, float | None]:
-    """Find the bottom-left position for a polygon using Bottom-Left Fill algorithm with existing obstacles."""
+    """Find the bottom-left position for a polygon using ultra-tight packing algorithm."""
+    # Try ultra-tight algorithm first
+    result = find_ultra_tight_position(polygon, obstacles, sheet_width, sheet_height)
+    if result[0] is not None:
+        return result
+    
+    # Fallback to improved algorithm
+    bounds = polygon.bounds
     bounds = polygon.bounds
     poly_width = bounds[2] - bounds[0]
     poly_height = bounds[3] - bounds[1]
@@ -1512,10 +1614,77 @@ def find_bottom_left_position_with_obstacles(
     return None, None
 
 
+def find_quick_position(
+    polygon: Polygon, placed_polygons, sheet_width: float, sheet_height: float
+) -> tuple[float | None, float | None]:
+    """Quick position finding for scenarios with many obstacles."""
+    bounds = polygon.bounds
+    poly_width = bounds[2] - bounds[0]
+    poly_height = bounds[3] - bounds[1]
+    
+    # Use larger steps for speed
+    step_size = 5.0
+    max_positions = 100
+    
+    # Generate minimal candidate set
+    candidates = []
+    
+    # Bottom edge with large steps
+    for x in np.arange(0, sheet_width - poly_width + 1, step_size):
+        candidates.append((x, 0))
+        if len(candidates) >= max_positions:
+            break
+    
+    # Left edge with large steps
+    for y in np.arange(0, sheet_height - poly_height + 1, step_size):
+        candidates.append((0, y))
+        if len(candidates) >= max_positions:
+            break
+    
+    # Test positions quickly
+    for x, y in candidates:
+        if (x + poly_width <= sheet_width and y + poly_height <= sheet_height):
+            x_offset = x - bounds[0]
+            y_offset = y - bounds[1]
+            test_polygon = translate_polygon(polygon, x_offset, y_offset)
+            
+            # Quick collision check with looser tolerance
+            collision = False
+            for placed_poly, *_ in placed_polygons:
+                if check_collision(test_polygon, placed_poly, min_gap=2.0):  # Looser gap
+                    collision = True
+                    break
+            
+            if not collision:
+                return x, y
+    
+    return None, None
+
+
 def find_bottom_left_position(
     polygon: Polygon, placed_polygons, sheet_width: float, sheet_height: float
 ):
-    """Find the bottom-left position for a polygon using optimized Bottom-Left Fill algorithm."""
+    """Find the bottom-left position for a polygon using ultra-tight Bottom-Left Fill algorithm with timeout."""
+    import time
+    start_time = time.time()
+    timeout = 10.0  # 10 second timeout per polygon
+    
+    # PERFORMANCE: Quick fallback for too many obstacles
+    if len(placed_polygons) > 15:
+        return find_quick_position(polygon, placed_polygons, sheet_width, sheet_height)
+    
+    # Convert placed polygons to obstacles and use ultra-tight algorithm
+    obstacles = [placed_tuple[0] for placed_tuple in placed_polygons]
+    
+    # Try ultra-tight algorithm with timeout
+    try:
+        result = find_ultra_tight_position(polygon, obstacles, sheet_width, sheet_height)
+        if result[0] is not None and time.time() - start_time < timeout:
+            return result
+    except Exception:
+        pass  # Fallback to conventional algorithm
+    
+    # Fallback to improved conventional algorithm
     bounds = polygon.bounds
     poly_width = bounds[2] - bounds[0]
     poly_height = bounds[3] - bounds[1]
@@ -1526,11 +1695,11 @@ def find_bottom_left_position(
         placed_polygon = placed_tuple[0]
         placed_bounds_list.append(placed_polygon.bounds)
 
-    # Generate candidate positions more efficiently
+    # Generate candidate positions with fine granularity
     candidate_positions = set()  # Use set to avoid duplicates
 
-    # Bottom and left edge positions with larger steps for faster processing
-    step_size = max(5, min(poly_width, poly_height) / 4)  # Adaptive step size
+    # Ultra-fine step size for maximum density
+    step_size = 1.0  # 1mm steps for precise placement
 
     # Bottom edge positions
     for x in np.arange(0, sheet_width - poly_width + 1, step_size):
@@ -1540,39 +1709,57 @@ def find_bottom_left_position(
     for y in np.arange(0, sheet_height - poly_height + 1, step_size):
         candidate_positions.add((0, y))
 
-    # OPTIMIZATION: Generate positions based on existing polygons more efficiently
-    min_gap = 3.0
+    # OPTIMIZATION: Generate positions based on existing polygons with ultra-tight packing
+    min_gap = 0.1  # Ultra-minimal gap for maximum density
     for placed_bounds in placed_bounds_list:
         # Try position to the right of existing polygon
         x = placed_bounds[2] + min_gap
         if x + poly_width <= sheet_width:
-            candidate_positions.add((x, placed_bounds[1]))  # Same Y as existing
-            candidate_positions.add((x, 0))  # Bottom edge
+            # Add multiple Y positions for better fit
+            y_positions = [
+                placed_bounds[1],  # Same Y as existing
+                0,  # Bottom edge
+                placed_bounds[1] - poly_height/2,  # Below existing
+                placed_bounds[1] + poly_height/2,  # Above existing
+                placed_bounds[3] - poly_height,    # Top-aligned with existing
+            ]
+            for y_pos in y_positions:
+                if 0 <= y_pos <= sheet_height - poly_height:
+                    candidate_positions.add((x, y_pos))
 
         # Try position above existing polygon
         y = placed_bounds[3] + min_gap
         if y + poly_height <= sheet_height:
-            candidate_positions.add((placed_bounds[0], y))  # Same X as existing
-            candidate_positions.add((0, y))  # Left edge
+            # Add multiple X positions for better fit
+            x_positions = [
+                placed_bounds[0],  # Same X as existing
+                0,  # Left edge
+                placed_bounds[0] - poly_width/2,   # Left of existing
+                placed_bounds[0] + poly_width/2,   # Right of existing
+                placed_bounds[2] - poly_width,     # Right-aligned with existing
+            ]
+            for x_pos in x_positions:
+                if 0 <= x_pos <= sheet_width - poly_width:
+                    candidate_positions.add((x_pos, y))
 
     # Convert to sorted list (bottom-left preference)
     candidate_positions = sorted(candidate_positions, key=lambda pos: (pos[1], pos[0]))
 
-    # PERFORMANCE: Pre-calculate translation offset and test bounds for all candidates
+    # PERFORMANCE: Ultra-tight collision checking for each candidate
     for x, y in candidate_positions:
-        # Fast boundary pre-check
+        # Ultra-precise boundary pre-check
         if (
-            x + poly_width > sheet_width + 0.1
-            or y + poly_height > sheet_height + 0.1
-            or x < -0.1
-            or y < -0.1
+            x + poly_width > sheet_width + 0.01
+            or y + poly_height > sheet_height + 0.01
+            or x < -0.01
+            or y < -0.01
         ):
             continue
 
         x_offset = x - bounds[0]
         y_offset = y - bounds[1]
 
-        # Check bounds before expensive polygon creation
+        # Check bounds with minimal tolerance
         test_bounds = (
             bounds[0] + x_offset,
             bounds[1] + y_offset,
@@ -1580,22 +1767,23 @@ def find_bottom_left_position(
             bounds[3] + y_offset,
         )
         if (
-            test_bounds[0] < -0.1
-            or test_bounds[1] < -0.1
-            or test_bounds[2] > sheet_width + 0.1
-            or test_bounds[3] > sheet_height + 0.1
+            test_bounds[0] < -0.01
+            or test_bounds[1] < -0.01
+            or test_bounds[2] > sheet_width + 0.01
+            or test_bounds[3] > sheet_height + 0.01
         ):
             continue
 
-        # OPTIMIZATION: Fast bounding box collision check before creating polygon
+        # OPTIMIZATION: Ultra-tight bounding box collision check
         bbox_collision = False
+        ultra_tight_gap = 0.1  # Ultra-minimal gap for tight packing
         for placed_bounds in placed_bounds_list:
-            # Check if bounding boxes intersect with minimum gap
+            # Check if bounding boxes intersect with ultra-minimal gap
             if not (
-                test_bounds[2] + 2.0 <= placed_bounds[0]  # test is left of placed
-                or test_bounds[0] >= placed_bounds[2] + 2.0  # test is right of placed
-                or test_bounds[3] + 2.0 <= placed_bounds[1]  # test is below placed
-                or test_bounds[1] >= placed_bounds[3] + 2.0
+                test_bounds[2] + ultra_tight_gap <= placed_bounds[0]  # test is left of placed
+                or test_bounds[0] >= placed_bounds[2] + ultra_tight_gap  # test is right of placed
+                or test_bounds[3] + ultra_tight_gap <= placed_bounds[1]  # test is below placed
+                or test_bounds[1] >= placed_bounds[3] + ultra_tight_gap
             ):  # test is above placed
                 bbox_collision = True
                 break
@@ -1603,13 +1791,13 @@ def find_bottom_left_position(
         if bbox_collision:
             continue
 
-        # Only create polygon and do full collision check if bounding box test passes
+        # Only create polygon and do ultra-tight collision check if bounding box test passes
         test_polygon = translate_polygon(polygon, x_offset, y_offset)
 
-        # Final collision check with actual polygons
+        # Final ultra-tight collision check with actual polygons
         collision = False
         for p, *_ in placed_polygons:
-            if check_collision(test_polygon, p):
+            if check_collision(test_polygon, p, min_gap=0.1):  # Ultra-tight gap
                 collision = True
                 break
 
