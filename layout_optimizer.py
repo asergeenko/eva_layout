@@ -1007,57 +1007,40 @@ def apply_placement_transform(
     return final_polygon
 
 
-def check_collision(polygon1: Polygon, polygon2: Polygon, min_gap: float = 2.0) -> bool:
-    """Check if two polygons collide with minimum gap requirement.
+def check_collision(polygon1: Polygon, polygon2: Polygon, min_gap: float = 0.1) -> bool:
+    """Check if two polygons collide using TRUE GEOMETRIC distance - NO bounding box limitations!
 
-    Enhanced version with improved collision detection.
+    This allows maximum density packing where shapes can nestle into each other's contours.
 
     Args:
         polygon1: First polygon
         polygon2: Second polygon
-        min_gap: Minimum gap required between polygons in mm (default 2mm)
+        min_gap: Minimum gap required between polygons in mm (default 0.1mm for ultra-tight packing)
 
     Returns:
         True if polygons are too close (collision), False if they have sufficient gap
     """
     # Fast validity check
     if not (polygon1.is_valid and polygon2.is_valid):
-        return True  # Treat invalid polygons as collision
-
-    # OPTIMIZATION 1: Enhanced bounding box distance check
-    bounds1 = polygon1.bounds
-    bounds2 = polygon2.bounds
-
-    # Calculate minimum distance between bounding boxes with safety margin
-    dx = max(0, max(bounds1[0] - bounds2[2], bounds2[0] - bounds1[2]))
-    dy = max(0, max(bounds1[1] - bounds2[3], bounds2[1] - bounds1[3]))
-    bbox_distance = (dx * dx + dy * dy) ** 0.5
-
-    # If bounding boxes are far enough apart, no collision possible
-    if bbox_distance >= min_gap + 1.0:  # Extra safety margin
-        return False
-
-    # OPTIMIZATION 2: Quick intersection check - if they overlap, it's definitely a collision
-    if polygon1.intersects(polygon2):
         return True
 
-    # OPTIMIZATION 3: More accurate distance calculation for close polygons
     try:
-        # Use buffered polygon for more conservative collision detection
-        buffered_polygon1 = polygon1.buffer(min_gap / 2.0)
-        if buffered_polygon1.intersects(polygon2):
+        # CRITICAL: Skip ALL bounding box checks - use only true geometric distance
+        
+        # 1. Quick intersection check
+        if polygon1.intersects(polygon2):
             return True
-
-        # Final precise distance check
-        distance = polygon1.distance(polygon2)
-        return distance < min_gap
+            
+        # 2. TRUE GEOMETRIC DISTANCE - allows shapes to fit into each other's concave areas
+        geometric_distance = polygon1.distance(polygon2)
+        return geometric_distance < min_gap
+        
     except Exception:
-        # If calculation fails, use conservative buffer check
+        # Minimal fallback without bounding box constraints
         try:
-            buffer1 = polygon1.buffer(min_gap)
-            return buffer1.intersects(polygon2)
+            return polygon1.buffer(min_gap * 0.5).intersects(polygon2)
         except Exception:
-            return True  # Be conservative if all methods fail
+            return True
 
 
 # @profile
@@ -1370,23 +1353,7 @@ def bin_packing(
                     ):
                         continue
 
-                    # OPTIMIZATION: Fast bounding box collision check with minimal gap
-                    bbox_collision = False
-                    min_bbox_gap = 0.5  # Minimal gap for tight packing
-                    for placed_bounds in placed_bounds_cache:
-                        if not (
-                            test_bounds[2] + min_bbox_gap <= placed_bounds[0]
-                            or test_bounds[0] >= placed_bounds[2] + min_bbox_gap
-                            or test_bounds[3] + min_bbox_gap <= placed_bounds[1]
-                            or test_bounds[1] >= placed_bounds[3] + min_bbox_gap
-                        ):
-                            bbox_collision = True
-                            break
-
-                    if bbox_collision:
-                        continue
-
-                    # Only create polygon if bounding box check passes
+                    # REVOLUTIONARY: Skip ALL bounding box checks - use only true geometric collision
                     translated = translate_polygon(carpet.polygon, x_offset, y_offset)
 
                     # Final precise collision check
@@ -1431,86 +1398,114 @@ def bin_packing(
     return placed, unplaced
 
 
-def find_ultra_tight_position(
+def find_contour_following_position(
     polygon: Polygon, obstacles: list[Polygon], sheet_width: float, sheet_height: float
 ) -> tuple[float | None, float | None]:
-    """Find ultra-tight position using adaptive algorithm for maximum density with performance optimization."""
+    """Find position using TRUE CONTOUR-FOLLOWING - shapes can nestle into concave areas!"""
     bounds = polygon.bounds
     poly_width = bounds[2] - bounds[0]
     poly_height = bounds[3] - bounds[1]
     
-    # PERFORMANCE: Adaptive step size based on number of obstacles
-    num_obstacles = len(obstacles)
-    if num_obstacles > 10:
-        step_size = 2.0  # Larger steps for many obstacles
-        max_candidates = 500  # Limit total candidates
-    elif num_obstacles > 5:
-        step_size = 1.0  # Medium steps
-        max_candidates = 1000
-    else:
-        step_size = 0.5  # Fine steps for few obstacles
-        max_candidates = 2000
+    candidates = []
     
-    # Step 1: Generate strategic candidate positions
-    candidate_positions = set()
+    # REVOLUTIONARY: Follow actual shape contours, not bounding boxes
+    for obstacle in obstacles[:8]:  # Limit for performance
+        # Get the actual boundary coordinates of the obstacle
+        if hasattr(obstacle.exterior, 'coords'):
+            contour_points = list(obstacle.exterior.coords)
+            
+            # Generate positions along the actual contour with minimal gaps
+            for i, (cx, cy) in enumerate(contour_points[:-1]):  # Skip last duplicate point
+                # Try positioning our polygon at various points along this contour
+                test_positions = [
+                    # Right of this contour point
+                    (cx + 0.1, cy - poly_height/2),
+                    (cx + 0.1, cy),
+                    (cx + 0.1, cy - poly_height),
+                    # Above this contour point
+                    (cx - poly_width/2, cy + 0.1),
+                    (cx, cy + 0.1),
+                    (cx - poly_width, cy + 0.1),
+                ]
+                
+                for test_x, test_y in test_positions:
+                    if (0 <= test_x <= sheet_width - poly_width and 
+                        0 <= test_y <= sheet_height - poly_height):
+                        candidates.append((test_x, test_y))
     
-    # OPTIMIZATION: Only process critical obstacle edges
-    critical_obstacles = obstacles[:min(10, len(obstacles))]  # Limit to first 10
+    # Add sheet edges
+    step = max(1.0, min(poly_width, poly_height) / 10)  # Adaptive step
+    for x in np.arange(0, sheet_width - poly_width + 1, step):
+        candidates.append((x, 0))
+    for y in np.arange(0, sheet_height - poly_height + 1, step):
+        candidates.append((0, y))
     
-    for obstacle in critical_obstacles:
-        obs_bounds = obstacle.bounds
+    # Sort by bottom-left preference and limit candidates
+    candidates = list(set(candidates))  # Remove duplicates
+    candidates.sort(key=lambda pos: (pos[1], pos[0]))
+    candidates = candidates[:min(1000, len(candidates))]  # Performance limit
+    
+    # Test each position using true geometric collision detection
+    for x, y in candidates:
+        x_offset = x - bounds[0]
+        y_offset = y - bounds[1]
+        test_polygon = translate_polygon(polygon, x_offset, y_offset)
         
-        # Key positions around obstacle
-        key_positions = [
-            # Right edge
-            (obs_bounds[2] + 0.1, obs_bounds[1]),
-            (obs_bounds[2] + 0.1, obs_bounds[1] + (obs_bounds[3] - obs_bounds[1])/2),
-            (obs_bounds[2] + 0.1, obs_bounds[3] - poly_height),
-            # Top edge
-            (obs_bounds[0], obs_bounds[3] + 0.1),
-            (obs_bounds[0] + (obs_bounds[2] - obs_bounds[0])/2, obs_bounds[3] + 0.1),
-            (obs_bounds[2] - poly_width, obs_bounds[3] + 0.1),
-        ]
+        # Use our new TRUE GEOMETRIC collision check (no bounding box constraints!)
+        collision = False
+        for obstacle in obstacles:
+            if check_collision(test_polygon, obstacle, min_gap=0.1):  # Ultra-tight
+                collision = True
+                break
         
-        for x, y in key_positions:
-            if (0 <= x <= sheet_width - poly_width and 
-                0 <= y <= sheet_height - poly_height):
-                candidate_positions.add((x, y))
+        if not collision:
+            return x, y
     
-    # Add edge positions with adaptive step
+    return None, None
+
+
+def find_ultra_tight_position(
+    polygon: Polygon, obstacles: list[Polygon], sheet_width: float, sheet_height: float
+) -> tuple[float | None, float | None]:
+    """Find ultra-tight position using contour-following for maximum density."""
+    
+    # Try new contour-following algorithm first
+    result = find_contour_following_position(polygon, obstacles, sheet_width, sheet_height)
+    if result[0] is not None:
+        return result
+    
+    # Fallback to grid-based approach
+    bounds = polygon.bounds
+    poly_width = bounds[2] - bounds[0]
+    poly_height = bounds[3] - bounds[1]
+    
+    # Use fine grid for small number of obstacles
+    step_size = 1.0 if len(obstacles) <= 5 else 2.0
+    candidates = []
+    
+    # Grid search with no bounding box prefiltering
     for x in np.arange(0, sheet_width - poly_width + 1, step_size):
-        candidate_positions.add((x, 0))
-    for y in np.arange(0, sheet_height - poly_height + 1, step_size):
-        candidate_positions.add((0, y))
+        for y in np.arange(0, sheet_height - poly_height + 1, step_size):
+            candidates.append((x, y))
+            if len(candidates) >= 500:  # Performance limit
+                break
+        if len(candidates) >= 500:
+            break
     
-    # PERFORMANCE: Limit total candidates
-    candidate_positions = list(candidate_positions)
-    if len(candidate_positions) > max_candidates:
-        # Keep bottom-left biased selection
-        candidate_positions.sort(key=lambda pos: (pos[1], pos[0]))
-        candidate_positions = candidate_positions[:max_candidates]
-    
-    # Test positions with early exit
-    for x, y in candidate_positions:
-        # Fast boundary check
-        if (x + poly_width <= sheet_width + 0.01 and 
-            y + poly_height <= sheet_height + 0.01 and 
-            x >= -0.01 and y >= -0.01):
-            
-            x_offset = x - bounds[0]
-            y_offset = y - bounds[1]
-            test_polygon = translate_polygon(polygon, x_offset, y_offset)
-            
-            # Check for collisions with adaptive tolerance
-            min_gap = 0.1 if num_obstacles <= 5 else 0.5
-            collision = False
-            for obstacle in obstacles:
-                if check_collision(test_polygon, obstacle, min_gap=min_gap):
-                    collision = True
-                    break
-            
-            if not collision:
-                return x, y
+    # Test positions using pure geometric collision detection
+    for x, y in candidates:
+        x_offset = x - bounds[0]
+        y_offset = y - bounds[1]
+        test_polygon = translate_polygon(polygon, x_offset, y_offset)
+        
+        collision = False
+        for obstacle in obstacles:
+            if check_collision(test_polygon, obstacle, min_gap=0.1):
+                collision = True
+                break
+        
+        if not collision:
+            return x, y
     
     return None, None
 
@@ -1774,24 +1769,7 @@ def find_bottom_left_position(
         ):
             continue
 
-        # OPTIMIZATION: Ultra-tight bounding box collision check
-        bbox_collision = False
-        ultra_tight_gap = 0.1  # Ultra-minimal gap for tight packing
-        for placed_bounds in placed_bounds_list:
-            # Check if bounding boxes intersect with ultra-minimal gap
-            if not (
-                test_bounds[2] + ultra_tight_gap <= placed_bounds[0]  # test is left of placed
-                or test_bounds[0] >= placed_bounds[2] + ultra_tight_gap  # test is right of placed
-                or test_bounds[3] + ultra_tight_gap <= placed_bounds[1]  # test is below placed
-                or test_bounds[1] >= placed_bounds[3] + ultra_tight_gap
-            ):  # test is above placed
-                bbox_collision = True
-                break
-
-        if bbox_collision:
-            continue
-
-        # Only create polygon and do ultra-tight collision check if bounding box test passes
+        # REVOLUTIONARY: Skip ALL bounding box checks - use only true geometric collision
         test_polygon = translate_polygon(polygon, x_offset, y_offset)
 
         # Final ultra-tight collision check with actual polygons
@@ -2253,9 +2231,13 @@ def plot_layout(
     ax.set_ylim(0, sheet_height_mm)
     ax.set_aspect("equal")
 
-    # Устанавливаем шаг сетки 200 мм
+    # Основная сетка 200 мм
     ax.xaxis.set_major_locator(MultipleLocator(200))
     ax.yaxis.set_major_locator(MultipleLocator(200))
+
+    # Минорная сетка 50 мм
+    ax.xaxis.set_minor_locator(MultipleLocator(50))
+    ax.yaxis.set_minor_locator(MultipleLocator(50))
 
     # Draw sheet boundary
     sheet_boundary = plt.Rectangle(
@@ -2292,7 +2274,6 @@ def plot_layout(
         # Add file name at polygon centroid
         centroid = polygon.centroid
 
-        # Handle case where file_name might be a float64 or other non-string type
         display_name = str(file_name)
         if display_name.endswith(".dxf"):
             display_name = display_name.replace(".dxf", "")
@@ -2310,7 +2291,10 @@ def plot_layout(
     ax.set_title(f"Раскрой на листе {sheet_size[0]} × {sheet_size[1]} см")
     ax.set_xlabel("Ширина (мм)")
     ax.set_ylabel("Высота (мм)")
-    ax.grid(True, alpha=0.3)
+
+    # Включаем основную и минорную сетку
+    ax.grid(True, which="major", alpha=0.4, linewidth=0.8)
+    ax.grid(True, which="minor", alpha=0.2, linestyle=":")
 
     plt.tight_layout()
     buf = BytesIO()
