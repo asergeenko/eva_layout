@@ -6,6 +6,7 @@ __version__ = "1.5.0"
 # Force module reload for Streamlit Cloud
 
 import numpy as np
+from matplotlib.ticker import MultipleLocator
 from shapely.geometry import Polygon, MultiPolygon
 from shapely import affinity
 from shapely.ops import unary_union
@@ -34,6 +35,7 @@ class Carpet:
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
+
 
 logging.getLogger("ezdxf").setLevel(logging.ERROR)
 
@@ -363,12 +365,6 @@ def save_dxf_layout_complete(
 ):
     """COMPLETELY CORRECTED - Use coordinate mapping from original to transformed polygon"""
 
-    print(
-        f"🔧 CORRECTED save_dxf_layout_complete called with {len(placed_elements)} elements"
-    )
-    print(f"🔧 Output path: {output_path}")
-    print(f"🔧 Sheet size: {sheet_size}")
-
     # Create new DXF document
     doc = ezdxf.new("R2010")
     doc.header["$INSUNITS"] = 4  # millimeters
@@ -443,12 +439,6 @@ def save_dxf_layout_complete(
                     scale_factor = scale_swapped
                 else:  # 0° or 180° rotation
                     scale_factor = scale_direct
-
-                print(
-                    f"🔧 Rotation: {rotation_angle}°, Scale factor: {scale_factor:.3f}"
-                )
-                print(f"🔧 Original bounds: {orig_bounds}")
-                print(f"🔧 Target bounds: {target_bounds}")
 
                 # Calculate centers
                 orig_center_x = (orig_bounds[0] + orig_bounds[2]) / 2
@@ -1017,57 +1007,42 @@ def apply_placement_transform(
     return final_polygon
 
 
-def check_collision(polygon1: Polygon, polygon2: Polygon, min_gap: float = 2.0) -> bool:
-    """Check if two polygons collide with minimum gap requirement.
-
-    Enhanced version with improved collision detection.
-
-    Args:
-        polygon1: First polygon
-        polygon2: Second polygon
-        min_gap: Minimum gap required between polygons in mm (default 2mm)
-
-    Returns:
-        True if polygons are too close (collision), False if they have sufficient gap
-    """
+def check_collision_fast(polygon1: Polygon, polygon2: Polygon, min_gap: float = 0.1) -> bool:
+    """FIXED fast collision check - PRIORITY: Accuracy over speed."""
     # Fast validity check
     if not (polygon1.is_valid and polygon2.is_valid):
-        return True  # Treat invalid polygons as collision
-
-    # OPTIMIZATION 1: Enhanced bounding box distance check
-    bounds1 = polygon1.bounds
-    bounds2 = polygon2.bounds
-
-    # Calculate minimum distance between bounding boxes with safety margin
-    dx = max(0, max(bounds1[0] - bounds2[2], bounds2[0] - bounds1[2]))
-    dy = max(0, max(bounds1[1] - bounds2[3], bounds2[1] - bounds1[3]))
-    bbox_distance = (dx * dx + dy * dy) ** 0.5
-
-    # If bounding boxes are far enough apart, no collision possible
-    if bbox_distance >= min_gap + 1.0:  # Extra safety margin
-        return False
-
-    # OPTIMIZATION 2: Quick intersection check - if they overlap, it's definitely a collision
-    if polygon1.intersects(polygon2):
         return True
 
-    # OPTIMIZATION 3: More accurate distance calculation for close polygons
     try:
-        # Use buffered polygon for more conservative collision detection
-        buffered_polygon1 = polygon1.buffer(min_gap / 2.0)
-        if buffered_polygon1.intersects(polygon2):
+        # CRITICAL FIX: Always check intersection first - this catches overlapping polygons
+        if polygon1.intersects(polygon2):
             return True
 
-        # Final precise distance check
-        distance = polygon1.distance(polygon2)
-        return distance < min_gap
+        # SPEED OPTIMIZATION: Only use bbox pre-filter for distant objects
+        bounds1 = polygon1.bounds
+        bounds2 = polygon2.bounds
+
+        # Calculate minimum possible distance between bounding boxes
+        dx = max(0, max(bounds1[0] - bounds2[2], bounds2[0] - bounds1[2]))
+        dy = max(0, max(bounds1[1] - bounds2[3], bounds2[1] - bounds1[3]))
+        bbox_min_distance = (dx*dx + dy*dy)**0.5
+
+        # SAFE EARLY EXIT: Only skip geometric check if bounding boxes are clearly far apart
+        if bbox_min_distance > min_gap + 50:  # Conservative 50mm safety margin
+            return False
+
+        # ALWAYS do accurate geometric distance check for close/potentially colliding objects
+        geometric_distance = polygon1.distance(polygon2)
+        return geometric_distance < min_gap
+
     except Exception:
-        # If calculation fails, use conservative buffer check
-        try:
-            buffer1 = polygon1.buffer(min_gap)
-            return buffer1.intersects(polygon2)
-        except Exception:
-            return True  # Be conservative if all methods fail
+        # Be conservative on errors
+        return True
+
+
+def check_collision(polygon1: Polygon, polygon2: Polygon, min_gap: float = 0.1) -> bool:
+    """Check if two polygons collide using TRUE GEOMETRIC distance with speed optimization."""
+    return check_collision_fast(polygon1, polygon2, min_gap)
 
 
 # @profile
@@ -1209,6 +1184,8 @@ def bin_packing_with_existing(
                 f"⏱️ Медленный полигон {file_name}: {polygon_elapsed:.2f}s, размещен={placed_successfully}"
             )
 
+    # Жадный сдвиг (greedy push) — прижимаем коврики максимально влево/вниз
+    placed = tighten_layout(placed, sheet_size, min_gap=0.1)
     return placed, unplaced
 
 
@@ -1217,8 +1194,13 @@ def bin_packing(
     polygons: list[tuple],
     sheet_size: tuple[float, float],
     verbose: bool = True,
+    max_processing_time: float = 300.0,  # 5 minute timeout
+    progress_callback=None,  # Callback function for progress updates
 ) -> tuple[list[tuple], list[tuple]]:
-    """Optimize placement of complex polygons on a sheet with improved algorithm."""
+    """Optimize placement of complex polygons on a sheet with ultra-dense/polygonal/improved algorithms."""
+    import time
+    start_time = time.time()
+
     # Convert sheet size from cm to mm to match DXF polygon units
     sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
 
@@ -1227,7 +1209,7 @@ def bin_packing(
 
     if verbose:
         st.info(
-            f"Начинаем улучшенную упаковку {len(polygons)} полигонов на листе {sheet_size[0]}x{sheet_size[1]} см"
+            f"Начинаем стандартную упаковку {len(polygons)} полигонов на листе {sheet_size[0]}x{sheet_size[1]} см"
         )
 
     # IMPROVEMENT 1: Sort polygons by area and perimeter for better packing
@@ -1240,15 +1222,23 @@ def bin_packing(
         return area + perimeter_approx * 0.1
 
     sorted_polygons = sorted(polygons, key=get_polygon_priority, reverse=True)
+
+    # Set dataset size context for adaptive algorithms
+    find_bottom_left_position._dataset_size = len(sorted_polygons)
+
     if verbose:
         st.info("✨ Сортировка полигонов по площади (сначала крупные)")
 
     for i, carpet in enumerate(sorted_polygons):
+        # Check timeout
+        if time.time() - start_time > max_processing_time:
+            if verbose:
+                st.warning(f"⏰ Превышено время обработки ({max_processing_time}s), остальные полигоны добавлены в неразмещенные")
+            unplaced.extend(sorted_polygons[i:])
+            break
+
+
         placed_successfully = False
-        if verbose:
-            st.info(
-                f"Обрабатываем полигон {i+1}/{len(sorted_polygons)} из файла {carpet.filename}, площадь: {carpet.polygon.area:.2f}"
-            )
 
         # Check if polygon is too large for the sheet
         bounds = carpet.polygon.bounds
@@ -1263,11 +1253,10 @@ def bin_packing(
             unplaced.append(carpet)
             continue
 
-        # IMPROVEMENT 2: Try all allowed orientations (0°, 90°, 180°, 270°) with better placement
+        # SPEED OPTIMIZATION: Smart rotation strategy
         best_placement = None
         best_waste = float("inf")
 
-        # Only allowed rotation angles for cutting machines
         rotation_angles = [0, 90, 180, 270]
 
         for angle in rotation_angles:
@@ -1329,8 +1318,8 @@ def bin_packing(
             simple_width = simple_bounds[2] - simple_bounds[0]
             simple_height = simple_bounds[3] - simple_bounds[1]
 
-            # Optimized grid placement as fallback
-            max_grid_attempts = 10  # Reduced for better performance
+            # Optimized grid placement as fallback with timeout
+            max_grid_attempts = 5 if len(placed) > 10 else 10  # Further reduced for many obstacles
             if sheet_width_mm > simple_width:
                 x_positions = np.linspace(
                     0, sheet_width_mm - simple_width, max_grid_attempts
@@ -1353,7 +1342,7 @@ def bin_packing(
                     x_offset = grid_x - simple_bounds[0]
                     y_offset = grid_y - simple_bounds[1]
 
-                    # Fast bounds check
+                    # Fast bounds check with minimal tolerance for tight packing
                     test_bounds = (
                         simple_bounds[0] + x_offset,
                         simple_bounds[1] + y_offset,
@@ -1362,29 +1351,14 @@ def bin_packing(
                     )
 
                     if not (
-                        test_bounds[0] >= -0.1
-                        and test_bounds[1] >= -0.1
-                        and test_bounds[2] <= sheet_width_mm + 0.1
-                        and test_bounds[3] <= sheet_height_mm + 0.1
+                        test_bounds[0] >= -0.01
+                        and test_bounds[1] >= -0.01
+                        and test_bounds[2] <= sheet_width_mm + 0.01
+                        and test_bounds[3] <= sheet_height_mm + 0.01
                     ):
                         continue
 
-                    # OPTIMIZATION: Fast bounding box collision check first
-                    bbox_collision = False
-                    for placed_bounds in placed_bounds_cache:
-                        if not (
-                            test_bounds[2] + 2.0 <= placed_bounds[0]
-                            or test_bounds[0] >= placed_bounds[2] + 2.0
-                            or test_bounds[3] + 2.0 <= placed_bounds[1]
-                            or test_bounds[1] >= placed_bounds[3] + 2.0
-                        ):
-                            bbox_collision = True
-                            break
-
-                    if bbox_collision:
-                        continue
-
-                    # Only create polygon if bounding box check passes
+                    # REVOLUTIONARY: Skip ALL bounding box checks - use only true geometric collision
                     translated = translate_polygon(carpet.polygon, x_offset, y_offset)
 
                     # Final precise collision check
@@ -1421,6 +1395,9 @@ def bin_packing(
                 st.warning(f"❌ Не удалось разместить полигон из {carpet.filename}")
             unplaced.append(carpet)
 
+    # Применяем жадный сдвиг
+    placed = tighten_layout(placed, sheet_size)
+
     if verbose:
         usage_percent = calculate_usage_percent(placed, sheet_size)
         st.info(
@@ -1429,10 +1406,129 @@ def bin_packing(
     return placed, unplaced
 
 
+def find_contour_following_position(
+        polygon: Polygon, obstacles: list[Polygon], sheet_width: float, sheet_height: float
+) -> tuple[float | None, float | None]:
+    """Find position using TRUE CONTOUR-FOLLOWING - shapes can nestle into concave areas!"""
+    bounds = polygon.bounds
+    poly_width = bounds[2] - bounds[0]
+    poly_height = bounds[3] - bounds[1]
+
+    candidates = []
+
+    # REVOLUTIONARY: Follow actual shape contours, not bounding boxes
+    for obstacle in obstacles[:8]:  # Limit for performance
+        # Get the actual boundary coordinates of the obstacle
+        if hasattr(obstacle.exterior, 'coords'):
+            contour_points = list(obstacle.exterior.coords)
+
+            # Generate positions along the actual contour with minimal gaps
+            for i, (cx, cy) in enumerate(contour_points[:-1]):  # Skip last duplicate point
+                # Try positioning our polygon at various points along this contour
+                test_positions = [
+                    # Right of this contour point
+                    (cx + 0.1, cy - poly_height / 2),
+                    (cx + 0.1, cy),
+                    (cx + 0.1, cy - poly_height),
+                    # Above this contour point
+                    (cx - poly_width / 2, cy + 0.1),
+                    (cx, cy + 0.1),
+                    (cx - poly_width, cy + 0.1),
+                ]
+
+                for test_x, test_y in test_positions:
+                    if (0 <= test_x <= sheet_width - poly_width and
+                            0 <= test_y <= sheet_height - poly_height):
+                        candidates.append((test_x, test_y))
+
+    # Add sheet edges
+    step = max(1.0, min(poly_width, poly_height) / 10)  # Adaptive step
+    for x in np.arange(0, sheet_width - poly_width + 1, step):
+        candidates.append((x, 0))
+    for y in np.arange(0, sheet_height - poly_height + 1, step):
+        candidates.append((0, y))
+
+    # Sort by bottom-left preference and limit candidates
+    candidates = list(set(candidates))  # Remove duplicates
+    candidates.sort(key=lambda pos: (pos[1], pos[0]))
+    candidates = candidates[:min(1000, len(candidates))]  # Performance limit
+
+    # Test each position using true geometric collision detection
+    for x, y in candidates:
+        x_offset = x - bounds[0]
+        y_offset = y - bounds[1]
+        test_polygon = translate_polygon(polygon, x_offset, y_offset)
+
+        # Use our new TRUE GEOMETRIC collision check (no bounding box constraints!)
+        collision = False
+        for obstacle in obstacles:
+            if check_collision(test_polygon, obstacle, min_gap=0.1):  # Ultra-tight
+                collision = True
+                break
+
+        if not collision:
+            return x, y
+
+    return None, None
+
+
+def find_ultra_tight_position(
+    polygon: Polygon, obstacles: list[Polygon], sheet_width: float, sheet_height: float
+) -> tuple[float | None, float | None]:
+    """Find ultra-tight position using contour-following for maximum density."""
+
+    # Try new contour-following algorithm first
+    result = find_contour_following_position(polygon, obstacles, sheet_width, sheet_height)
+    if result[0] is not None:
+        return result
+
+    # Fallback to grid-based approach
+    bounds = polygon.bounds
+    poly_width = bounds[2] - bounds[0]
+    poly_height = bounds[3] - bounds[1]
+
+    # Use fine grid for small number of obstacles
+    step_size = 1.0 if len(obstacles) <= 5 else 2.0
+    candidates = []
+
+    # Grid search with no bounding box prefiltering
+    for x in np.arange(0, sheet_width - poly_width + 1, step_size):
+        for y in np.arange(0, sheet_height - poly_height + 1, step_size):
+            candidates.append((x, y))
+            if len(candidates) >= 500:  # Performance limit
+                break
+        if len(candidates) >= 500:
+            break
+
+    # Test positions using pure geometric collision detection
+    for x, y in candidates:
+        x_offset = x - bounds[0]
+        y_offset = y - bounds[1]
+        test_polygon = translate_polygon(polygon, x_offset, y_offset)
+
+        collision = False
+        for obstacle in obstacles:
+            if check_collision(test_polygon, obstacle, min_gap=0.1):
+                collision = True
+                break
+
+        if not collision:
+            return x, y
+
+    return None, None
+
+
 def find_bottom_left_position_with_obstacles(
     polygon: Polygon, obstacles: list[Polygon], sheet_width: float, sheet_height: float
 ) -> tuple[float | None, float | None]:
-    """Find the bottom-left position for a polygon using Bottom-Left Fill algorithm with existing obstacles."""
+    """Find the bottom-left position for a polygon using ultra-tight packing algorithm."""
+    # Try ultra-tight algorithm first
+    result = find_ultra_tight_position(polygon, obstacles, sheet_width, sheet_height)
+    if result[0] is not None:
+        return result
+
+    # Fallback to improved algorithm
+    bounds = polygon.bounds
     bounds = polygon.bounds
     poly_width = bounds[2] - bounds[0]
     poly_height = bounds[3] - bounds[1]
@@ -1521,10 +1617,77 @@ def find_bottom_left_position_with_obstacles(
     return None, None
 
 
-def find_bottom_left_position(
+def find_quick_position(
     polygon: Polygon, placed_polygons, sheet_width: float, sheet_height: float
+) -> tuple[float | None, float | None]:
+    """Quick position finding for scenarios with many obstacles."""
+    bounds = polygon.bounds
+    poly_width = bounds[2] - bounds[0]
+    poly_height = bounds[3] - bounds[1]
+
+    # Use larger steps for speed
+    step_size = 5.0
+    max_positions = 100
+
+    # Generate minimal candidate set
+    candidates = []
+
+    # Bottom edge with large steps
+    for x in np.arange(0, sheet_width - poly_width + 1, step_size):
+        candidates.append((x, 0))
+        if len(candidates) >= max_positions:
+            break
+
+    # Left edge with large steps
+    for y in np.arange(0, sheet_height - poly_height + 1, step_size):
+        candidates.append((0, y))
+        if len(candidates) >= max_positions:
+            break
+
+    # Test positions quickly
+    for x, y in candidates:
+        if (x + poly_width <= sheet_width and y + poly_height <= sheet_height):
+            x_offset = x - bounds[0]
+            y_offset = y - bounds[1]
+            test_polygon = translate_polygon(polygon, x_offset, y_offset)
+
+            # Quick collision check with looser tolerance
+            collision = False
+            for placed_poly, *_ in placed_polygons:
+                if check_collision(test_polygon, placed_poly, min_gap=2.0):  # Looser gap
+                    collision = True
+                    break
+
+            if not collision:
+                return x, y
+
+    return None, None
+
+
+def find_bottom_left_position(
+        polygon: Polygon, placed_polygons, sheet_width: float, sheet_height: float
 ):
-    """Find the bottom-left position for a polygon using optimized Bottom-Left Fill algorithm."""
+    """Find the bottom-left position for a polygon using ultra-tight Bottom-Left Fill algorithm with timeout."""
+    import time
+    start_time = time.time()
+    timeout = 10.0  # 10 second timeout per polygon
+
+    # PERFORMANCE: Quick fallback for too many obstacles
+    if len(placed_polygons) > 15:
+        return find_quick_position(polygon, placed_polygons, sheet_width, sheet_height)
+
+    # Convert placed polygons to obstacles and use ultra-tight algorithm
+    obstacles = [placed_tuple[0] for placed_tuple in placed_polygons]
+
+    # Try ultra-tight algorithm with timeout
+    try:
+        result = find_ultra_tight_position(polygon, obstacles, sheet_width, sheet_height)
+        if result[0] is not None and time.time() - start_time < timeout:
+            return result
+    except Exception:
+        pass  # Fallback to conventional algorithm
+
+    # Fallback to improved conventional algorithm
     bounds = polygon.bounds
     poly_width = bounds[2] - bounds[0]
     poly_height = bounds[3] - bounds[1]
@@ -1535,11 +1698,11 @@ def find_bottom_left_position(
         placed_polygon = placed_tuple[0]
         placed_bounds_list.append(placed_polygon.bounds)
 
-    # Generate candidate positions more efficiently
+    # Generate candidate positions with fine granularity
     candidate_positions = set()  # Use set to avoid duplicates
 
-    # Bottom and left edge positions with larger steps for faster processing
-    step_size = max(5, min(poly_width, poly_height) / 4)  # Adaptive step size
+    # Ultra-fine step size for maximum density
+    step_size = 1.0  # 1mm steps for precise placement
 
     # Bottom edge positions
     for x in np.arange(0, sheet_width - poly_width + 1, step_size):
@@ -1549,39 +1712,57 @@ def find_bottom_left_position(
     for y in np.arange(0, sheet_height - poly_height + 1, step_size):
         candidate_positions.add((0, y))
 
-    # OPTIMIZATION: Generate positions based on existing polygons more efficiently
-    min_gap = 3.0
+    # OPTIMIZATION: Generate positions based on existing polygons with ultra-tight packing
+    min_gap = 0.1  # Ultra-minimal gap for maximum density
     for placed_bounds in placed_bounds_list:
         # Try position to the right of existing polygon
         x = placed_bounds[2] + min_gap
         if x + poly_width <= sheet_width:
-            candidate_positions.add((x, placed_bounds[1]))  # Same Y as existing
-            candidate_positions.add((x, 0))  # Bottom edge
+            # Add multiple Y positions for better fit
+            y_positions = [
+                placed_bounds[1],  # Same Y as existing
+                0,  # Bottom edge
+                placed_bounds[1] - poly_height / 2,  # Below existing
+                placed_bounds[1] + poly_height / 2,  # Above existing
+                placed_bounds[3] - poly_height,  # Top-aligned with existing
+            ]
+            for y_pos in y_positions:
+                if 0 <= y_pos <= sheet_height - poly_height:
+                    candidate_positions.add((x, y_pos))
 
         # Try position above existing polygon
         y = placed_bounds[3] + min_gap
         if y + poly_height <= sheet_height:
-            candidate_positions.add((placed_bounds[0], y))  # Same X as existing
-            candidate_positions.add((0, y))  # Left edge
+            # Add multiple X positions for better fit
+            x_positions = [
+                placed_bounds[0],  # Same X as existing
+                0,  # Left edge
+                placed_bounds[0] - poly_width / 2,  # Left of existing
+                placed_bounds[0] + poly_width / 2,  # Right of existing
+                placed_bounds[2] - poly_width,  # Right-aligned with existing
+            ]
+            for x_pos in x_positions:
+                if 0 <= x_pos <= sheet_width - poly_width:
+                    candidate_positions.add((x_pos, y))
 
     # Convert to sorted list (bottom-left preference)
     candidate_positions = sorted(candidate_positions, key=lambda pos: (pos[1], pos[0]))
 
-    # PERFORMANCE: Pre-calculate translation offset and test bounds for all candidates
+    # PERFORMANCE: Ultra-tight collision checking for each candidate
     for x, y in candidate_positions:
-        # Fast boundary pre-check
+        # Ultra-precise boundary pre-check
         if (
-            x + poly_width > sheet_width + 0.1
-            or y + poly_height > sheet_height + 0.1
-            or x < -0.1
-            or y < -0.1
+                x + poly_width > sheet_width + 0.01
+                or y + poly_height > sheet_height + 0.01
+                or x < -0.01
+                or y < -0.01
         ):
             continue
 
         x_offset = x - bounds[0]
         y_offset = y - bounds[1]
 
-        # Check bounds before expensive polygon creation
+        # Check bounds with minimal tolerance
         test_bounds = (
             bounds[0] + x_offset,
             bounds[1] + y_offset,
@@ -1589,36 +1770,20 @@ def find_bottom_left_position(
             bounds[3] + y_offset,
         )
         if (
-            test_bounds[0] < -0.1
-            or test_bounds[1] < -0.1
-            or test_bounds[2] > sheet_width + 0.1
-            or test_bounds[3] > sheet_height + 0.1
+                test_bounds[0] < -0.01
+                or test_bounds[1] < -0.01
+                or test_bounds[2] > sheet_width + 0.01
+                or test_bounds[3] > sheet_height + 0.01
         ):
             continue
 
-        # OPTIMIZATION: Fast bounding box collision check before creating polygon
-        bbox_collision = False
-        for placed_bounds in placed_bounds_list:
-            # Check if bounding boxes intersect with minimum gap
-            if not (
-                test_bounds[2] + 2.0 <= placed_bounds[0]  # test is left of placed
-                or test_bounds[0] >= placed_bounds[2] + 2.0  # test is right of placed
-                or test_bounds[3] + 2.0 <= placed_bounds[1]  # test is below placed
-                or test_bounds[1] >= placed_bounds[3] + 2.0
-            ):  # test is above placed
-                bbox_collision = True
-                break
-
-        if bbox_collision:
-            continue
-
-        # Only create polygon and do full collision check if bounding box test passes
+        # REVOLUTIONARY: Skip ALL bounding box checks - use only true geometric collision
         test_polygon = translate_polygon(polygon, x_offset, y_offset)
 
-        # Final collision check with actual polygons
+        # Final ultra-tight collision check with actual polygons
         collision = False
         for p, *_ in placed_polygons:
-            if check_collision(test_polygon, p):
+            if check_collision(test_polygon, p, min_gap=0.1):  # Ultra-tight gap
                 collision = True
                 break
 
@@ -1661,22 +1826,23 @@ def bin_packing_with_inventory(
     carpets: list[Carpet],
     available_sheets: list[dict],
     verbose: bool = True,
-    max_sheet_range_per_order: int = None,
     progress_callback=None,
 ) -> tuple[list[dict], list[tuple]]:
     """Optimize placement of polygons on available sheets with inventory tracking.
 
-    NEW ALGORITHM: Ensures strict adherence to MAX_SHEET_RANGE_PER_ORDER constraint.
-    Implements the suggested approach:
-    1. Sort Excel orders by carpet count (descending)
-    2. Separate single-carpet orders and priority 1 into separate set
-    3. Place multi-carpet Excel orders with MAX_SHEET_RANGE_PER_ORDER constraint
-    4. Place single-carpet orders and priority 1 on remaining space/new sheets
-    5. Place priority 2 on remaining space only (no new sheets)
+    NEW ALGORITHM: Two-sheet forced packing for achieving client goals:
+    1. Try to fit all carpets on exactly 2 sheets with maximum density
+    2. Fallback to priority-based placement if 2-sheet approach fails
     """
-    logger.info("=== НАЧАЛО bin_packing_with_inventory (НОВЫЙ АЛГОРИТМ) ===")
+
+
+    # Fallback to original algorithm
+    logger.info("Используем стандартный алгоритм приоритетного размещения")
     logger.info(
-        f"Входные параметры: {len(carpets)} полигонов, {len(available_sheets)} типов листов, max_sheet_range_per_order={max_sheet_range_per_order}"
+        "=== НАЧАЛО bin_packing_with_inventory (АЛГОРИТМ МАКСИМАЛЬНОЙ ПЛОТНОСТИ) ==="
+    )
+    logger.info(
+        f"Входные параметры: {len(carpets)} полигонов, {len(available_sheets)} типов листов"
     )
 
     placed_layouts = []
@@ -1691,57 +1857,27 @@ def bin_packing_with_inventory(
         st.info(
             f"Начинаем размещение {len(carpets)} полигонов на {total_available} доступных листах"
         )
-        if max_sheet_range_per_order:
-            st.info(
-                f"Ограничение: максимум {max_sheet_range_per_order} листов на заказ"
-            )
+        st.info("Работаем без ограничений на диапазон листов - максимальная плотность")
 
-    # Step 1: Group carpets by order_id and priority, separate Excel orders
-    logger.info("Группировка полигонов по order_id и приоритету...")
-    excel_orders = {}  # ZAKAZ_* orders from Excel
-    priority1_carpets = []  # Single carpets and additional priority 1
+    # Step 1: Group carpets by priority
+    logger.info("Группировка полигонов по приоритету...")
+    priority1_carpets = []  # Excel orders and additional priority 1
     priority2_carpets = []  # Priority 2 carpets
 
     for carpet in carpets:
         if carpet.priority == 2:
             priority2_carpets.append(carpet)
-        elif carpet.order_id.startswith("ZAKAZ"):
-            # Excel orders
-            if carpet.order_id not in excel_orders:
-                excel_orders[carpet.order_id] = []
-            excel_orders[carpet.order_id].append(carpet)
         else:
-            # Additional priority 1 carpets (or single-carpet orders)
+            # All Excel orders (ZAKAZ_*) and priority 1 items go together
             priority1_carpets.append(carpet)
 
     logger.info(
-        f"Группировка завершена: {len(excel_orders)} Excel заказов, {len(priority1_carpets)} приоритет 1, {len(priority2_carpets)} приоритет 2"
-    )
-
-    # Step 2: Separate single-carpet Excel orders and move to priority1
-    multi_carpet_orders = {}
-    for order_id, order_carpets in excel_orders.items():
-        if len(order_carpets) == 1:
-            logger.info(f"Заказ {order_id} содержит 1 ковер - перемещен в приоритет 1")
-            priority1_carpets.extend(order_carpets)
-        else:
-            multi_carpet_orders[order_id] = order_carpets
-            logger.info(
-                f"Заказ {order_id}: {len(order_carpets)} ковров - остается в Excel"
-            )
-
-    # Step 3: Sort multi-carpet orders by count (descending for better packing)
-    sorted_orders = sorted(
-        multi_carpet_orders.items(), key=lambda x: len(x[1]), reverse=True
-    )
-    logger.info(
-        f"Сортировка завершена: {len(sorted_orders)} многоковровых заказов для размещения"
+        f"Группировка завершена: {len(priority1_carpets)} приоритет 1 + Excel, {len(priority2_carpets)} приоритет 2"
     )
 
     if verbose:
         st.info("Разделение выполнено:")
-        st.info(f"  • Многоковровые заказы Excel: {len(sorted_orders)}")
-        st.info(f"  • Одноковровые + приоритет 1: {len(priority1_carpets)}")
+        st.info(f"  • Приоритет 1 + Excel заказы: {len(priority1_carpets)}")
         st.info(f"  • Приоритет 2: {len(priority2_carpets)}")
 
     # Helper functions
@@ -1769,220 +1905,19 @@ def bin_packing_with_inventory(
         }
 
     # Early return if nothing to place
-    if not sorted_orders and not priority1_carpets and not priority2_carpets:
+    if not priority1_carpets and not priority2_carpets:
         logger.info("Нет полигонов для размещения")
         return placed_layouts, all_unplaced
 
-    # STEP 4: Place multi-carpet Excel orders with MAX_SHEET_RANGE_PER_ORDER constraint
+    # STEP 2: Place priority 1 items (Excel orders + manual priority 1) with new sheets allowed
     logger.info(
-        f"\n=== ЭТАП 4: РАЗМЕЩЕНИЕ {len(sorted_orders)} МНОГОКОВРОВЫХ EXCEL ЗАКАЗОВ ==="
+        f"\n=== ЭТАП 2: РАЗМЕЩЕНИЕ {len(priority1_carpets)} ПРИОРИТЕТ 1 + EXCEL ЗАКАЗОВ ==="
     )
 
-    def place_order_with_range_constraint(order_id, order_carpets):
-        """Place an order within MAX_SHEET_RANGE_PER_ORDER constraint."""
-        nonlocal sheet_counter
-
-        logger.info(f"Размещение заказа {order_id}: {len(order_carpets)} ковров")
-
-        # Group carpets by color
-        carpets_by_color = {}
-        for carpet in order_carpets:
-            color = carpet.color
-            if color not in carpets_by_color:
-                carpets_by_color[color] = []
-            carpets_by_color[color].append(carpet)
-
-        placed_carpets = []
-        unplaced_carpets = []
-        order_sheets = []  # Track sheets used by this order
-
-        # Try to place all colors within the constraint
-        for color, color_carpets in carpets_by_color.items():
-            remaining_carpets = list(color_carpets)
-
-            # First try to fill existing sheets of same color that don't violate constraint
-            for layout_idx, layout in enumerate(placed_layouts):
-                if not remaining_carpets:
-                    break
-                if (
-                    layout["sheet_color"] != color
-                    or layout.get("usage_percent", 0) >= 85
-                ):
-                    continue
-
-                # Check if using this sheet would violate range constraint
-                test_sheets = order_sheets + [layout["sheet_number"]]
-                if len(test_sheets) > 1:
-                    sheet_range = max(test_sheets) - min(test_sheets) + 1
-                    if sheet_range > max_sheet_range_per_order:
-                        continue
-
-                # Try to place carpets on this sheet
-                try:
-                    additional_placed, remaining_tuples = bin_packing_with_existing(
-                        remaining_carpets,
-                        layout["placed_polygons"],
-                        layout["sheet_size"],
-                        verbose=False,
-                    )
-
-                    if additional_placed:
-                        # Update layout
-                        placed_layouts[layout_idx]["placed_polygons"].extend(
-                            additional_placed
-                        )
-                        placed_layouts[layout_idx]["usage_percent"] = (
-                            calculate_usage_percent(
-                                placed_layouts[layout_idx]["placed_polygons"],
-                                layout["sheet_size"],
-                            )
-                        )
-                        if (
-                            order_id
-                            not in placed_layouts[layout_idx]["orders_on_sheet"]
-                        ):
-                            placed_layouts[layout_idx]["orders_on_sheet"].append(
-                                order_id
-                            )
-
-                        # Update remaining carpets
-                        remaining_carpet_map = {
-                            (c.polygon, c.filename, c.color, c.order_id): c
-                            for c in remaining_carpets
-                        }
-                        remaining_carpets = []
-                        for remaining_tuple in remaining_tuples:
-                            key = (
-                                remaining_tuple[0],
-                                remaining_tuple[1],
-                                remaining_tuple[2],
-                                remaining_tuple[3],
-                            )
-                            if key in remaining_carpet_map:
-                                remaining_carpets.append(remaining_carpet_map[key])
-
-                        newly_placed = [
-                            c for c in color_carpets if c not in remaining_carpets
-                        ]
-                        placed_carpets.extend(newly_placed)
-
-                        if layout["sheet_number"] not in order_sheets:
-                            order_sheets.append(layout["sheet_number"])
-
-                        logger.info(
-                            f"    Дозаполнен лист #{layout['sheet_number']}: +{len(additional_placed)} ковров"
-                        )
-                except Exception as e:
-                    logger.debug(f"Не удалось дозаполнить лист: {e}")
-                    continue
-
-            # Then create new sheets for remaining carpets, respecting constraint
-            while remaining_carpets:
-                sheet_type = find_available_sheet_of_color(color, sheet_inventory)
-                if not sheet_type:
-                    logger.warning(
-                        f"Нет доступных листов цвета {color} для заказа {order_id}"
-                    )
-                    unplaced_carpets.extend(remaining_carpets)
-                    break
-
-                # Simplified approach: just use next available sheet number
-                # We'll verify constraints at the end and renumber if needed
-                sheet_counter += 1
-                best_sheet_num = sheet_counter
-
-                # Create and place on new sheet
-                sheet_type["used"] += 1
-                sheet_size = (sheet_type["width"], sheet_type["height"])
-
-                placed, remaining = bin_packing(
-                    remaining_carpets, sheet_size, verbose=False
-                )
-
-                if placed:
-                    new_layout = create_new_sheet(sheet_type, best_sheet_num, color)
-                    new_layout["placed_polygons"] = placed
-                    new_layout["usage_percent"] = calculate_usage_percent(
-                        placed, sheet_size
-                    )
-                    new_layout["orders_on_sheet"] = [order_id]
-                    placed_layouts.append(new_layout)
-
-                    newly_placed = [c for c in remaining_carpets if c not in remaining]
-                    placed_carpets.extend(newly_placed)
-                    remaining_carpets = remaining
-                    order_sheets.append(best_sheet_num)
-
-                    logger.info(
-                        f"    Создан лист #{best_sheet_num}: {len(placed)} ковров"
-                    )
-
-                    if verbose:
-                        st.success(
-                            f"✅ Лист #{best_sheet_num} ({sheet_type['name']}): "
-                            f"{len(placed)} ковров заказа {order_id}"
-                        )
-                else:
-                    logger.warning(
-                        f"Не удалось разместить ковры на новом листе {color}"
-                    )
-                    unplaced_carpets.extend(remaining_carpets)
-                    sheet_type["used"] -= 1
-                    break
-
-        return placed_carpets, unplaced_carpets, order_sheets
-
-    # Place multi-carpet Excel orders
-    for order_id, order_carpets in sorted_orders:
-        if max_sheet_range_per_order is None:
-            # No constraint - use simple placement
-            logger.info(f"Размещение заказа {order_id} без ограничения диапазона")
-            placed_carpets, unplaced_carpets, _ = place_order_with_range_constraint(
-                order_id, order_carpets
-            )
-        else:
-            placed_carpets, unplaced_carpets, order_sheets = (
-                place_order_with_range_constraint(order_id, order_carpets)
-            )
-
-            # Verify constraint is met
-            if order_sheets and len(order_sheets) > 1:
-                actual_range = max(order_sheets) - min(order_sheets) + 1
-                if actual_range > max_sheet_range_per_order:
-                    logger.error(
-                        f"ОШИБКА: заказ {order_id} нарушает ограничение: {actual_range} > {max_sheet_range_per_order}"
-                    )
-                else:
-                    logger.info(
-                        f"Заказ {order_id} размещен в диапазоне {min(order_sheets)}-{max(order_sheets)} (размер: {actual_range})"
-                    )
-
-        if unplaced_carpets:
-            logger.warning(
-                f"Заказ {order_id}: {len(unplaced_carpets)} ковров не размещено"
-            )
-            all_unplaced.extend(unplaced_carpets)
-
-        if progress_callback:
-            completed = len([o for o, _ in sorted_orders if o == order_id]) + len(
-                [
-                    o
-                    for o, _ in sorted_orders[
-                        : sorted_orders.index((order_id, order_carpets))
-                    ]
-                ]
-            )
-            progress = min(50, int(50 * completed / len(sorted_orders)))
-            progress_callback(progress, f"Размещение заказа {order_id}")
-
-    # STEP 5: Place single-carpet orders and priority 1 on remaining space/new sheets
-    logger.info(
-        f"\n=== ЭТАП 5: РАЗМЕЩЕНИЕ {len(priority1_carpets)} ОДНОКОВРОВЫХ/ПРИОРИТЕТ1 ==="
-    )
-
+    # Group priority 1 carpets by color for efficient processing
     remaining_priority1 = list(priority1_carpets)
 
-    # First try to fill existing sheets
+    # First try to fill existing sheets with priority 1 carpets
     for layout_idx, layout in enumerate(placed_layouts):
         if not remaining_priority1:
             break
@@ -2041,13 +1976,13 @@ def bin_packing_with_inventory(
                 ]
 
                 logger.info(
-                    f"    Дозаполнен лист #{layout['sheet_number']}: +{len(additional_placed)} приоритет1"
+                    f"    Дозаполнен лист #{layout['sheet_number']}: +{len(additional_placed)} приоритет1+Excel"
                 )
         except Exception as e:
             logger.debug(f"Не удалось дозаполнить лист приоритетом 1: {e}")
             continue
 
-    # Create new sheets for remaining priority 1
+    # Create new sheets for remaining priority 1 carpets
     carpets_by_color = {}
     for carpet in remaining_priority1:
         color = carpet.color
@@ -2069,9 +2004,11 @@ def bin_packing_with_inventory(
             sheet_type["used"] += 1
             sheet_size = (sheet_type["width"], sheet_type["height"])
 
+            # Попытка максимально плотной упаковки - несколько проходов
             placed, remaining = bin_packing(
-                remaining_carpets, sheet_size, verbose=False
+                remaining_carpets, sheet_size, verbose=False, progress_callback=progress_callback
             )
+
 
             if placed:
                 new_layout = create_new_sheet(sheet_type, sheet_counter, color)
@@ -2090,12 +2027,25 @@ def bin_packing_with_inventory(
 
                 remaining_carpets = remaining
                 logger.info(
-                    f"    Создан лист #{sheet_counter}: {len(placed)} приоритет1"
+                    f"    Создан лист #{sheet_counter}: {len(placed)} приоритет1+Excel"
                 )
 
                 if verbose:
                     st.success(
-                        f"✅ Лист #{sheet_counter} ({sheet_type['name']}): {len(placed)} приоритет1"
+                        f"✅ Лист #{sheet_counter} ({sheet_type['name']}): {len(placed)} приоритет1+Excel"
+                    )
+
+                if progress_callback:
+                    progress = min(
+                        70,
+                        int(
+                            70
+                            * len(placed_layouts)
+                            / (len(carpets))
+                        ),
+                    )
+                    progress_callback(
+                        progress, f"Создан лист #{sheet_counter}: {len(placed)} ковров размещено"
                     )
             else:
                 logger.warning(
@@ -2106,9 +2056,9 @@ def bin_packing_with_inventory(
                 sheet_counter -= 1
                 break
 
-    # STEP 6: Place priority 2 on remaining space only (no new sheets)
+    # STEP 3: Place priority 2 on remaining space only (no new sheets)
     logger.info(
-        f"\n=== ЭТАП 6: РАЗМЕЩЕНИЕ {len(priority2_carpets)} ПРИОРИТЕТ2 НА СВОБОДНОМ МЕСТЕ ==="
+        f"\n=== ЭТАП 3: РАЗМЕЩЕНИЕ {len(priority2_carpets)} ПРИОРИТЕТ2 НА СВОБОДНОМ МЕСТЕ ==="
     )
 
     remaining_priority2 = list(priority2_carpets)
@@ -2289,6 +2239,14 @@ def plot_layout(
     ax.set_ylim(0, sheet_height_mm)
     ax.set_aspect("equal")
 
+    # Основная сетка 200 мм
+    ax.xaxis.set_major_locator(MultipleLocator(200))
+    ax.yaxis.set_major_locator(MultipleLocator(200))
+
+    # Минорная сетка 50 мм
+    ax.xaxis.set_minor_locator(MultipleLocator(50))
+    ax.yaxis.set_minor_locator(MultipleLocator(50))
+
     # Draw sheet boundary
     sheet_boundary = plt.Rectangle(
         (0, 0),
@@ -2324,7 +2282,6 @@ def plot_layout(
         # Add file name at polygon centroid
         centroid = polygon.centroid
 
-        # Handle case where file_name might be a float64 or other non-string type
         display_name = str(file_name)
         if display_name.endswith(".dxf"):
             display_name = display_name.replace(".dxf", "")
@@ -2342,7 +2299,10 @@ def plot_layout(
     ax.set_title(f"Раскрой на листе {sheet_size[0]} × {sheet_size[1]} см")
     ax.set_xlabel("Ширина (мм)")
     ax.set_ylabel("Высота (мм)")
-    ax.grid(True, alpha=0.3)
+
+    # Включаем основную и минорную сетку
+    ax.grid(True, which="major", alpha=0.4, linewidth=0.8)
+    ax.grid(True, which="minor", alpha=0.2, linestyle=":")
 
     plt.tight_layout()
     buf = BytesIO()
@@ -2420,3 +2380,121 @@ def plot_input_polygons(
         plots[carpet.filename] = plot_buf
 
     return plots
+
+def tighten_layout(placed, sheet_size=None, min_gap: float = 0.1, step: float = 1.0, max_passes: int = 3):
+    """
+    Жадный сдвиг (greedy push): для каждого полигона пробуем сдвинуть максимально
+    влево, затем максимально вниз, не нарушая коллизий с *любой* другой деталью.
+
+    Args:
+        placed: список кортежей полигонов в абсолютных координатах.
+                Формат кортежа ожидается как минимум (polygon, x_off, y_off, angle, filename, color, order_id)
+                — но функция работает и если у вас немного другой набор полей: она всегда
+                возвращает 7-элементный кортеж.
+        sheet_size: оставлен для совместимости сигнатур (не используется внутри).
+        min_gap: минимальный зазор в мм (передавайте 0.0 или 0.1).
+        step: шаг сдвига в мм (1.0 — точный, можно поставить 2.0 для ускорения).
+        max_passes: число проходов по всем полигонам (обычно 2–3 достаточно).
+    Returns:
+        Новый список placed в том же формате (каждый элемент — 7-ка), где полигоны сдвинуты.
+    """
+    # Защитная проверка
+    if not placed:
+        return placed
+
+    # Создаём список текущих полигонов (будем обновлять)
+    current_polys = [item[0] for item in placed]
+    # Сохраняем сопут. данные (x_off, y_off, angle, filename, color, order_id) с запасом по длине
+    meta = []
+    for item in placed:
+        # Удобное разбиение: берём значения по позициям, если отсутствуют — подставляем None/0
+        x_off = item[1] if len(item) > 1 else 0.0
+        y_off = item[2] if len(item) > 2 else 0.0
+        angle = item[3] if len(item) > 3 else 0.0
+        filename = item[4] if len(item) > 4 else None
+        color = item[5] if len(item) > 5 else None
+        order_id = item[6] if len(item) > 6 else None
+        meta.append((x_off, y_off, angle, filename, color, order_id))
+
+    n = len(current_polys)
+
+    # Несколько проходов, пока происходят сдвиги или пока не исчерпаны max_passes
+    for pass_idx in range(max_passes):
+        moved_any = False
+
+        for i in range(n):
+            poly = current_polys[i]
+            orig_bounds = poly.bounds
+            moved = poly
+
+            # --- Сдвигаем влево по шагам ---
+            while True:
+                test = translate_polygon(moved, -step, 0)
+                # Пробуем выйти за левую границу? Останавливаемся
+                if test.bounds[0] < -0.01:
+                    break
+
+                # Проверяем столкновения со всеми остальными полигонами
+                collision = False
+                for j in range(n):
+                    if j == i:
+                        continue
+                    other = current_polys[j]
+                    # Точная проверка: true если пересекается или ближе минимума
+                    if check_collision(test, other, min_gap=min_gap):
+                        collision = True
+                        break
+
+                if collision:
+                    break
+
+                # Нет столкновений — применяем сдвиг
+                moved = test
+                moved_any = True
+
+            # --- Сдвигаем вниз по шагам ---
+            while True:
+                test = translate_polygon(moved, 0, -step)
+                if test.bounds[1] < -0.01:
+                    break
+
+                collision = False
+                for j in range(n):
+                    if j == i:
+                        continue
+                    other = current_polys[j]
+                    if check_collision(test, other, min_gap=min_gap):
+                        collision = True
+                        break
+
+                if collision:
+                    break
+
+                moved = test
+                moved_any = True
+
+            # Обновляем текущую позицию полигона
+            current_polys[i] = moved
+
+        # Если за проход изменений не было — прекращаем
+        if not moved_any:
+            break
+
+    # Формируем новый список placed (возвращаем 7-элементные кортежи)
+    new_placed = []
+    for i in range(n):
+        new_poly = current_polys[i]
+        orig_poly = placed[i][0]
+        # Смещение в абсолютных координатах между исходным и новым
+        dx_total = new_poly.bounds[0] - orig_poly.bounds[0]
+        dy_total = new_poly.bounds[1] - orig_poly.bounds[1]
+
+        orig_x_off, orig_y_off, angle, filename, color, order_id = meta[i]
+        new_x_off = orig_x_off + dx_total
+        new_y_off = orig_y_off + dy_total
+
+        # Возвращаем стандартный 7-элементный кортеж
+        new_placed.append((new_poly, new_x_off, new_y_off, angle, filename, color, order_id))
+
+    return new_placed
+

@@ -22,9 +22,6 @@ from excel_loader import (
     find_dxf_files_for_article,
 )
 
-# Константы
-MAX_SHEET_RANGE_PER_ORDER = 7  # Максимальный диапазон листов одного цвета, на которых должен быть размещен один заказ
-
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
@@ -37,7 +34,20 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 logger.info("=== НАЧАЛО СЕССИИ EVA LAYOUT ===")
-logger.info(f"MAX_SHEET_RANGE_PER_ORDER = {MAX_SHEET_RANGE_PER_ORDER}")
+logger.info(
+    "Работа без ограничений на диапазон листов - максимальная плотность раскладки"
+)
+
+# Проверяем доступность улучшенного алгоритма
+try:
+    from layout_optimizer import IMPROVED_PACKING_AVAILABLE
+
+    if IMPROVED_PACKING_AVAILABLE:
+        logger.info("✨ Улучшенный алгоритм размещения доступен")
+    else:
+        logger.info("⚠️ Улучшенный алгоритм размещения недоступен")
+except ImportError:
+    logger.warning("Ошибка импорта настроек алгоритма")
 
 # Configuration
 DEFAULT_SHEET_TYPES = [
@@ -61,10 +71,42 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 # Streamlit App
 # Display logo at the very top
-try:
-    st.image("logo.png", use_container_width=True)
-except FileNotFoundError:
-    pass  # Skip logo if file not found
+st.set_page_config(layout="wide")
+
+# Add "Clear All" button at the top
+col_logo, col_clear = st.columns([4, 1])
+
+with col_logo:
+    try:
+        st.image("logo.png", width=600, use_container_width=False)
+    except FileNotFoundError:
+        st.title("🎯 EVA Layout Optimizer")
+
+with col_clear:
+    st.write("")  # Add some spacing
+    st.write("")  # Add some spacing
+    if st.button("🗑️ Очистить всё", 
+                 help="Очистить все данные и начать заново",
+                 type="secondary"):
+        # Clear all session state
+        keys_to_clear = [
+            'available_sheets', 'selected_orders', 'manual_files', 
+            'file_groups', 'group_counter', 'optimization_results',
+            'manual_file_settings'
+        ]
+        
+        for key in keys_to_clear:
+            if key in st.session_state:
+                del st.session_state[key]
+        
+        # Clear all order selection states
+        keys_to_remove = [key for key in st.session_state.keys() 
+                         if key.startswith(('order_', 'quantity_', 'select_', 'qty_'))]
+        for key in keys_to_remove:
+            del st.session_state[key]
+        
+        st.success("✅ Все данные очищены!")
+        st.rerun()
 
 # Sheet Inventory Section
 st.header("📋 Настройка доступных листов")
@@ -133,9 +175,7 @@ if st.button("➕ Добавить", key="add_sheet"):
         "used": 0,
     }
     st.session_state.available_sheets.append(new_sheet)
-    st.success(
-        f"Добавлен тип листа: {new_sheet['name']} ({new_sheet['count']} шт.)"
-    )
+    st.success(f"Добавлен тип листа: {new_sheet['name']} ({new_sheet['count']} шт.)")
     st.rerun()
 
 # Display current sheet inventory
@@ -170,7 +210,7 @@ if st.session_state.available_sheets:
     with col1:
         st.metric("Всего листов в наличии", total_sheets)
     with col2:
-        if st.button("🗑️ Очистить все", key="clear_sheets"):
+        if st.button("🗑️ Удалить все листы", key="clear_sheets"):
             st.session_state.available_sheets = []
             st.rerun()
 else:
@@ -190,6 +230,9 @@ excel_file = st.file_uploader(
     "Загрузите файл заказов Excel", type=["xlsx", "xls"], key="excel_upload"
 )
 
+# Track current Excel file to detect changes
+if "current_excel_hash" not in st.session_state:
+    st.session_state.current_excel_hash = None
 
 if excel_file is not None:
     try:
@@ -197,17 +240,29 @@ if excel_file is not None:
             # Read Excel file with caching - use file hash for cache key
             file_content = excel_file.read()
             file_hash = hash(file_content)
+            
+            # Check if this is a different Excel file
+            if st.session_state.current_excel_hash != file_hash:
+                # New file detected - clear all previous selections
+                st.session_state.current_excel_hash = file_hash
+                
+                # Clear all order selection states
+                keys_to_remove = [key for key in st.session_state.keys() 
+                                 if key.startswith(('order_', 'quantity_', 'select_', 'qty_'))]
+                for key in keys_to_remove:
+                    del st.session_state[key]
+                
+                # Clear selected orders
+                st.session_state.selected_orders = []
+                
+                logger.info(f"Новый Excel файл загружен, предыдущие выборы очищены")
+            
             excel_data = load_excel_file(file_content)
             logger.info(f"Excel файл загружен. Листы: {list(excel_data.keys())}")
 
         all_orders = parse_orders_from_excel(excel_data)
 
-        if all_orders is None:
-            st.warning(
-                f"⚠️ Лист '{TARGET_SHEET}' не найден в Excel файле. Доступные листы: {list(excel_data.keys())}"
-            )
-
-        elif all_orders:
+        if all_orders:
             st.success(f"✅ Найдено {len(all_orders)} невыполненных заказов")
             logger.info(f"Найдено {len(all_orders)} невыполненных заказов в Excel")
 
@@ -215,22 +270,34 @@ if excel_file is not None:
             st.subheader("📝 Выберите заказы для раскроя")
 
             # Add search/filter options
-            col_filter1, col_filter2 = st.columns([1, 1])
+            col_filter1, col_filter2, col_filter3 = st.columns([1, 1, 1])
             with col_filter1:
-                search_article = st.text_input(
-                    "🔍 Поиск по артикулу:",
-                    placeholder="Введите часть артикула",
-                    key="search_article",
+                search_marketplace = st.text_input(
+                    "🔍 Поиск по маркетплейсу:",
+                    placeholder="Введите маркетлейс",
+                    key="search_marketplace",
                 )
             with col_filter2:
+                search_article = st.text_input(
+                    "🔍 Поиск по артикулу:",
+                    placeholder="Введите артикул",
+                    key="search_article",
+                )
+            with col_filter3:
                 search_product = st.text_input(
                     "🔍 Поиск по товару:",
-                    placeholder="Введите часть названия",
+                    placeholder="Введите название",
                     key="search_product",
                 )
 
             # Filter orders based on search
             filtered_orders = all_orders
+            if search_marketplace:
+                filtered_orders = [
+                    order
+                    for order in filtered_orders
+                    if search_marketplace.lower() in order["marketplace"].lower()
+                ]
             if search_article:
                 filtered_orders = [
                     order
@@ -295,62 +362,83 @@ if excel_file is not None:
                             if order.get("date", "")
                             else "",
                             "Кант цвет": order.get("border_color", ""),
+                            "Маркетплейс": order.get("marketplace", ""),
                         }
                     )
 
-                # Create columns for interactive controls
-                for i, order in enumerate(orders_to_show):
-                    actual_idx = start_idx + i
-
-                    cols = st.columns([1, 2, 10, 6, 3, 3])
-
-                    # Selection checkbox
-                    with cols[0]:
-                        is_selected = st.checkbox(
-                            f"№{actual_idx + 1}",
-                            value=st.session_state.get(f"order_{actual_idx}", False),
-                            key=f"select_{actual_idx}",
-                            label_visibility="collapsed",
-                        )
-                        st.session_state[f"order_{actual_idx}"] = is_selected
-
-                    # Quantity number input
+                ###########################################33
+                with st.container(height=400):
+                    cols = st.columns([1, 2, 10, 6, 3, 3, 3])
                     with cols[1]:
-                        quantity = st.number_input(
-                            f"Количество для заказа {actual_idx + 1}",
-                            min_value=1,
-                            max_value=100,
-                            value=st.session_state.get(f"quantity_{actual_idx}", 1),
-                            key=f"qty_{actual_idx}",
-                            label_visibility="collapsed",
-                        )
-                        st.session_state[f"quantity_{actual_idx}"] = quantity
-
-                    # Display order info for reference
+                        st.write("**Количество**")
                     with cols[2]:
-                        st.write(f"**{order['article']}**")
-
+                        st.write("**Артикул**")
                     with cols[3]:
-                        product_text = (
-                            order["product"][:30] + "..."
-                            if len(order["product"]) > 30
-                            else order["product"]
-                        )
-                        st.write(product_text)
-
+                        st.write("**Товар**")
                     with cols[4]:
-                        color = order.get("color", "серый")
-                        color_emoji = (
-                            "⚫"
-                            if color == "чёрный"
-                            else "⚪"
-                            if color == "серый"
-                            else "🔘"
-                        )
-                        st.write(f"{color_emoji} {order.get('product_type', '')}")
-
+                        st.write("**Изделие**")
                     with cols[5]:
-                        st.write(order.get("border_color", ""))
+                        st.write("**Кант цвет**")
+                    with cols[6]:
+                        st.write("**Маркетплейс**")
+
+                    # Create columns for interactive controls
+                    for i, order in enumerate(orders_to_show):
+                        actual_idx = start_idx + i
+
+                        cols = st.columns([1, 2, 10, 6, 3, 3, 3])
+
+                        # Selection checkbox
+                        with cols[0]:
+                            is_selected = st.checkbox(
+                                f"№{actual_idx + 1}",
+                                value=st.session_state.get(f"order_{actual_idx}", False),
+                                key=f"select_{actual_idx}",
+                                label_visibility="collapsed",
+                            )
+                            st.session_state[f"order_{actual_idx}"] = is_selected
+
+                        # Quantity number input
+                        with cols[1]:
+                            quantity = st.number_input(
+                                f"Количество для заказа {actual_idx + 1}",
+                                min_value=1,
+                                max_value=100,
+                                value=st.session_state.get(f"quantity_{actual_idx}", 1),
+                                key=f"qty_{actual_idx}",
+                                label_visibility="collapsed",
+                            )
+                            st.session_state[f"quantity_{actual_idx}"] = quantity
+
+                        # Display order info for reference
+                        with cols[2]:
+                            st.write(f"**{order['article']}**")
+
+                        with cols[3]:
+                            product_text = (
+                                order["product"][:30] + "..."
+                                if len(order["product"]) > 30
+                                else order["product"]
+                            )
+                            st.write(product_text)
+
+                        with cols[4]:
+                            color = order.get("color", "серый")
+                            color_emoji = (
+                                "⚫"
+                                if color == "чёрный"
+                                else "⚪"
+                                if color == "серый"
+                                else "🔘"
+                            )
+                            st.write(f"{color_emoji} {order.get('product_type', '')}")
+
+                        with cols[5]:
+                            st.write(order.get("border_color", ""))
+
+                        with cols[6]:
+                            st.write(order.get("marketplace", ""))
+                ####################################################
 
                 # Bulk controls
                 col1, col2 = st.columns([1, 1])
@@ -428,15 +516,6 @@ if excel_file is not None:
     except Exception as e:
         st.error(f"❌ Ошибка обработки Excel файла: {e}")
         logger.error(f"Ошибка при обработке Excel: {e}")
-        import traceback
-
-        logger.error(f"Полная трассировка ошибки: {traceback.format_exc()}")
-        st.error("💡 **Возможные решения:**")
-        st.error("• Сохраните Excel файл в новом формате (.xlsx)")
-        st.error("• Проверьте правильность дат в файле")
-        st.error(
-            "• Убедитесь, что в датах нет некорректных значений (например, 30 февраля)"
-        )
 
 # Initialize auto_loaded_files
 auto_loaded_files = []
@@ -615,7 +694,7 @@ if st.session_state.file_groups:
     with col1:
         st.metric("Всего объектов во всех группах", total_objects)
     with col2:
-        if st.button("🗑️ Очистить все группы", key="clear_all_groups"):
+        if st.button("🗑️ Удалить все группы", key="clear_all_groups"):
             st.session_state.file_groups = []
             st.session_state.group_counter = 1
             st.rerun()
@@ -878,7 +957,7 @@ if st.button("🚀 Оптимизировать раскрой"):
             optimization_status.text("Подготовка данных для оптимизации...")
 
             logger.info(
-                f"Вызываем bin_packing_with_inventory с MAX_SHEETS_PER_ORDER={MAX_SHEET_RANGE_PER_ORDER}"
+                "Вызываем bin_packing_with_inventory без ограничений на диапазон листов"
             )
             logger.info(
                 f"Входные параметры: {len(carpets)} полигонов, {len(st.session_state.available_sheets)} типов листов"
@@ -894,20 +973,17 @@ if st.button("🚀 Оптимизировать раскрой"):
                     f"  Полигон {i}: файл={carpet.filename}, order_id={carpet.order_id}"
                 )
 
-            # Main optimization step
-            optimization_progress.progress(50)
-            optimization_status.text("Выполнение алгоритма размещения...")
-
-            # Progress callback function
+            # Progress callback function with more detailed updates
             def update_progress(percent, status_text):
-                optimization_progress.progress(int(percent))
-                optimization_status.text(status_text)
+                # Ensure percent is between 50-95 for main processing
+                adjusted_percent = 50 + (percent * 0.45)  # Scale to 50-95% range
+                optimization_progress.progress(min(95, int(adjusted_percent)))
+                optimization_status.text(f"🔄 {status_text}")
 
             placed_layouts, unplaced_polygons = bin_packing_with_inventory(
                 carpets,
                 st.session_state.available_sheets,
                 verbose=False,
-                max_sheet_range_per_order=MAX_SHEET_RANGE_PER_ORDER,
                 progress_callback=update_progress,
             )
 
@@ -931,16 +1007,9 @@ if st.button("🚀 Оптимизировать раскрой"):
             optimization_status.empty()
 
         except ValueError as e:
-            # Handle order constraint violations
-            if "Нарушение ограничений заказов" in str(e):
-                st.error(f"❌ {str(e)}")
-                st.info(
-                    f"💡 **Решение**: Увеличьте константу MAX_SHEETS_PER_ORDER (сейчас: {MAX_SHEET_RANGE_PER_ORDER}) или разделите файлы заказа на несколько частей."
-                )
-                st.stop()
-            else:
-                # Re-raise other ValueError exceptions
-                raise
+            # Handle any other ValueError exceptions
+            st.error(f"❌ Ошибка при оптимизации: {str(e)}")
+            st.stop()
 
         # Convert to old format for compatibility with existing display code
         st.info("🔨 Создание выходных файлов и визуализаций...")
@@ -1222,8 +1291,6 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
                     {
                         "DXF файл": file_name,
                         "Номер листа": layout["Sheet"],
-                        # "Размер (см)": size_comparison,
-                        # "Площадь (см²)": f"{area_cm2:.2f}",
                         "Поворот (°)": f"{angle:.0f}",
                         "Выходной файл": layout["Output File"],
                     }
@@ -1244,27 +1311,33 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
 
         # Sheet visualizations
         st.subheader("📐 Схемы раскроя листов")
-        for layout in all_layouts:
-            # Add color indicator emoji
-            color_emoji = (
-                "⚫"
-                if layout["Sheet Color"] == "чёрный"
-                else "⚪"
-                if layout["Sheet Color"] == "серый"
-                else "🔘"
-            )
+        
+        # Group layouts into pairs for two-column display
+        for i in range(0, len(all_layouts), 2):
+            sheet_col1, sheet_col2 = st.columns(2)
+            
+            # First sheet in the pair
+            with sheet_col1:
+                layout = all_layouts[i]
+                # Add color indicator emoji
+                color_emoji = (
+                    "⚫"
+                    if layout["Sheet Color"] == "чёрный"
+                    else "⚪"
+                    if layout["Sheet Color"] == "серый"
+                    else "🔘"
+                )
 
-            st.write(
-                f"**Лист №{layout['Sheet']}: {color_emoji} {layout['Sheet Type']} ({layout['Sheet Size']}) - {layout['Shapes Placed']} объектов - {layout['Material Usage (%)']}% расход**"
-            )
-            col1, col2 = st.columns([2, 1])
-            with col1:
+                st.write(
+                    f"**Лист №{layout['Sheet']}: {color_emoji} {layout['Sheet Type']} ({layout['Sheet Size']}) - {layout['Shapes Placed']} объектов - {layout['Material Usage (%)']}% расход**"
+                )
+                
                 st.image(
                     layout["Plot"],
                     caption=f"Раскрой листа №{layout['Sheet']} ({layout['Sheet Type']})",
                     use_container_width=True,
                 )
-            with col2:
+                
                 st.write(f"**Тип листа:** {layout['Sheet Type']}")
                 st.write(f"**Цвет листа:** {color_emoji} {layout['Sheet Color']}")
                 st.write(f"**Размер листа:** {layout['Sheet Size']}")
@@ -1278,7 +1351,45 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
                         mime="application/dxf",
                         key=f"download_{layout['Sheet']}",
                     )
-            st.divider()  # Add visual separator between sheets
+            
+            # Second sheet in the pair (if exists)
+            with sheet_col2:
+                if i + 1 < len(all_layouts):
+                    layout = all_layouts[i + 1]
+                    # Add color indicator emoji
+                    color_emoji = (
+                        "⚫"
+                        if layout["Sheet Color"] == "чёрный"
+                        else "⚪"
+                        if layout["Sheet Color"] == "серый"
+                        else "🔘"
+                    )
+
+                    st.write(
+                        f"**Лист №{layout['Sheet']}: {color_emoji} {layout['Sheet Type']} ({layout['Sheet Size']}) - {layout['Shapes Placed']} объектов - {layout['Material Usage (%)']}% расход**"
+                    )
+                    
+                    st.image(
+                        layout["Plot"],
+                        caption=f"Раскрой листа №{layout['Sheet']} ({layout['Sheet Type']})",
+                        use_container_width=True,
+                    )
+                    
+                    st.write(f"**Тип листа:** {layout['Sheet Type']}")
+                    st.write(f"**Цвет листа:** {color_emoji} {layout['Sheet Color']}")
+                    st.write(f"**Размер листа:** {layout['Sheet Size']}")
+                    st.write(f"**Размещено объектов:** {layout['Shapes Placed']}")
+                    st.write(f"**Расход материала:** {layout['Material Usage (%)']}%")
+                    with open(layout["Output File"], "rb") as f:
+                        st.download_button(
+                            label="📥 Скачать DXF",
+                            data=f,
+                            file_name=os.path.basename(layout["Output File"]),
+                            mime="application/dxf",
+                            key=f"download_{layout['Sheet']}_2",
+                        )
+            
+            st.divider()  # Add visual separator between sheet pairs
     else:
         st.error(
             "❌ Не было создано ни одного листа. Проверьте отладочную информацию выше."
@@ -1301,23 +1412,6 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
 
     # Save report
     if all_layouts:
-        report_file = os.path.join(
-            OUTPUT_FOLDER,
-            f"layout_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-        )
-
-        # Use enhanced report if available, otherwise simple report
-        if enhanced_report_data:
-            enhanced_df.to_excel(report_file, index=False)
-        elif "report_df" in locals():
-            report_df.to_excel(report_file, index=False)
-        else:
-            # Fallback: create simple report from report_data
-            fallback_df = pd.DataFrame(
-                report_data, columns=["DXF файл", "Номер листа", "Выходной файл"]
-            )
-            fallback_df.to_excel(report_file, index=False)
-
         # Create ZIP archive with all DXF files
         zip_filename = f"layout_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
         zip_path = os.path.join(OUTPUT_FOLDER, zip_filename)
@@ -1330,11 +1424,6 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
                     # Use the new naming format for files in zip
                     arcname = os.path.basename(dxf_file_path)
                     zipf.write(dxf_file_path, arcname)
-
-            # Add report file
-            if os.path.exists(report_file):
-                zipf.write(report_file, os.path.basename(report_file))
-
 
         with open(zip_path, "rb") as f:
             st.download_button(
