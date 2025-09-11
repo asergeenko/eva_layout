@@ -1185,7 +1185,7 @@ def bin_packing_with_existing(
             )
 
     # Жадный сдвиг (greedy push) — прижимаем коврики максимально влево/вниз
-    # placed = tighten_layout(placed, sheet_size, min_gap=0.1)
+    placed = tighten_layout(placed, sheet_size, min_gap=0.1)
     return placed, unplaced
 
 
@@ -1396,7 +1396,7 @@ def bin_packing(
             unplaced.append(carpet)
 
     # Применяем жадный сдвиг
-    #placed = tighten_layout(placed, sheet_size)
+    placed = tighten_layout(placed, sheet_size)
 
     if verbose:
         usage_percent = calculate_usage_percent(placed, sheet_size)
