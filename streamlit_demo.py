@@ -6,21 +6,19 @@ from io import BytesIO
 import zipfile
 import logging
 
+from dxf_utils import parse_dxf_complete, save_dxf_layout_complete
 from file_object import FileObject
 from layout_optimizer import (
-    parse_dxf_complete,
     bin_packing_with_inventory,
-    plot_layout,
-    save_dxf_layout_complete,
     Carpet,
 )
 
 from excel_loader import (
-    TARGET_SHEET,
     load_excel_file,
     parse_orders_from_excel,
     find_dxf_files_for_article,
 )
+from plot import plot_layout
 
 # Настройка логирования
 logging.basicConfig(
@@ -73,14 +71,20 @@ with col_logo:
 with col_clear:
     st.write("")  # Add some spacing
     st.write("")  # Add some spacing
-    if st.button("🗑️ Очистить всё",
-                 help="Очистить все данные и начать заново",
-                 type="secondary"):
+    if st.button(
+        "🗑️ Очистить всё", help="Очистить все данные и начать заново", type="secondary"
+    ):
         # Clear all session state
         keys_to_clear = [
-            'available_sheets', 'selected_orders', 'manual_files',
-            'file_groups', 'group_counter', 'optimization_results',
-            'manual_file_settings', 'current_excel_hash', 'excel_upload'
+            "available_sheets",
+            "selected_orders",
+            "manual_files",
+            "file_groups",
+            "group_counter",
+            "optimization_results",
+            "manual_file_settings",
+            "current_excel_hash",
+            "excel_upload",
         ]
 
         for key in keys_to_clear:
@@ -88,8 +92,11 @@ with col_clear:
                 del st.session_state[key]
 
         # Clear all order selection states
-        keys_to_remove = [key for key in st.session_state.keys()
-                          if key.startswith(('order_', 'quantity_', 'select_', 'qty_'))]
+        keys_to_remove = [
+            key
+            for key in st.session_state.keys()
+            if key.startswith(("order_", "quantity_", "select_", "qty_"))
+        ]
         for key in keys_to_remove:
             del st.session_state[key]
 
@@ -234,15 +241,18 @@ if excel_file is not None:
                 st.session_state.current_excel_hash = file_hash
 
                 # Clear all order selection states
-                keys_to_remove = [key for key in st.session_state.keys()
-                                  if key.startswith(('order_', 'quantity_', 'select_', 'qty_'))]
+                keys_to_remove = [
+                    key
+                    for key in st.session_state.keys()
+                    if key.startswith(("order_", "quantity_", "select_", "qty_"))
+                ]
                 for key in keys_to_remove:
                     del st.session_state[key]
 
                 # Clear selected orders
                 st.session_state.selected_orders = []
 
-                logger.info(f"Новый Excel файл загружен, предыдущие выборы очищены")
+                logger.info("Новый Excel файл загружен, предыдущие выборы очищены")
 
             excel_data = load_excel_file(file_content)
             logger.info(f"Excel файл загружен. Листы: {list(excel_data.keys())}")
@@ -379,7 +389,9 @@ if excel_file is not None:
                         with cols[0]:
                             is_selected = st.checkbox(
                                 f"№{actual_idx + 1}",
-                                value=st.session_state.get(f"order_{actual_idx}", False),
+                                value=st.session_state.get(
+                                    f"order_{actual_idx}", False
+                                ),
                                 key=f"select_{actual_idx}",
                                 label_visibility="collapsed",
                             )
@@ -514,7 +526,6 @@ if st.session_state.selected_orders:
     articles_found = []
     articles_not_found = []
 
-
     # Create a file-like object with name attribute
     class FileObj:
         def __init__(self, content, name):
@@ -526,6 +537,7 @@ if st.session_state.selected_orders:
 
         def seek(self, pos):
             return self.content.seek(pos)
+
 
 # Additional DXF files section (always available)
 st.subheader("📎 Загрузить вручную")
@@ -589,8 +601,8 @@ if manual_files:
 
     # Button to create group with current settings
     if st.button(
-            f"➕ Создать группу #{st.session_state.group_counter}",
-            key=f"create_group_{current_group_key}",
+        f"➕ Создать группу #{st.session_state.group_counter}",
+        key=f"create_group_{current_group_key}",
     ):
         # Create group with selected settings
         group_files = []
@@ -941,7 +953,6 @@ if st.button("🚀 Оптимизировать раскрой"):
                 f"Входные параметры: {len(carpets)} полигонов, {len(st.session_state.available_sheets)} типов листов"
             )
 
-
             # logger.info("ПОЛИГОНЫ ПЕРЕД ОТПРАВКОЙ В bin_packing_with_inventory:")
             # for i, carpet in enumerate(carpets):
             #    logger.info(
@@ -954,7 +965,6 @@ if st.button("🚀 Оптимизировать раскрой"):
                 adjusted_percent = 50 + (percent * 0.45)  # Scale to 50-95% range
                 optimization_progress.progress(min(95, int(adjusted_percent)))
                 optimization_status.text(f"🔄 {status_text}")
-
 
             placed_layouts, unplaced_polygons = bin_packing_with_inventory(
                 carpets,
@@ -1103,9 +1113,9 @@ if st.button("🚀 Оптимизировать раскрой"):
                 sheet_size = layout.get("sheet_size", (0, 0))
                 for sheet in st.session_state.available_sheets:
                     if (
-                            sheet.get("color", "") == sheet_color
-                            and sheet.get("width", 0) == sheet_size[0]
-                            and sheet.get("height", 0) == sheet_size[1]
+                        sheet.get("color", "") == sheet_color
+                        and sheet.get("width", 0) == sheet_size[0]
+                        and sheet.get("height", 0) == sheet_size[1]
                     ):
                         layout_sheet_type = sheet["name"]
                         break
@@ -1138,8 +1148,8 @@ if st.button("🚀 Оптимизировать раскрой"):
 if "optimization_results" in st.session_state and st.session_state.optimization_results:
     # Add button to clear results
     if st.button(
-            "🗑️ Очистить результаты",
-            help="Очистить результаты оптимизации для нового расчета",
+        "🗑️ Очистить результаты",
+        help="Очистить результаты оптимизации для нового расчета",
     ):
         st.session_state.optimization_results = None
         st.rerun()
@@ -1316,10 +1326,14 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
                         )
 
                         st.write(f"**Тип листа:** {layout['Sheet Type']}")
-                        st.write(f"**Цвет листа:** {color_emoji} {layout['Sheet Color']}")
+                        st.write(
+                            f"**Цвет листа:** {color_emoji} {layout['Sheet Color']}"
+                        )
                         st.write(f"**Размер листа:** {layout['Sheet Size']}")
                         st.write(f"**Размещено объектов:** {layout['Shapes Placed']}")
-                        st.write(f"**Расход материала:** {layout['Material Usage (%)']}%")
+                        st.write(
+                            f"**Расход материала:** {layout['Material Usage (%)']}%"
+                        )
                         with open(layout["Output File"], "rb") as f:
                             st.download_button(
                                 label="📥 Скачать DXF",

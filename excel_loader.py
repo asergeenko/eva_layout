@@ -1,5 +1,4 @@
 import logging
-import os
 from collections.abc import Buffer
 from io import BytesIO
 from pathlib import Path
@@ -29,6 +28,7 @@ def load_excel_file(file_content: Buffer) -> pd.DataFrame:
     )
     return excel_data
 
+
 def parse_orders_from_excel(
     df: pd.DataFrame,
 ) -> list[dict[str, Any]] | None:
@@ -46,9 +46,7 @@ def parse_orders_from_excel(
             ]
 
             for idx, row in pending_orders.iterrows():
-                if pd.notna(
-                    row.iloc[3]
-                ):  # Check if Артикул (column D) is not empty
+                if pd.notna(row.iloc[3]):  # Check if Артикул (column D) is not empty
                     # Get color from column I (index 8)
                     color = (
                         str(row.iloc[8]).lower().strip()
@@ -71,9 +69,7 @@ def parse_orders_from_excel(
                         "row_index": idx,
                         "date": str(row.iloc[0]) if pd.notna(row.iloc[0]) else "",
                         "article": str(row.iloc[3]),
-                        "product": str(row.iloc[4])
-                        if pd.notna(row.iloc[4])
-                        else "",
+                        "product": str(row.iloc[4]) if pd.notna(row.iloc[4]) else "",
                         "marketplace": str(row.iloc[5])
                         if pd.notna(row.iloc[5])
                         else ""
@@ -93,7 +89,6 @@ def parse_orders_from_excel(
 def find_product_folder(product_name: str):
     """Find the base folder for a product based on article and product name."""
     return Path(DXF_ROOT_DIR) / product_name
-
 
 
 def calculate_folder_match_score(search_term: str, folder_name: str) -> float:
@@ -140,8 +135,9 @@ def find_dxf_files_for_article(
     return get_dxf_files_for_product_type(product_id, product_name, product_type)
 
 
-
-def get_dxf_files_for_product_type(product_id: str, product_name: str, product_type: str):
+def get_dxf_files_for_product_type(
+    product_id: str, product_name: str, product_type: str
+):
     """Get DXF files for a specific product type based on the mapping rules."""
     product_name = product_name.strip()
     product_type = product_type.strip()
@@ -160,13 +156,13 @@ def get_dxf_files_for_product_type(product_id: str, product_name: str, product_t
         logger.info(f"Найдена базовая папка: {base_folder}")
 
         # Get all DXF files in the folder
-        all_dxf_files = list(base_folder.rglob("*.dxf",case_sensitive=False))
+        all_dxf_files = list(base_folder.rglob("*.dxf", case_sensitive=False))
 
         # Apply product type specific filtering
         if product_type == "борт":
             # Files 1.dxf to 9.dxf
             for i in range(1, 10):
-                target_file = base_folder/ f"{i}.dxf"
+                target_file = base_folder / f"{i}.dxf"
                 if target_file.exists():
                     found_files.append(target_file)
 
