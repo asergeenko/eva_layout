@@ -1051,6 +1051,7 @@ def bin_packing_with_existing(
     existing_placed: list[tuple],
     sheet_size: tuple[float, float],
     verbose: bool = True,
+    tighten=True,
 ) -> tuple[list[tuple], list[tuple]]:
     """Bin packing that considers already placed polygons on the sheet."""
     # Convert sheet size from cm to mm to match DXF polygon units
@@ -1185,7 +1186,8 @@ def bin_packing_with_existing(
             )
 
     # Жадный сдвиг (greedy push) — прижимаем коврики максимально влево/вниз
-    placed = tighten_layout(placed, sheet_size, min_gap=0.1)
+    if tighten:
+        placed = tighten_layout(placed, sheet_size, min_gap=0.1)
     return placed, unplaced
 
 
@@ -2246,7 +2248,7 @@ def bin_packing_with_inventory(
                         ),
                     )
                     progress_callback(
-                        progress, f"Создан лист #{sheet_counter}: {len(placed)} ковров размещено"
+                        progress, f"Создан лист #{sheet_counter}. Размещено ковров: {len(placed)}"
                     )
             else:
                 logger.warning(
@@ -2283,6 +2285,7 @@ def bin_packing_with_inventory(
                 layout["placed_polygons"],
                 layout["sheet_size"],
                 verbose=False,
+                tighten=False
             )
 
             if additional_placed:
