@@ -38,17 +38,6 @@ logger.info(
     "Работа без ограничений на диапазон листов - максимальная плотность раскладки"
 )
 
-# Проверяем доступность улучшенного алгоритма
-try:
-    from layout_optimizer import IMPROVED_PACKING_AVAILABLE
-
-    if IMPROVED_PACKING_AVAILABLE:
-        logger.info("✨ Улучшенный алгоритм размещения доступен")
-    else:
-        logger.info("⚠️ Улучшенный алгоритм размещения недоступен")
-except ImportError:
-    logger.warning("Ошибка импорта настроек алгоритма")
-
 # Configuration
 DEFAULT_SHEET_TYPES = [
     (140, 200),
@@ -68,7 +57,6 @@ DEFAULT_SHEET_TYPES = [
 OUTPUT_FOLDER = "output_layouts"
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-
 # Streamlit App
 # Display logo at the very top
 st.set_page_config(layout="wide")
@@ -85,26 +73,26 @@ with col_logo:
 with col_clear:
     st.write("")  # Add some spacing
     st.write("")  # Add some spacing
-    if st.button("🗑️ Очистить всё", 
+    if st.button("🗑️ Очистить всё",
                  help="Очистить все данные и начать заново",
                  type="secondary"):
         # Clear all session state
         keys_to_clear = [
-            'available_sheets', 'selected_orders', 'manual_files', 
+            'available_sheets', 'selected_orders', 'manual_files',
             'file_groups', 'group_counter', 'optimization_results',
-            'manual_file_settings'
+            'manual_file_settings', 'current_excel_hash', 'excel_upload'
         ]
-        
+
         for key in keys_to_clear:
             if key in st.session_state:
                 del st.session_state[key]
-        
+
         # Clear all order selection states
-        keys_to_remove = [key for key in st.session_state.keys() 
-                         if key.startswith(('order_', 'quantity_', 'select_', 'qty_'))]
+        keys_to_remove = [key for key in st.session_state.keys()
+                          if key.startswith(('order_', 'quantity_', 'select_', 'qty_'))]
         for key in keys_to_remove:
             del st.session_state[key]
-        
+
         st.success("✅ Все данные очищены!")
         st.rerun()
 
@@ -150,7 +138,6 @@ with col1:
         selected_size = (sheet_width, sheet_height)
     else:
         selected_size = tuple(map(int, sheet_type_option.split("x")))
-
 
 with col2:
     sheet_count = st.number_input(
@@ -240,23 +227,23 @@ if excel_file is not None:
             # Read Excel file with caching - use file hash for cache key
             file_content = excel_file.read()
             file_hash = hash(file_content)
-            
+
             # Check if this is a different Excel file
             if st.session_state.current_excel_hash != file_hash:
                 # New file detected - clear all previous selections
                 st.session_state.current_excel_hash = file_hash
-                
+
                 # Clear all order selection states
-                keys_to_remove = [key for key in st.session_state.keys() 
-                                 if key.startswith(('order_', 'quantity_', 'select_', 'qty_'))]
+                keys_to_remove = [key for key in st.session_state.keys()
+                                  if key.startswith(('order_', 'quantity_', 'select_', 'qty_'))]
                 for key in keys_to_remove:
                     del st.session_state[key]
-                
+
                 # Clear selected orders
                 st.session_state.selected_orders = []
-                
+
                 logger.info(f"Новый Excel файл загружен, предыдущие выборы очищены")
-            
+
             excel_data = load_excel_file(file_content)
             logger.info(f"Excel файл загружен. Листы: {list(excel_data.keys())}")
 
@@ -527,6 +514,7 @@ if st.session_state.selected_orders:
     articles_found = []
     articles_not_found = []
 
+
     # Create a file-like object with name attribute
     class FileObj:
         def __init__(self, content, name):
@@ -538,7 +526,6 @@ if st.session_state.selected_orders:
 
         def seek(self, pos):
             return self.content.seek(pos)
-
 
 # Additional DXF files section (always available)
 st.subheader("📎 Загрузить вручную")
@@ -602,8 +589,8 @@ if manual_files:
 
     # Button to create group with current settings
     if st.button(
-        f"➕ Создать группу #{st.session_state.group_counter}",
-        key=f"create_group_{current_group_key}",
+            f"➕ Создать группу #{st.session_state.group_counter}",
+            key=f"create_group_{current_group_key}",
     ):
         # Create group with selected settings
         group_files = []
@@ -662,7 +649,6 @@ if manual_files:
     total_objects = len(manual_files) * group_quantity
     color_emoji = "⚫" if group_color == "чёрный" else "⚪"
 
-
 # Display existing groups table
 if st.session_state.file_groups:
     st.subheader("📋 Загруженные группы файлов")
@@ -707,7 +693,6 @@ if st.session_state.file_groups:
     st.session_state.manual_files = all_manual_files
 else:
     st.session_state.manual_files = []
-
 
 # Legacy compatibility - no longer needed but kept for backward compatibility
 if "manual_file_settings" not in st.session_state:
@@ -952,26 +937,16 @@ if st.button("🚀 Оптимизировать раскрой"):
             optimization_progress = st.progress(0)
             optimization_status = st.empty()
 
-            # Initialize optimization
-            optimization_progress.progress(10)
-            optimization_status.text("Подготовка данных для оптимизации...")
-
-            logger.info(
-                "Вызываем bin_packing_with_inventory без ограничений на диапазон листов"
-            )
             logger.info(
                 f"Входные параметры: {len(carpets)} полигонов, {len(st.session_state.available_sheets)} типов листов"
             )
 
-            # DEBUG: Log what polygons we're sending
-            optimization_progress.progress(20)
-            optimization_status.text("Анализ входных полигонов...")
 
-            logger.info("ПОЛИГОНЫ ПЕРЕД ОТПРАВКОЙ В bin_packing_with_inventory:")
-            for i, carpet in enumerate(carpets):
-                logger.info(
-                    f"  Полигон {i}: файл={carpet.filename}, order_id={carpet.order_id}"
-                )
+            # logger.info("ПОЛИГОНЫ ПЕРЕД ОТПРАВКОЙ В bin_packing_with_inventory:")
+            # for i, carpet in enumerate(carpets):
+            #    logger.info(
+            #        f"  Полигон {i}: файл={carpet.filename}, order_id={carpet.order_id}"
+            #    )
 
             # Progress callback function with more detailed updates
             def update_progress(percent, status_text):
@@ -980,16 +955,13 @@ if st.button("🚀 Оптимизировать раскрой"):
                 optimization_progress.progress(min(95, int(adjusted_percent)))
                 optimization_status.text(f"🔄 {status_text}")
 
+
             placed_layouts, unplaced_polygons = bin_packing_with_inventory(
                 carpets,
                 st.session_state.available_sheets,
                 verbose=False,
                 progress_callback=update_progress,
             )
-
-            # Processing results
-            optimization_progress.progress(80)
-            optimization_status.text("Обработка результатов...")
 
             logger.info(
                 f"Результат bin_packing: {len(placed_layouts)} размещенных листов, {len(unplaced_polygons)} неразмещенных полигонов"
@@ -1131,9 +1103,9 @@ if st.button("🚀 Оптимизировать раскрой"):
                 sheet_size = layout.get("sheet_size", (0, 0))
                 for sheet in st.session_state.available_sheets:
                     if (
-                        sheet.get("color", "") == sheet_color
-                        and sheet.get("width", 0) == sheet_size[0]
-                        and sheet.get("height", 0) == sheet_size[1]
+                            sheet.get("color", "") == sheet_color
+                            and sheet.get("width", 0) == sheet_size[0]
+                            and sheet.get("height", 0) == sheet_size[1]
                     ):
                         layout_sheet_type = sheet["name"]
                         break
@@ -1166,8 +1138,8 @@ if st.button("🚀 Оптимизировать раскрой"):
 if "optimization_results" in st.session_state and st.session_state.optimization_results:
     # Add button to clear results
     if st.button(
-        "🗑️ Очистить результаты",
-        help="Очистить результаты оптимизации для нового расчета",
+            "🗑️ Очистить результаты",
+            help="Очистить результаты оптимизации для нового расчета",
     ):
         st.session_state.optimization_results = None
         st.rerun()
@@ -1311,85 +1283,53 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
 
         # Sheet visualizations
         st.subheader("📐 Схемы раскроя листов")
-        
-        # Group layouts into pairs for two-column display
-        for i in range(0, len(all_layouts), 2):
-            sheet_col1, sheet_col2 = st.columns(2)
-            
-            # First sheet in the pair
-            with sheet_col1:
-                layout = all_layouts[i]
-                # Add color indicator emoji
-                color_emoji = (
-                    "⚫"
-                    if layout["Sheet Color"] == "чёрный"
-                    else "⚪"
-                    if layout["Sheet Color"] == "серый"
-                    else "🔘"
-                )
 
-                st.write(
-                    f"**Лист №{layout['Sheet']}: {color_emoji} {layout['Sheet Type']} ({layout['Sheet Size']}) - {layout['Shapes Placed']} объектов - {layout['Material Usage (%)']}% расход**"
-                )
-                
-                st.image(
-                    layout["Plot"],
-                    caption=f"Раскрой листа №{layout['Sheet']} ({layout['Sheet Type']})",
-                    use_container_width=True,
-                )
-                
-                st.write(f"**Тип листа:** {layout['Sheet Type']}")
-                st.write(f"**Цвет листа:** {color_emoji} {layout['Sheet Color']}")
-                st.write(f"**Размер листа:** {layout['Sheet Size']}")
-                st.write(f"**Размещено объектов:** {layout['Shapes Placed']}")
-                st.write(f"**Расход материала:** {layout['Material Usage (%)']}%")
-                with open(layout["Output File"], "rb") as f:
-                    st.download_button(
-                        label="📥 Скачать DXF",
-                        data=f,
-                        file_name=os.path.basename(layout["Output File"]),
-                        mime="application/dxf",
-                        key=f"download_{layout['Sheet']}",
-                    )
-            
-            # Second sheet in the pair (if exists)
-            with sheet_col2:
-                if i + 1 < len(all_layouts):
-                    layout = all_layouts[i + 1]
-                    # Add color indicator emoji
-                    color_emoji = (
-                        "⚫"
-                        if layout["Sheet Color"] == "чёрный"
-                        else "⚪"
-                        if layout["Sheet Color"] == "серый"
-                        else "🔘"
-                    )
+        # Group layouts into groups of 4 for four-column display
+        for i in range(0, len(all_layouts), 4):
+            sheet_col1, sheet_col2, sheet_col3, sheet_col4 = st.columns(4)
 
-                    st.write(
-                        f"**Лист №{layout['Sheet']}: {color_emoji} {layout['Sheet Type']} ({layout['Sheet Size']}) - {layout['Shapes Placed']} объектов - {layout['Material Usage (%)']}% расход**"
-                    )
-                    
-                    st.image(
-                        layout["Plot"],
-                        caption=f"Раскрой листа №{layout['Sheet']} ({layout['Sheet Type']})",
-                        use_container_width=True,
-                    )
-                    
-                    st.write(f"**Тип листа:** {layout['Sheet Type']}")
-                    st.write(f"**Цвет листа:** {color_emoji} {layout['Sheet Color']}")
-                    st.write(f"**Размер листа:** {layout['Sheet Size']}")
-                    st.write(f"**Размещено объектов:** {layout['Shapes Placed']}")
-                    st.write(f"**Расход материала:** {layout['Material Usage (%)']}%")
-                    with open(layout["Output File"], "rb") as f:
-                        st.download_button(
-                            label="📥 Скачать DXF",
-                            data=f,
-                            file_name=os.path.basename(layout["Output File"]),
-                            mime="application/dxf",
-                            key=f"download_{layout['Sheet']}_2",
+            # Display sheets in 4 columns
+            columns = [sheet_col1, sheet_col2, sheet_col3, sheet_col4]
+
+            for col_idx in range(4):
+                layout_idx = i + col_idx
+                if layout_idx < len(all_layouts):
+                    with columns[col_idx]:
+                        layout = all_layouts[layout_idx]
+                        # Add color indicator emoji
+                        color_emoji = (
+                            "⚫"
+                            if layout["Sheet Color"] == "чёрный"
+                            else "⚪"
+                            if layout["Sheet Color"] == "серый"
+                            else "🔘"
                         )
-            
-            st.divider()  # Add visual separator between sheet pairs
+
+                        st.write(
+                            f"**Лист №{layout['Sheet']}: {color_emoji} {layout['Sheet Type']} ({layout['Sheet Size']}) - {layout['Shapes Placed']} объектов - {layout['Material Usage (%)']}% расход**"
+                        )
+
+                        st.image(
+                            layout["Plot"],
+                            caption=f"Раскрой листа №{layout['Sheet']} ({layout['Sheet Type']})",
+                            use_container_width=True,
+                        )
+
+                        st.write(f"**Тип листа:** {layout['Sheet Type']}")
+                        st.write(f"**Цвет листа:** {color_emoji} {layout['Sheet Color']}")
+                        st.write(f"**Размер листа:** {layout['Sheet Size']}")
+                        st.write(f"**Размещено объектов:** {layout['Shapes Placed']}")
+                        st.write(f"**Расход материала:** {layout['Material Usage (%)']}%")
+                        with open(layout["Output File"], "rb") as f:
+                            st.download_button(
+                                label="📥 Скачать DXF",
+                                data=f,
+                                file_name=os.path.basename(layout["Output File"]),
+                                mime="application/dxf",
+                                key=f"download_{layout['Sheet']}_{col_idx}",
+                            )
+
+            st.divider()  # Add visual separator between sheet rows
     else:
         st.error(
             "❌ Не было создано ни одного листа. Проверьте отладочную информацию выше."
@@ -1402,7 +1342,7 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
         unplaced_data = []
         for carpet in unplaced_polygons:
             unplaced_data.append(
-                (carpet.filename, f"{carpet.polygon.area/100:.2f}", carpet.color)
+                (carpet.filename, f"{carpet.polygon.area / 100:.2f}", carpet.color)
             )
 
         unplaced_df = pd.DataFrame(
