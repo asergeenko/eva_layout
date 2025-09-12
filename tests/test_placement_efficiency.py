@@ -1,7 +1,8 @@
 from pathlib import Path
 import time
 
-from layout_optimizer import parse_dxf_complete, Carpet, bin_packing_with_inventory
+from dxf_utils import parse_dxf_complete
+from layout_optimizer import Carpet, bin_packing_with_inventory
 
 
 def test_placement_efficiency():
@@ -79,8 +80,8 @@ def test_placement_efficiency():
         print(f"\n📄 ДЕТАЛИ ПО ЛИСТАМ:")
         total_sheet_usage = 0
         for i, layout in enumerate(placed_layouts, 1):
-            carpet_count = len(layout['placed_polygons'])
-            usage = layout.get('usage_percent', 0)
+            carpet_count = len(layout.placed_polygons)
+            usage = layout.usage_percent
             total_sheet_usage += usage
             print(f"   Лист {i}: {carpet_count} ковриков, {usage:.1f}% заполнение")
         

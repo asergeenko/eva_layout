@@ -12,13 +12,14 @@ from pathlib import Path
 
 import pandas as pd
 import logging
+
+from dxf_utils import parse_dxf_complete
 from excel_loader import load_excel_file, parse_orders_from_excel, find_dxf_files_for_article
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from layout_optimizer import (
     bin_packing_with_inventory,
-    parse_dxf_complete,
     Carpet,
 )
 
@@ -56,7 +57,6 @@ def process_orders(orders) -> list[Carpet]:
     polygons = []
     
     for order in orders:
-    #for idx, row in df.iterrows():
         order_id = order["order_id"]  # +2 для соответствия нумерации
         article = order["article"]
         product_name = order["product"]
@@ -159,20 +159,10 @@ def test_streamlit_integration():
     if unplaced:
         print("\n❌ НЕРАЗМЕЩЕННЫЕ ПОЛИГОНЫ:")
         for poly in unplaced:
-            if hasattr(poly, 'filename'):
-                # Объект Carpet
-                filename = poly.filename
-                color = poly.color
-                order_id = poly.order_id
-            elif len(poly) > 1:
-                # Кортеж
-                filename = poly[1] if len(poly) > 1 else "unknown"
-                color = poly[2] if len(poly) > 2 else "unknown"
-                order_id = poly[3] if len(poly) > 3 else "unknown"
-            else:
-                filename = "unknown"
-                color = "unknown"
-                order_id = "unknown"
+            # Объект Carpet
+            filename = poly.filename
+            color = poly.color
+            order_id = poly.order_id
             print(f"   • {filename} (цвет: {color}, заказ: {order_id})")
     
     # Детальный анализ по листам
@@ -182,22 +172,16 @@ def test_streamlit_integration():
     sheets_with_space = 0
     
     for i, layout in enumerate(placed_layouts, 1):
-        poly_count = len(layout['placed_polygons'])
-        usage = layout.get('usage_percent', 0)
+        poly_count = layout.placed_polygons
+        usage = layout.usage_percent
 
         # Подсчет полигонов приоритета 2
         p2_black_count = 0
         p2_gray_count = 0
-        for p in layout['placed_polygons']:
+        for p in layout.placed_polygons:
             # Обрабатываем разные форматы кортежей
-            color = None
-            if len(p) >= 7:
-                # Extended format: (polygon, x, y, angle, file_name, color, order_id)
-                color = str(p[5])
-            elif len(p) > 3:
-                # Standard format: (polygon, file_name, color, order_id)
-                color = str(p[2])
-            
+            color = p.color
+
             if color=="чёрный":
                 p2_black_count += 1
             elif color=="серый":
@@ -255,16 +239,8 @@ def test_streamlit_integration():
     
     for i, layout in enumerate(placed_layouts, 1):        
         # Анализируем размещенные полигоны на этом листе
-        for placed_tuple in layout['placed_polygons']:
-            # Извлекаем order_id из кортежа размещенного полигона
-            if len(placed_tuple) >= 7:
-                # Extended format: (polygon, x, y, angle, file_name, color, order_id)
-                order_id = placed_tuple[6]
-            elif len(placed_tuple) >= 4:
-                # Standard format: (polygon, file_name, color, order_id)  
-                order_id = placed_tuple[3]
-            else:
-                order_id = "unknown"
+        for placed_tuple in layout.placed_polygons:
+            order_id = placed_tuple.order_id
             
             # Учитываем только заказы из Excel (ZAKAZ_*)
             if order_id.startswith("ZAKAZ"):
@@ -284,12 +260,7 @@ def test_streamlit_integration():
         # Проверяем что не размещен только известный проблемный заказ
         unplaced_excel_ids = set()
         for p in unplaced:
-            if hasattr(p, 'order_id') and p.order_id.startswith("ZAKAZ"):
-                unplaced_excel_ids.add(p.order_id)
-            elif isinstance(p, tuple) and len(p) > 3:
-                order_id = p[3] if len(p) > 3 else (p[6] if len(p) > 6 else "unknown")
-                if str(order_id).startswith("ZAKAZ"):
-                    unplaced_excel_ids.add(order_id)
+            unplaced_excel_ids.add(p.order_id)
         known_problematic_orders = {"ZAKAZ_row_34"}  # Лодка AKVA 2800 - слишком большая
         
         if unplaced_excel_ids.issubset(known_problematic_orders) and missing_orders <= 1:

@@ -1009,33 +1009,24 @@ if st.button("🚀 Оптимизировать раскрой"):
             )
             results_progress.progress(progress_value)
             results_status.text(
-                f"Создание файла {i + 1}/{total_layouts}: лист {layout['sheet_number']}"
+                f"Создание файла {i + 1}/{total_layouts}: лист {layout.sheet_number}"
             )
 
             # Save and visualize layout with new naming format: length_width_number_color.dxf
-            sheet_width = int(layout["sheet_size"][0])
-            sheet_height = int(layout["sheet_size"][1])
-            sheet_number = layout["sheet_number"]
+            sheet_width = int(layout.sheet_size[0])
+            sheet_height = int(layout.sheet_size[1])
+            sheet_number = layout.sheet_number
 
             # Find sheet color from original sheet data
             sheet_color = "не указан"
             color_suffix = "unknown"
 
             # Try to get sheet color from layout first, then match by name
-            if "sheet_color" in layout:
-                sheet_color = layout["sheet_color"]
-            elif "sheet_type" in layout:
-                for sheet in st.session_state.available_sheets:
-                    if sheet["name"] == layout["sheet_type"]:
-                        sheet_color = sheet.get("color", "не указан")
-                        break
-            else:
-                # Fallback: use first available sheet color
-                if st.session_state.available_sheets:
-                    sheet_color = st.session_state.available_sheets[0].get(
-                        "color", "не указан"
-                    )
-
+            sheet_color = layout.sheet_color
+            for sheet in st.session_state.available_sheets:
+                if sheet["name"] == layout.sheet_type:
+                    sheet_color = sheet.get("color", "не указан")
+                    break
             # Convert color name to English suffix
             if sheet_color == "чёрный":
                 color_suffix = "black"
@@ -1050,50 +1041,38 @@ if st.button("🚀 Оптимизировать раскрой"):
             output_file = os.path.join(OUTPUT_FOLDER, output_filename)
 
             save_dxf_layout_complete(
-                layout["placed_polygons"],
-                layout["sheet_size"],
+                layout.placed_polygons,
+                layout.sheet_size,
                 output_file,
                 original_dxf_data_map,
             )
-            layout_plot = plot_layout(layout["placed_polygons"], layout["sheet_size"])
+            layout_plot = plot_layout(layout.placed_polygons, layout.sheet_size)
 
             # Store layout info in old format for compatibility
-            shapes_count = len(layout["placed_polygons"])
+            shapes_count = len(layout.placed_polygons)
             logger.info(
-                f"Лист #{layout['sheet_number']}: создаем all_layouts запись с {shapes_count} размещенными полигонами"
+                f"Лист #{layout.sheet_number}: создаем all_layouts запись с {shapes_count} размещенными полигонами"
             )
 
             # Определяем тип листа с проверкой наличия ключа
-            if "sheet_type" in layout:
-                sheet_type = layout["sheet_type"]
-            elif "sheet_color" in layout:
-                sheet_type = layout["sheet_color"]
-            else:
-                # Fallback: используем первый доступный лист как тип
-                if st.session_state.available_sheets:
-                    sheet_type = st.session_state.available_sheets[0].get(
-                        "name", "Unknown"
-                    )
-                else:
-                    sheet_type = "Unknown"
-
+            sheet_type = layout.sheet_type
             all_layouts.append(
                 {
-                    "Sheet": layout["sheet_number"],
+                    "Sheet": layout.sheet_number,
                     "Sheet Type": sheet_type,
                     "Sheet Color": sheet_color,
-                    "Sheet Size": f"{layout['sheet_size'][0]}x{layout['sheet_size'][1]} см",
+                    "Sheet Size": f"{layout.sheet_size[0]}x{layout.sheet_size[1]} см",
                     "Output File": output_file,
                     "Plot": layout_plot,
                     "Shapes Placed": shapes_count,
-                    "Material Usage (%)": f"{layout['usage_percent']:.2f}",
-                    "Placed Polygons": layout["placed_polygons"],
+                    "Material Usage (%)": f"{layout.usage_percent:.2f}",
+                    "Placed Polygons": layout.placed_polygons,
                 }
             )
             report_data.extend(
                 [
-                    (p[4], layout["sheet_number"], output_file)
-                    for p in layout["placed_polygons"]
+                    (p.filename, layout.sheet_number, output_file)
+                    for p in layout.placed_polygons
                 ]
             )
 
@@ -1104,27 +1083,12 @@ if st.button("🚀 Оптимизировать раскрой"):
         # Update sheet inventory in session state
         for layout in placed_layouts:
             # Определяем тип листа с проверкой наличия ключа
-            layout_sheet_type = None
-            if "sheet_type" in layout:
-                layout_sheet_type = layout["sheet_type"]
-            elif "sheet_color" in layout:
-                # Если нет sheet_type, попробуем найти лист по цвету и размеру
-                sheet_color = layout["sheet_color"]
-                sheet_size = layout.get("sheet_size", (0, 0))
-                for sheet in st.session_state.available_sheets:
-                    if (
-                        sheet.get("color", "") == sheet_color
-                        and sheet.get("width", 0) == sheet_size[0]
-                        and sheet.get("height", 0) == sheet_size[1]
-                    ):
-                        layout_sheet_type = sheet["name"]
-                        break
 
-            if layout_sheet_type:
-                for original_sheet in st.session_state.available_sheets:
-                    if layout_sheet_type == original_sheet["name"]:
-                        original_sheet["used"] += 1
-                        break
+            layout_sheet_type = layout.sheet_type
+            for original_sheet in st.session_state.available_sheets:
+                if layout_sheet_type == original_sheet["name"]:
+                    original_sheet["used"] += 1
+                    break
 
         # Clear progress indicators
         import time
@@ -1180,7 +1144,7 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
 
             # Debug: log the calculation
             raw_count_from_layouts = sum(
-                len(layout["placed_polygons"]) for layout in placed_layouts
+                len(layout.placed_polygons) for layout in placed_layouts
             )
             logger.info(
                 f"DEBUG подсчет: raw_from_layouts={raw_count_from_layouts}, calculated_placed={actual_placed_count}, input={total_input_polygons}, unplaced={len(unplaced_polygons)}"
@@ -1190,7 +1154,7 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
                 f"UI подсчет: actual_placed={actual_placed_count}, total_input={total_input_polygons}, unplaced={len(unplaced_polygons)}"
             )
             logger.info(
-                f"Подробности по листам: {[(layout['sheet_number'], len(layout['placed_polygons'])) for layout in placed_layouts]}"
+                f"Подробности по листам: {[(layout.sheet_number, len(layout.placed_polygons)) for layout in placed_layouts]}"
             )
             st.metric(
                 "Размещено объектов", f"{actual_placed_count}/{total_input_polygons}"
@@ -1243,11 +1207,11 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
         enhanced_report_data = []
         for layout in all_layouts:
             for placed_tuple in layout["Placed Polygons"]:
-                if len(placed_tuple) >= 6:  # New format with color
-                    polygon, _, _, angle, file_name, color = placed_tuple[:6]
-                else:  # Old format without color
-                    polygon, _, _, angle, file_name = placed_tuple[:5]
-                    color = "серый"
+                polygon = placed_tuple.polygon
+                angle = placed_tuple.angle
+                file_name = placed_tuple.filename
+                color = placed_tuple.color
+
                 bounds = polygon.bounds
                 width_cm = (bounds[2] - bounds[0]) / 10
                 height_cm = (bounds[3] - bounds[1]) / 10

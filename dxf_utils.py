@@ -8,6 +8,8 @@ import numpy as np
 import streamlit as st
 from shapely import Polygon, unary_union, MultiPolygon
 
+from carpet import PlacedCarpet
+
 
 def convert_entity_to_polygon_improved(entity):
     """Improved entity to polygon conversion with better SPLINE handling."""
@@ -105,7 +107,10 @@ def convert_entity_to_polygon_improved(entity):
 
 
 def save_dxf_layout_complete(
-    placed_elements, sheet_size, output_path, original_dxf_data_map=None
+    placed_elements: list[PlacedCarpet],
+    sheet_size: tuple[float, float],
+    output_path: str,
+    original_dxf_data_map=None,
 ):
     """COMPLETELY CORRECTED - Use coordinate mapping from original to transformed polygon"""
 
@@ -116,19 +121,9 @@ def save_dxf_layout_complete(
     msp = doc.modelspace()
 
     for placed_element in placed_elements:
-        if len(placed_element) >= 6:
-            (
-                transformed_polygon,
-                x_offset,
-                y_offset,
-                rotation_angle,
-                file_name,
-                color,
-            ) = placed_element[:6]
-        else:
-            transformed_polygon, x_offset, y_offset, rotation_angle, file_name = (
-                placed_element[:5]
-            )
+        transformed_polygon = placed_element.polygon
+        rotation_angle = placed_element.angle
+        file_name = placed_element.filename
 
         print(
             f"🔧 Processing {file_name}: transformed bounds = {transformed_polygon.bounds}"
@@ -676,43 +671,6 @@ def parse_dxf(file, verbose=True) -> Polygon:
         if verbose:
             st.error("Не найдено валидных полигонов для объединения")
         return None
-
-
-def save_dxf_layout(
-    placed_polygons: list[tuple[Polygon, float, float, float, str]],
-    sheet_size: tuple[float, float],
-    output_path: str,
-    original_dxf_data_map=None,
-):
-    """Save the optimized layout using original DXF elements without artifacts."""
-    # Redirect to the complete function that handles original entities properly
-    if original_dxf_data_map:
-        return save_dxf_layout_complete(
-            placed_polygons, sheet_size, output_path, original_dxf_data_map
-        )
-    else:
-        # Fallback to simple polygon boundaries if no original data available
-        doc = ezdxf.new("R2010")
-        doc.header["$INSUNITS"] = 4  # 4 = millimeters
-        doc.header["$LUNITS"] = 2  # 2 = decimal units
-        msp = doc.modelspace()
-
-        # DO NOT add sheet boundary - it's an artifact
-
-        # Add only the polygon boundaries without artifacts
-        for placed_tuple in placed_polygons:
-            if len(placed_tuple) >= 6:  # New format with color
-                polygon, _, _, _, file_name, color = placed_tuple[:6]
-            else:  # Old format without color
-                polygon, _, _, _, file_name = placed_tuple[:5]
-
-            # Use simple layer names without file prefixes
-            points = list(polygon.exterior.coords)[:-1]
-            layer_name = "layer_1"  # Default layer name without artifacts
-            msp.add_lwpolyline(points, dxfattribs={"layer": layer_name})
-
-        doc.saveas(output_path)
-        return output_path
 
 
 def parse_dxf_complete(file: BytesIO | str, verbose: bool = True):

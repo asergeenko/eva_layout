@@ -5,7 +5,7 @@ from matplotlib import pyplot as plt
 from matplotlib.ticker import MultipleLocator
 from shapely import Polygon
 
-from carpet import Carpet
+from carpet import Carpet, PlacedCarpet
 
 
 def get_color_for_file(filename: str) -> tuple[float, float, float]:
@@ -104,7 +104,7 @@ def plot_input_polygons(
 
 
 def plot_layout(
-    placed_polygons: list[tuple[Polygon, float, float, float, str]],
+    placed_polygons: list[PlacedCarpet],
     sheet_size: tuple[float, float],
 ) -> BytesIO:
     """Plot the layout using matplotlib and return as BytesIO."""
@@ -140,11 +140,11 @@ def plot_layout(
 
     # Use consistent colors for each file
     for placed_tuple in placed_polygons:
-        if len(placed_tuple) >= 6:  # New format with color
-            polygon, _, _, angle, file_name, color = placed_tuple[:6]
-        else:  # Old format without color
-            polygon, _, _, angle, file_name = placed_tuple[:5]
-            color = "серый"
+        polygon = placed_tuple.polygon
+        file_name = placed_tuple.filename
+        angle = placed_tuple.angle
+        color = placed_tuple.color
+
         x, y = polygon.exterior.xy
         # Use file-based color for visualization consistency
         display_color = get_color_for_file(file_name)
