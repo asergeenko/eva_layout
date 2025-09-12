@@ -2286,44 +2286,83 @@ def bin_packing_with_inventory(
             )
 
             if additional_placed:
-                # Update layout
-                placed_layouts[layout_idx]["placed_polygons"].extend(additional_placed)
-                placed_layouts[layout_idx]["usage_percent"] = calculate_usage_percent(
-                    placed_layouts[layout_idx]["placed_polygons"], layout["sheet_size"]
-                )
-
-                # Update remaining
-                remaining_carpet_map = {
-                    (c.polygon, c.filename, c.color, c.order_id): c
-                    for c in matching_carpets
-                }
-                newly_remaining = []
-                for remaining_tuple in remaining_tuples:
-                    key = (
-                        remaining_tuple[0],
-                        remaining_tuple[1],
-                        remaining_tuple[2],
-                        remaining_tuple[3],
+                # SMART: Skip overlap check if sheet has plenty of free space (low usage)
+                current_usage = layout.get("usage_percent", 0)
+                
+                if current_usage < 20:
+                    # If sheet is mostly empty, trust bin_packing_with_existing
+                    logger.info(f"Лист #{layout['sheet_number']} заполнен всего на {current_usage:.1f}% - пропускаем проверку перекрытий для приоритета 2")
+                    accept_placement = True
+                else:
+                    # Check for major overlaps only on fuller sheets
+                    all_existing_polygons = [p[0] for p in layout["placed_polygons"]]
+                    new_polygons = [p[0] for p in additional_placed]
+                    
+                    has_major_overlap = False
+                    for i, new_poly in enumerate(new_polygons):
+                        for j, existing_poly in enumerate(all_existing_polygons):
+                            if new_poly.intersects(existing_poly):
+                                try:
+                                    intersection = new_poly.intersection(existing_poly)
+                                    intersection_area = intersection.area if hasattr(intersection, 'area') else 0
+                                    new_poly_area = new_poly.area
+                                    
+                                    # More permissive threshold for fuller sheets (50%)
+                                    if intersection_area > 0 and intersection_area / new_poly_area > 0.50:
+                                        logger.warning(f"Крупное перекрытие при размещении приоритета 2: {intersection_area/new_poly_area*100:.1f}% от полигона {i} на листе #{layout['sheet_number']}")
+                                        has_major_overlap = True
+                                        break
+                                    else:
+                                        logger.debug(f"Допустимое перекрытие: {intersection_area/new_poly_area*100:.1f}% от полигона {i} - разрешено")
+                                except Exception as e:
+                                    logger.debug(f"Ошибка при расчете пересечения: {e}")
+                                    continue
+                        if has_major_overlap:
+                            break
+                    
+                    accept_placement = not has_major_overlap
+                
+                if accept_placement:
+                    # Update layout
+                    placed_layouts[layout_idx]["placed_polygons"].extend(additional_placed)
+                    placed_layouts[layout_idx]["usage_percent"] = calculate_usage_percent(
+                        placed_layouts[layout_idx]["placed_polygons"], layout["sheet_size"]
                     )
-                    if key in remaining_carpet_map:
-                        newly_remaining.append(remaining_carpet_map[key])
+                    
+                    # Update remaining
+                    remaining_carpet_map = {
+                        (c.polygon, c.filename, c.color, c.order_id): c
+                        for c in matching_carpets
+                    }
+                    newly_remaining = []
+                    for remaining_tuple in remaining_tuples:
+                        key = (
+                            remaining_tuple[0],
+                            remaining_tuple[1],
+                            remaining_tuple[2],
+                            remaining_tuple[3],
+                        )
+                        if key in remaining_carpet_map:
+                            newly_remaining.append(remaining_carpet_map[key])
 
-                # Remove placed carpets from remaining list
-                placed_carpet_set = set(
-                    (c.polygon, c.filename, c.color, c.order_id)
-                    for c in matching_carpets
-                    if c not in newly_remaining
-                )
-                remaining_priority2 = [
-                    c
-                    for c in remaining_priority2
-                    if (c.polygon, c.filename, c.color, c.order_id)
-                    not in placed_carpet_set
-                ]
-
-                logger.info(
-                    f"    Дозаполнен лист #{layout['sheet_number']}: +{len(additional_placed)} приоритет2"
-                )
+                    # Remove placed carpets from remaining list
+                    placed_carpet_set = set(
+                        (c.polygon, c.filename, c.color, c.order_id)
+                        for c in matching_carpets
+                        if c not in newly_remaining
+                    )
+                    remaining_priority2 = [
+                        c
+                        for c in remaining_priority2
+                        if (c.polygon, c.filename, c.color, c.order_id)
+                        not in placed_carpet_set
+                    ]
+                    logger.info(
+                        f"    Дозаполнен лист #{layout['sheet_number']}: +{len(additional_placed)} приоритет2"
+                    )
+                else:
+                    logger.warning(f"Отклонено размещение приоритета 2 из-за крупных перекрытий на листе #{layout['sheet_number']}")
+                    additional_placed = []  # Reset to prevent further processing
         except Exception as e:
             logger.debug(f"Не удалось дозаполнить лист приоритетом 2: {e}")
             continue
