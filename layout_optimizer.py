@@ -29,6 +29,603 @@ __all__ = [
 ]
 
 
+def apply_tetris_gravity(placed_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float) -> list[PlacedCarpet]:
+    """
+    ИСПРАВЛЕННЫЙ ТЕТРИС-ДВИЖОК: Применяет гравитацию осторожно, не ломая существующее размещение.
+    Ковры падают вниз только если это безопасно и улучшает размещение.
+    """
+    if not placed_carpets or len(placed_carpets) < 2:
+        return placed_carpets
+
+    # Создаем копии для безопасности
+    gravity_carpets = []
+    for carpet in placed_carpets:
+        gravity_carpets.append(PlacedCarpet(
+            polygon=carpet.polygon,
+            x_offset=carpet.x_offset,
+            y_offset=carpet.y_offset,
+            angle=carpet.angle,
+            filename=carpet.filename,
+            color=carpet.color,
+            order_id=carpet.order_id,
+            carpet_id=carpet.carpet_id,
+            priority=carpet.priority
+        ))
+
+    # Сортируем по высоте (сверху вниз) - верхние ковры пытаемся опустить
+    gravity_carpets.sort(key=lambda c: c.polygon.bounds[3], reverse=True)  # По верхнему краю
+
+    movements_made = 0
+    max_movements = len(gravity_carpets) // 2  # Ограничиваем количество движений
+
+    # Применяем гравитацию осторожно к верхним коврам
+    for i, carpet in enumerate(gravity_carpets):
+        if movements_made >= max_movements:
+            break
+
+        # Препятствия = все остальные ковры (не обновляем в процессе)
+        obstacles = [other.polygon for j, other in enumerate(gravity_carpets) if j != i]
+
+        # Текущие границы ковра
+        current_bounds = carpet.polygon.bounds
+        current_y = current_bounds[1]
+
+        # КОНСЕРВАТИВНАЯ ГРАВИТАЦИЯ: пробуем только небольшие улучшения
+        best_y = current_y
+        improvement_found = False
+
+        # Пробуем опуститься максимум на 50мм за раз
+        max_drop = min(50, current_y)  # Не больше 5см и не ниже 0
+
+        for drop_distance in [5, 10, 15, 20, 25, 30, 40, 50]:
+            if drop_distance > max_drop:
+                break
+
+            test_y = current_y - drop_distance
+            if test_y < 0:
+                continue
+
+            # Создаем тестовую позицию
+            y_offset_change = test_y - current_bounds[1]
+            test_polygon = translate_polygon(carpet.polygon, 0, y_offset_change)
+
+            # Проверяем границы листа
+            test_bounds = test_polygon.bounds
+            if test_bounds[1] < -1 or test_bounds[3] > sheet_height_mm + 1:
+                continue
+
+            # Проверяем коллизии с другими коврами
+            collision = False
+            for obstacle in obstacles:
+                if test_polygon.intersects(obstacle):
+                    intersection = test_polygon.intersection(obstacle)
+                    if intersection.area > 50:  # Более консервативный порог
+                        collision = True
+                        break
+
+            if not collision:
+                best_y = test_y
+                improvement_found = True
+            else:
+                break  # Встретили коллизию, дальше не пробуем
+
+        # Применяем улучшение если найдено
+        if improvement_found and best_y < current_y - 3:  # Минимум 3мм улучшения
+            y_offset_change = best_y - current_bounds[1]
+            carpet.polygon = translate_polygon(carpet.polygon, 0, y_offset_change)
+            carpet.y_offset += y_offset_change
+            movements_made += 1
+
+    return gravity_carpets
+
+
+def apply_tetris_right_compaction(placed_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float) -> list[PlacedCarpet]:
+    """
+    НОВАЯ TETRIS-ФУНКЦИЯ: Сжимает ковры к правому краю для освобождения пространства.
+    Это позволяет верхним коврам упасть вниз, как в настоящем Тетрисе.
+    """
+    if not placed_carpets or len(placed_carpets) < 2:
+        return placed_carpets
+
+    # Создаем копии для безопасности
+    compacted_carpets = []
+    for carpet in placed_carpets:
+        compacted_carpets.append(PlacedCarpet(
+            polygon=carpet.polygon,
+            x_offset=carpet.x_offset,
+            y_offset=carpet.y_offset,
+            angle=carpet.angle,
+            filename=carpet.filename,
+            color=carpet.color,
+            order_id=carpet.order_id,
+            carpet_id=carpet.carpet_id,
+            priority=carpet.priority
+        ))
+
+    # Сортируем по расстоянию от правого края (дальние сначала)
+    compacted_carpets.sort(key=lambda c: sheet_width_mm - c.polygon.bounds[2], reverse=True)
+
+    movements_made = 0
+    max_movements = min(5, len(compacted_carpets))  # Ограничиваем количество движений
+
+    # Применяем сжатие к правому краю
+    for i, carpet in enumerate(compacted_carpets):
+        if movements_made >= max_movements:
+            break
+
+        # Препятствия = все остальные ковры
+        obstacles = [other.polygon for j, other in enumerate(compacted_carpets) if j != i]
+
+        # Текущие границы ковра
+        current_bounds = carpet.polygon.bounds
+        current_right = current_bounds[2]
+        carpet_width = current_bounds[2] - current_bounds[0]
+        carpet_height = current_bounds[3] - current_bounds[1]
+
+        # Максимально возможный сдвиг вправо
+        max_right_x = sheet_width_mm - carpet_width
+        current_left = current_bounds[0]
+
+        if current_right >= sheet_width_mm - 10:  # Уже у правого края
+            continue
+
+        # Пробуем сдвинуть вправо
+        best_x = current_left
+        improvement_found = False
+
+        # Шагаем вправо с шагом 5мм
+        for test_right_x in range(int(current_right) + 5, int(sheet_width_mm), 5):
+            test_left_x = test_right_x - carpet_width
+
+            if test_left_x < 0 or test_right_x > sheet_width_mm:
+                break
+
+            # Создаем тестовый полигон
+            x_shift = test_left_x - current_bounds[0]
+            y_shift = 0  # Не двигаем по Y
+            test_polygon = translate_polygon(carpet.polygon, x_shift, y_shift)
+
+            # Проверяем границы листа
+            test_bounds = test_polygon.bounds
+            if (test_bounds[0] < 0 or test_bounds[1] < 0 or
+                test_bounds[2] > sheet_width_mm or test_bounds[3] > sheet_height_mm):
+                break
+
+            # Проверяем коллизии
+            collision = False
+            for obstacle in obstacles:
+                if check_collision(test_polygon, obstacle, min_gap=2.0):
+                    collision = True
+                    break
+
+            if not collision:
+                best_x = test_left_x
+                improvement_found = True
+            else:
+                break  # Натолкнулись на препятствие, дальше не двигаемся
+
+        # Применяем улучшение
+        if improvement_found and best_x > current_left + 3:  # Минимум 3мм улучшения
+            x_shift = best_x - current_bounds[0]
+            new_polygon = translate_polygon(carpet.polygon, x_shift, 0)
+
+            # Обновляем ковер
+            compacted_carpets[i] = PlacedCarpet(
+                polygon=new_polygon,
+                x_offset=carpet.x_offset + x_shift,
+                y_offset=carpet.y_offset,
+                angle=carpet.angle,
+                filename=carpet.filename,
+                color=carpet.color,
+                order_id=carpet.order_id,
+                carpet_id=carpet.carpet_id,
+                priority=carpet.priority
+            )
+            movements_made += 1
+
+    return compacted_carpets
+
+
+def calculate_trapped_space(placed_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float) -> float:
+    """
+    🔍 АНАЛИЗ ЗАПЕРНЫХ ЗОН: Вычисляет площадь пространства, заперного коврами.
+    Заперное пространство = недоступно для будущих ковров из-за размещения текущих.
+    """
+    if not placed_carpets:
+        return 0
+
+    from shapely.geometry import box
+    from shapely.ops import unary_union
+
+    # Создаем прямоугольник листа
+    sheet_box = box(0, 0, sheet_width_mm, sheet_height_mm)
+
+    # Объединяем все размещенные ковры
+    placed_union = unary_union([carpet.polygon for carpet in placed_carpets])
+
+    # Находим свободное пространство
+    free_space = sheet_box.difference(placed_union)
+
+    # Анализируем связность свободных областей
+    if hasattr(free_space, 'geoms'):  # MultiPolygon
+        free_polygons = list(free_space.geoms)
+    else:  # Single Polygon
+        free_polygons = [free_space] if free_space.area > 0 else []
+
+    # Вычисляем "заперность" каждой свободной области
+    trapped_area = 0
+    min_useful_area = 200 * 200  # 20x20см - минимальный полезный размер
+
+    for poly in free_polygons:
+        if poly.area < min_useful_area:
+            continue  # Слишком маленькие не считаем
+
+        bounds = poly.bounds
+        width = bounds[2] - bounds[0]
+        height = bounds[3] - bounds[1]
+
+        # Область считается "заперной" если она:
+        # 1. Окружена коврами с нескольких сторон
+        # 2. Имеет неправильную форму (низкий коэффициент прямоугольности)
+        rectangularity = poly.area / (width * height)
+
+        if rectangularity < 0.7:  # Менее 70% прямоугольности (более строгий критерий)
+            trapped_area += poly.area * (1.2 - rectangularity)  # Увеличенный штраф за неправильность
+
+        # Дополнительный штраф за области далеко от краев листа
+        center_x = (bounds[0] + bounds[2]) / 2
+        center_y = (bounds[1] + bounds[3]) / 2
+
+        distance_from_edges = min(
+            center_x,  # От левого края
+            sheet_width_mm - center_x,  # От правого края
+            center_y,  # От нижнего края
+            sheet_height_mm - center_y  # От верхнего края
+        )
+
+        if distance_from_edges > 200:  # Больше 20см от краев
+            isolation_penalty = (distance_from_edges - 200) / 100
+            trapped_area += poly.area * isolation_penalty * 0.1
+
+    return trapped_area
+
+
+def analyze_placement_blocking(placed_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float) -> dict:
+    """
+    🧠 АНАЛИЗ БЛОКИРОВКИ: Анализирует как размещенные ковры блокируют пространство для будущих ковров.
+    Возвращает рекомендации по улучшению размещения.
+    """
+    analysis = {
+        'total_trapped_area': 0,
+        'blocking_carpets': [],  # Ковры, создающие много блокировки
+        'improvement_suggestions': []
+    }
+
+    if len(placed_carpets) < 2:
+        return analysis
+
+    # Базовая заперность
+    base_trapped = calculate_trapped_space(placed_carpets, sheet_width_mm, sheet_height_mm)
+    analysis['total_trapped_area'] = base_trapped
+
+    # Анализируем вклад каждого ковра в блокировку
+    for i, carpet in enumerate(placed_carpets):
+        # Убираем этот ковер и смотрим, как изменится заперность
+        temp_placed = [c for j, c in enumerate(placed_carpets) if j != i]
+        trapped_without = calculate_trapped_space(temp_placed, sheet_width_mm, sheet_height_mm)
+
+        blocking_contribution = base_trapped - trapped_without
+
+        if blocking_contribution > 3000:  # Больше 300 см² блокировки (более агрессивный порог)
+            analysis['blocking_carpets'].append({
+                'carpet': carpet,
+                'blocking_amount': blocking_contribution,
+                'carpet_index': i
+            })
+
+            # Предлагаем попробовать поворот
+            analysis['improvement_suggestions'].append({
+                'type': 'rotation',
+                'carpet_index': i,
+                'reason': f'Блокирует {blocking_contribution/100:.0f} см² пространства'
+            })
+
+    return analysis
+
+
+def post_placement_optimize_aggressive(placed_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float, remaining_carpets: list[Carpet] = None) -> list[PlacedCarpet]:
+    """
+    🚀 АГРЕССИВНАЯ POST-PLACEMENT OPTIMIZATION: Полностью переразмещает проблемные ковры.
+    Не просто поворачивает на месте, а находит НОВЫЕ позиции с учетом будущих ковров.
+    """
+    if len(placed_carpets) < 2:
+        return placed_carpets
+
+    # Анализируем проблемы
+    blocking_analysis = analyze_placement_blocking(placed_carpets, sheet_width_mm, sheet_height_mm)
+
+    if not blocking_analysis['blocking_carpets']:
+        return placed_carpets
+
+    # Сортируем по степени блокировки (худшие первые)
+    blocking_carpets = sorted(
+        blocking_analysis['blocking_carpets'],
+        key=lambda x: x['blocking_amount'],
+        reverse=True
+    )
+
+    optimized_carpets = [
+        PlacedCarpet(
+            polygon=c.polygon,
+            x_offset=c.x_offset,
+            y_offset=c.y_offset,
+            angle=c.angle,
+            filename=c.filename,
+            color=c.color,
+            order_id=c.order_id,
+            carpet_id=c.carpet_id,
+            priority=c.priority
+        ) for c in placed_carpets
+    ]
+
+    improvements_made = 0
+    max_improvements = 2  # Агрессивно переразмещаем максимум 2 худших ковра
+
+    for blocker_info in blocking_carpets[:max_improvements]:
+        carpet_idx = blocker_info['carpet_index']
+        current_carpet = optimized_carpets[carpet_idx]
+
+        print(f"🔄 Переразмещаем {current_carpet.filename} (блокирует {blocker_info['blocking_amount']/100:.0f} см²)")
+
+        # Создаем исходный полигон ковра (без поворотов)
+        original_bounds = current_carpet.polygon.bounds
+
+        # Восстанавливаем исходную форму ковра
+        original_polygon = rotate_polygon(current_carpet.polygon, -current_carpet.angle)
+
+        # Получаем все остальные ковры как препятствия
+        obstacles = [c.polygon for i, c in enumerate(optimized_carpets) if i != carpet_idx]
+
+        current_trapped = calculate_trapped_space(optimized_carpets, sheet_width_mm, sheet_height_mm)
+        best_improvement = 0
+        best_placement = None
+
+        # АГРЕССИВНАЯ СТРАТЕГИЯ: Пробуем ВСЕ ориентации + ВСЕ позиции
+        for test_angle in [0, 90, 180, 270]:
+            rotated_polygon = rotate_polygon(original_polygon, test_angle) if test_angle != 0 else original_polygon
+            rot_bounds = rotated_polygon.bounds
+            rot_width = rot_bounds[2] - rot_bounds[0]
+            rot_height = rot_bounds[3] - rot_bounds[1]
+
+            # Проверяем границы листа
+            if rot_width > sheet_width_mm or rot_height > sheet_height_mm:
+                continue
+
+            # Пробуем МНОЖЕСТВО позиций, не только bottom-left
+            test_positions = []
+
+            # Bottom-left позиции
+            from layout_optimizer import find_bottom_left_position_with_obstacles
+            best_x, best_y = find_bottom_left_position_with_obstacles(
+                rotated_polygon, obstacles, sheet_width_mm, sheet_height_mm
+            )
+            if best_x is not None:
+                test_positions.append((best_x, best_y))
+
+            # Дополнительные стратегические позиции
+            step_x, step_y = max(50, rot_width // 4), max(50, rot_height // 4)
+
+            for test_x in range(0, int(sheet_width_mm - rot_width), int(step_x)):
+                for test_y in range(0, int(sheet_height_mm - rot_height), int(step_y)):
+                    test_positions.append((test_x, test_y))
+                    if len(test_positions) > 20:  # Ограничиваем количество тестов
+                        break
+                if len(test_positions) > 20:
+                    break
+
+            # Тестируем каждую позицию
+            for test_x, test_y in test_positions:
+                # Создаем тестовый полигон
+                test_polygon = translate_polygon(
+                    rotated_polygon,
+                    test_x - rot_bounds[0],
+                    test_y - rot_bounds[1]
+                )
+
+                # Проверяем коллизии
+                collision = False
+                for obstacle in obstacles:
+                    if test_polygon.intersects(obstacle):
+                        intersection = test_polygon.intersection(obstacle)
+                        if intersection.area > 100:
+                            collision = True
+                            break
+
+                if not collision:
+                    # Тестируем заперность с новым размещением
+                    test_carpets = optimized_carpets.copy()
+                    test_carpets[carpet_idx] = PlacedCarpet(
+                        polygon=test_polygon,
+                        x_offset=test_x - rot_bounds[0],
+                        y_offset=test_y - rot_bounds[1],
+                        angle=test_angle,
+                        filename=current_carpet.filename,
+                        color=current_carpet.color,
+                        order_id=current_carpet.order_id,
+                        carpet_id=current_carpet.carpet_id,
+                        priority=current_carpet.priority
+                    )
+
+                    test_trapped = calculate_trapped_space(test_carpets, sheet_width_mm, sheet_height_mm)
+                    improvement = current_trapped - test_trapped
+
+                    if improvement > best_improvement:
+                        best_improvement = improvement
+                        best_placement = {
+                            'polygon': test_polygon,
+                            'x_offset': test_x - rot_bounds[0],
+                            'y_offset': test_y - rot_bounds[1],
+                            'angle': test_angle
+                        }
+
+        # Применяем лучшее размещение если оно значимо лучше
+        if best_placement and best_improvement > 500:  # Минимум 50 см² улучшения
+            print(f"✅ Найдено лучшее размещение: освобождает {best_improvement/100:.0f} см²")
+
+            optimized_carpets[carpet_idx] = PlacedCarpet(
+                polygon=best_placement['polygon'],
+                x_offset=best_placement['x_offset'],
+                y_offset=best_placement['y_offset'],
+                angle=best_placement['angle'],
+                filename=current_carpet.filename,
+                color=current_carpet.color,
+                order_id=current_carpet.order_id,
+                carpet_id=current_carpet.carpet_id,
+                priority=current_carpet.priority
+            )
+            improvements_made += 1
+        else:
+            print(f"❌ Лучшее размещение не найдено (улучшение: {best_improvement/100:.0f} см²)")
+
+    if improvements_made > 0:
+        print(f"🎊 Агрессивная оптимизация улучшила {improvements_made} ковров!")
+
+    return optimized_carpets
+
+
+def post_placement_optimize(placed_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float) -> list[PlacedCarpet]:
+    """
+    🚀 POST-PLACEMENT OPTIMIZATION: Революционная система переразмещения.
+    После размещения анализирует и улучшает позиции ковров для минимизации заперных зон.
+    """
+    if len(placed_carpets) < 2:
+        return placed_carpets
+
+    # Анализируем текущую блокировку
+    blocking_analysis = analyze_placement_blocking(placed_carpets, sheet_width_mm, sheet_height_mm)
+
+    if not blocking_analysis['blocking_carpets']:
+        return placed_carpets  # Нет проблемных ковров
+
+    optimized_carpets = [
+        PlacedCarpet(
+            polygon=c.polygon,
+            x_offset=c.x_offset,
+            y_offset=c.y_offset,
+            angle=c.angle,
+            filename=c.filename,
+            color=c.color,
+            order_id=c.order_id,
+            carpet_id=c.carpet_id,
+            priority=c.priority
+        ) for c in placed_carpets
+    ]
+
+    improvements_made = 0
+    max_improvements = min(5, len(blocking_analysis['blocking_carpets']))  # Увеличили лимит улучшений
+
+    # Оптимизируем самые проблемные ковры
+    for suggestion in blocking_analysis['improvement_suggestions'][:max_improvements]:
+        if suggestion['type'] == 'rotation':
+            carpet_idx = suggestion['carpet_index']
+            current_carpet = optimized_carpets[carpet_idx]
+
+            # Пробуем все возможные повороты
+            current_trapped = calculate_trapped_space(optimized_carpets, sheet_width_mm, sheet_height_mm)
+            best_improvement = 0
+            best_rotation = None
+
+            for test_angle in [0, 90, 180, 270]:
+                if test_angle == current_carpet.angle:
+                    continue
+
+                # Создаем тестовый ковер с новым углом
+                original_polygon = rotate_polygon(current_carpet.polygon, -current_carpet.angle)  # Возвращаем к 0°
+                rotated_polygon = rotate_polygon(original_polygon, test_angle)
+
+                # Пробуем разместить в той же позиции
+                bounds = rotated_polygon.bounds
+                rotated_width = bounds[2] - bounds[0]
+                rotated_height = bounds[3] - bounds[1]
+
+                # Проверяем, помещается ли в лист
+                if rotated_width > sheet_width_mm or rotated_height > sheet_height_mm:
+                    continue
+
+                # Создаем тестовое размещение
+                test_x, test_y = current_carpet.polygon.bounds[0], current_carpet.polygon.bounds[1]
+                test_polygon = translate_polygon(rotated_polygon, test_x - bounds[0], test_y - bounds[1])
+
+                # Проверяем коллизии с другими коврами
+                collision = False
+                for j, other_carpet in enumerate(optimized_carpets):
+                    if j == carpet_idx:
+                        continue
+                    if test_polygon.intersects(other_carpet.polygon):
+                        intersection = test_polygon.intersection(other_carpet.polygon)
+                        if intersection.area > 100:
+                            collision = True
+                            break
+
+                if not collision:
+                    # Тестируем заперность с новым поворотом
+                    test_carpets = optimized_carpets.copy()
+                    test_carpets[carpet_idx] = PlacedCarpet(
+                        polygon=test_polygon,
+                        x_offset=current_carpet.x_offset,
+                        y_offset=current_carpet.y_offset,
+                        angle=test_angle,
+                        filename=current_carpet.filename,
+                        color=current_carpet.color,
+                        order_id=current_carpet.order_id,
+                        carpet_id=current_carpet.carpet_id,
+                        priority=current_carpet.priority
+                    )
+
+                    test_trapped = calculate_trapped_space(test_carpets, sheet_width_mm, sheet_height_mm)
+                    improvement = current_trapped - test_trapped
+
+                    if improvement > best_improvement and improvement > 1000:  # Минимум 100 см² улучшения (более чувствительный)
+                        best_improvement = improvement
+                        best_rotation = (test_angle, test_polygon)
+
+            # Применяем лучший поворот
+            if best_rotation:
+                optimized_carpets[carpet_idx] = PlacedCarpet(
+                    polygon=best_rotation[1],
+                    x_offset=current_carpet.x_offset,
+                    y_offset=current_carpet.y_offset,
+                    angle=best_rotation[0],
+                    filename=current_carpet.filename,
+                    color=current_carpet.color,
+                    order_id=current_carpet.order_id,
+                    carpet_id=current_carpet.carpet_id,
+                    priority=current_carpet.priority
+                )
+                improvements_made += 1
+
+    return optimized_carpets
+
+
+def calculate_free_top_space(placed_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float) -> float:
+    """
+    Вычисляет площадь свободного пространства сверху (идеально для следующих ковров).
+    Это ключевая метрика для Тетрис-оптимизации.
+    """
+    if not placed_carpets:
+        return sheet_width_mm * sheet_height_mm
+
+    # Находим максимальную высоту занятого пространства
+    max_occupied_y = max(carpet.polygon.bounds[3] for carpet in placed_carpets)
+
+    # Свободное пространство сверху
+    free_height = sheet_height_mm - max_occupied_y
+    if free_height <= 0:
+        return 0
+
+    return sheet_width_mm * free_height
+
+
 def find_available_sheet_of_color(color, sheet_inventory):
     """Find an available sheet of the specified color."""
     for sheet_type in sheet_inventory:
@@ -274,26 +871,29 @@ def bin_packing_with_existing(
                     height_penalty = min(1000, int((1 - aspect_ratio) * 1000))
                     shape_bonus += height_penalty  # Штраф вместо бонуса
 
-                # УСИЛЕННОЕ ОСВОБОЖДЕНИЕ ПРОСТРАНСТВА: Максимизируем свободные прямоугольные области
-                remaining_right_space = sheet_width_mm - (best_x + rotated_width)
-                remaining_top_space = sheet_height_mm - (best_y + rotated_height)
+                # 🎯 МАКСИМИЗАЦИЯ ВЕРХНЕГО ПРОСТРАНСТВА: Стратегия для existing carpets
+                # Симулируем размещение с учетом существующих ковров
+                all_test_placed = existing_placed + placed + [PlacedCarpet(
+                    translate_polygon(rotated, best_x - rotated_bounds[0], best_y - rotated_bounds[1]),
+                    0, 0, angle, "test", "test", "test", 0, 1
+                )]
 
-                # Бонус за освобождение больших прямоугольных зон (улучшенный алгоритм)
-                if remaining_right_space > 100:  # Даже 10см справа ценны
-                    # Квадратичный бонус для больших областей
-                    space_bonus = min(5000, int(remaining_right_space * 3 + (remaining_right_space/100)**2 * 500))
-                    shape_bonus -= space_bonus
+                # Находим максимальную высоту после размещения
+                max_height_after = max(c.polygon.bounds[3] for c in all_test_placed) if all_test_placed else 0
 
-                if remaining_top_space > 150:   # Даже 15см сверху полезны
-                    # Линейный бонус для верхнего пространства
-                    top_bonus = min(3000, int(remaining_top_space * 2))
-                    shape_bonus -= top_bonus
+                # Вычисляем площадь свободного пространства сверху
+                free_top_area = sheet_width_mm * (sheet_height_mm - max_height_after)
 
-                # СУПЕРСИЛА: Бонус за создание ОГРОМНЫХ свободных зон
-                total_free_area = remaining_right_space * remaining_top_space
-                if total_free_area > 100000:  # Больше 1000 см² свободной площади
-                    mega_bonus = min(10000, int(total_free_area / 200))
-                    shape_bonus -= mega_bonus
+                # МЕГА-БОНУС за максимизацию верхнего пространства
+                if free_top_area > 50000:  # Больше 500 см² свободного места сверху
+                    tetris_super_bonus = min(12000, int(free_top_area / 120))
+                    shape_bonus -= tetris_super_bonus
+
+                # Бонус за размещение в нижней части листа
+                height_from_bottom = best_y
+                if height_from_bottom < sheet_height_mm * 0.4:  # В нижних 40% листа
+                    low_placement_bonus = int((sheet_height_mm * 0.4 - height_from_bottom) * 3)
+                    shape_bonus -= low_placement_bonus
 
                 total_score = position_score + shape_bonus
 
@@ -325,8 +925,54 @@ def bin_packing_with_existing(
 
                 )
             )
-            # Add this polygon as an obstacle for subsequent placements
+
+            # 🚀 РЕВОЛЮЦИОННАЯ TETRIS-ОПТИМИЗАЦИЯ: Гравитация + Сжатие к краям
+            if len(placed) > 1:  # Несколько новых ковров
+                try:
+                    # Этап 1: Гравитация
+                    gravity_placed = apply_tetris_gravity(placed, sheet_width_mm, sheet_height_mm)
+
+                    # Этап 2: Сжатие к правому краю
+                    right_placed = apply_tetris_right_compaction(gravity_placed, sheet_width_mm, sheet_height_mm)
+
+                    # Этап 3: Финальная гравитация
+                    improved_placed = apply_tetris_gravity(right_placed, sheet_width_mm, sheet_height_mm)
+
+                    # КРИТИЧНО: Ультра-строгая проверка коллизий
+                    safe = True
+                    for i in range(len(improved_placed)):
+                        for j in range(i+1, len(improved_placed)):
+                            if check_collision(
+                                improved_placed[i].polygon,
+                                improved_placed[j].polygon,
+                                min_gap=2.0  # Строгий 2мм зазор
+                            ):
+                                safe = False
+                                break
+                        if not safe:
+                            break
+
+                    # Проверяем коллизии с существующими коврами
+                    if safe:
+                        for new_carpet in improved_placed:
+                            for existing_carpet in existing_placed:
+                                if new_carpet.polygon.intersects(existing_carpet.polygon):
+                                    intersection = new_carpet.polygon.intersection(existing_carpet.polygon)
+                                    if intersection.area > 50:
+                                        safe = False
+                                        break
+                            if not safe:
+                                break
+
+                    if safe:
+                        placed = improved_placed
+
+                except Exception:
+                    pass  # Игнорируем ошибки гравитации
+
+            # Добавляем как препятствие для следующих ковров
             obstacles.append(best_placement["polygon"])
+
             placed_successfully = True
 
         if not placed_successfully:
@@ -784,16 +1430,31 @@ def bin_packing(
                     height_penalty = min(1000, int((1 - aspect_ratio) * 1000))
                     shape_bonus += height_penalty  # Штраф вместо бонуса
 
-                # SPACE LIBERATION BONUS: Prefer orientations that leave more rectangular space
-                # Calculate remaining space quality
-                remaining_right_space = sheet_width_mm - (best_x + rotated_width)
-                remaining_top_space = sheet_height_mm - (best_y + rotated_height)
+                # 🎯 МАКСИМИЗАЦИЯ ВЕРХНЕГО ПРОСТРАНСТВА: Ключевая Тетрис-стратегия
+                # Предпочитаем ориентации которые максимизируют непрерывное свободное пространство сверху
 
-                # Bonus for leaving large rectangular areas
-                if remaining_right_space > 200:  # More than 20cm right
-                    shape_bonus -= remaining_right_space * 2
-                if remaining_top_space > 300:   # More than 30cm top
-                    shape_bonus -= remaining_top_space * 1
+                # Симулируем размещение этого ковра и вычисляем будущую максимальную высоту
+                test_placed = placed + [PlacedCarpet(
+                    translate_polygon(rotated, best_x - rotated_bounds[0], best_y - rotated_bounds[1]),
+                    0, 0, angle, "test", "test", "test", 0, 1
+                )]
+
+                # Находим максимальную высоту после размещения
+                max_height_after = max(c.polygon.bounds[3] for c in test_placed) if test_placed else 0
+
+                # Вычисляем площадь свободного пространства сверху
+                free_top_area = sheet_width_mm * (sheet_height_mm - max_height_after)
+
+                # МЕГА-БОНУС за максимизацию верхнего пространства
+                if free_top_area > 100000:  # Больше 1000 см² свободного места сверху
+                    tetris_super_bonus = min(15000, int(free_top_area / 150))  # До -15000 очков!
+                    shape_bonus -= tetris_super_bonus
+
+                # Дополнительный бонус за низкое размещение (ближе к низу)
+                height_from_bottom = best_y
+                if height_from_bottom < sheet_height_mm * 0.3:  # В нижних 30% листа
+                    low_placement_bonus = int((sheet_height_mm * 0.3 - height_from_bottom) * 5)
+                    shape_bonus -= low_placement_bonus
 
                 total_score = position_score + shape_bonus
 
@@ -824,10 +1485,65 @@ def bin_packing(
                     carpet.priority,
                 )
             )
+
+            # 🚀 РЕВОЛЮЦИОННАЯ POST-PLACEMENT OPTIMIZATION
+            if len(placed) >= 2:  # Применяем только если есть что оптимизировать
+                try:
+                    # Этап 1: АГРЕССИВНАЯ Post-Placement оптимизация (полное переразмещение проблемных ковров)
+                    post_optimized = post_placement_optimize_aggressive(placed, sheet_width_mm, sheet_height_mm)
+
+                    # Этап 2: Гравитация для финальной компактификации
+                    gravity_optimized = apply_tetris_gravity(post_optimized, sheet_width_mm, sheet_height_mm)
+
+                    # Этап 3: НОВОЕ! Сжатие к правому краю (как в настоящем Тетрисе)
+                    right_compacted = apply_tetris_right_compaction(gravity_optimized, sheet_width_mm, sheet_height_mm)
+
+                    # Этап 4: Финальная гравитация после сжатия к правому краю
+                    final_optimized = apply_tetris_gravity(right_compacted, sheet_width_mm, sheet_height_mm)
+
+                    # КРИТИЧНО: Проверяем безопасность финального результата с ультра-строгим контролем
+                    collision_found = False
+                    for i in range(len(final_optimized)):
+                        for j in range(i+1, len(final_optimized)):
+                            if check_collision(
+                                final_optimized[i].polygon,
+                                final_optimized[j].polygon,
+                                min_gap=2.0  # Строгий 2мм зазор
+                            ):
+                                collision_found = True
+                                break
+                        if collision_found:
+                            break
+
+                    if not collision_found:
+                        # Вычисляем улучшения
+                        original_trapped = calculate_trapped_space(placed, sheet_width_mm, sheet_height_mm)
+                        optimized_trapped = calculate_trapped_space(final_optimized, sheet_width_mm, sheet_height_mm)
+
+                        trapped_improvement = original_trapped - optimized_trapped
+
+                        placed = final_optimized  # Применяем полную оптимизацию
+
+                        if verbose and trapped_improvement > 5000:  # Больше 500 см² улучшения
+                            st.success(f"🎯 Post-Placement оптимизация освободила {trapped_improvement/100:.0f} см² заперного пространства!")
+
+                        # Дополнительная информация о верхнем пространстве
+                        free_top_area = calculate_free_top_space(placed, sheet_width_mm, sheet_height_mm)
+                        if verbose and free_top_area > 50000:  # Больше 500 см²
+                            st.info(f"🏞️ Свободно сверху: {free_top_area/10000:.0f} см²")
+
+                    elif verbose:
+                        st.warning("⚠️ Post-Placement оптимизация отменена - обнаружены коллизии")
+
+                except Exception as e:
+                    if verbose:
+                        st.error(f"❌ Ошибка Post-Placement оптимизации: {e}")
+                        # Продолжаем с исходным размещением
+
             placed_successfully = True
             if verbose:
                 st.success(
-                    f"✅ Размещен {carpet.filename} (угол: {best_placement['angle']}°, waste: {best_waste:.1f})"
+                    f"✅ Размещен {carpet.filename} (угол: {best_placement['angle']}°)"
                 )
         else:
             # Fallback to original grid method if no bottom-left position found
@@ -1267,10 +1983,10 @@ def find_bottom_left_position(
                 test_bounds[2] > sheet_width or test_bounds[3] > sheet_height):
                 continue
 
-            # Super fast collision check - only check intersections
+            # CRITICAL FIX: Use proper collision detection with minimum gap
             collision = False
             for placed_poly in placed_polygons:
-                if test_polygon.intersects(placed_poly.polygon):
+                if check_collision(test_polygon, placed_poly.polygon, min_gap=2.0):  # 2mm minimum gap
                     collision = True
                     break
 
@@ -1296,7 +2012,7 @@ def find_bottom_left_position(
 
             collision = False
             for placed_poly in placed_polygons:
-                if test_polygon.intersects(placed_poly.polygon):
+                if check_collision(test_polygon, placed_poly.polygon, min_gap=2.0):  # 2mm minimum gap
                     collision = True
                     break
 
