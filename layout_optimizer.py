@@ -223,9 +223,9 @@ def bin_packing_with_existing(
             unplaced.append((polygon, file_name, color, order_id))
             continue
 
-        # Try all allowed orientations (0°, 90°, 180°, 270°) with better placement
+        # REVOLUTIONARY: Try all rotations with TETRIS PRIORITY (bottom-left first)
         best_placement = None
-        best_waste = float("inf")
+        best_priority = float("inf")  # Lower is better (Y*1000 + X)
 
         # Only allowed rotation angles for cutting machines
         rotation_angles = [0, 90, 180, 270]
@@ -240,39 +240,20 @@ def bin_packing_with_existing(
             if rotated_width > sheet_width_mm or rotated_height > sheet_height_mm:
                 continue
 
-            # Find position that avoids existing obstacles
-            # ПРОФИЛИРОВАНИЕ: Измеряем время поиска позиции
-            pos_start_time = time.time()
+            # Find position using Tetris gravity algorithm
             best_x, best_y = find_bottom_left_position_with_obstacles(
                 rotated, obstacles, sheet_width_mm, sheet_height_mm
             )
-            pos_elapsed = time.time() - pos_start_time
-            if pos_elapsed > 1.0:  # Логируем медленные поиски позиций
-                logger.warning(
-                    f"⏱️ Медленный поиск позиции: {pos_elapsed:.2f}s для {len(obstacles)} препятствий"
-                )
 
             if best_x is not None and best_y is not None:
-                # Calculate waste for this placement
-                translated = translate_polygon(
-                    rotated, best_x - rotated_bounds[0], best_y - rotated_bounds[1]
-                )
-                # ПРОФИЛИРОВАНИЕ: Измеряем время расчета waste
-                waste_start_time = time.time()
-                waste = calculate_placement_waste(
-                    translated,
-                    [PlacedCarpet(obs, 0, 0, 0, "obstacle") for obs in obstacles],
-                    sheet_width_mm,
-                    sheet_height_mm,
-                )
-                waste_elapsed = time.time() - waste_start_time
-                if waste_elapsed > 0.5:  # Логируем медленные расчеты waste
-                    logger.warning(
-                        f"⏱️ Медленный расчет waste: {waste_elapsed:.2f}s для {len(obstacles)} препятствий"
-                    )
+                # MAXIMUM LEFT PRIORITY: Strongly favor left positions over bottom positions
+                tetris_priority = best_y * 10 + best_x * 100  # X position much more important than Y!
 
-                if waste < best_waste:
-                    best_waste = waste
+                if tetris_priority < best_priority:
+                    best_priority = tetris_priority
+                    translated = translate_polygon(
+                        rotated, best_x - rotated_bounds[0], best_y - rotated_bounds[1]
+                    )
                     best_placement = {
                         "polygon": translated,
                         "x_offset": best_x - rotated_bounds[0],
@@ -310,14 +291,312 @@ def bin_packing_with_existing(
                 f"⏱️ Медленный полигон {file_name}: {polygon_elapsed:.2f}s, размещен={placed_successfully}"
             )
 
-    # Жадный сдвиг (greedy push) — прижимаем коврики максимально влево/вниз
-    # CRITICAL FIX: include existing obstacles in tighten_layout
-    if tighten:
-        # Combine new placed with existing placed for complete collision check
+    # FAST OPTIMIZATION for existing sheets
+    if tighten and len(placed) <= 5:  # Very conservative optimization
+        # Apply simple compaction only for tiny sets
+        placed = simple_compaction(placed, sheet_size)
+
+        # Light tightening with obstacles
         all_obstacles = existing_placed + placed
-        placed = tighten_layout_with_obstacles(placed, all_obstacles, sheet_size, min_gap=0.1)
+        placed = tighten_layout_with_obstacles(placed, all_obstacles, sheet_size, min_gap=1.0)
 
     return placed, unplaced
+
+
+def ultra_left_compaction(
+    placed: list[PlacedCarpet],
+    sheet_size: tuple[float, float],
+    target_width_fraction: float = 0.7  # Try to fit everything in 70% of sheet width
+) -> list[PlacedCarpet]:
+    """ULTRA-AGGRESSIVE left compaction - squeeze everything to the left side."""
+    if not placed:
+        return placed
+
+    sheet_width_mm = sheet_size[0] * 10
+    sheet_height_mm = sheet_size[1] * 10
+    target_width = sheet_width_mm * target_width_fraction
+
+    current_polys = [item.polygon for item in placed]
+    meta = placed[:]
+    n = len(current_polys)
+
+    # Ultra-aggressive left push - try to fit all in left portion
+    for iteration in range(3):  # Multiple passes for maximum effect
+        moved_any = False
+
+        # Sort by current X position (process rightmost first)
+        x_order = sorted(range(n), key=lambda i: -current_polys[i].bounds[0])
+
+        for i in x_order:
+            poly = current_polys[i]
+            bounds = poly.bounds
+
+            # Calculate how far left we can push this polygon
+            current_right = bounds[2]
+            desired_right = target_width  # Want to fit in target area
+
+            if current_right > desired_right:
+                # Calculate how much we need to move left
+                required_move = current_right - desired_right
+                max_possible_move = bounds[0]  # Can't go beyond left edge
+
+                # Try to move as much as needed, but not beyond possible
+                move_distance = min(required_move, max_possible_move)
+
+                # Try progressive distances
+                for distance in [move_distance, move_distance * 0.75, move_distance * 0.5, move_distance * 0.25, 10.0, 5.0, 2.0, 1.0]:
+                    if distance < 0.5:
+                        continue
+
+                    test = translate_polygon(poly, -distance, 0)
+                    if test.bounds[0] < 0:  # Don't go beyond left edge
+                        continue
+
+                    # Check collisions
+                    collision = False
+                    for j in range(n):
+                        if j != i and test.intersects(current_polys[j]):
+                            collision = True
+                            break
+
+                    if not collision:
+                        current_polys[i] = test
+                        moved_any = True
+                        break
+
+        if not moved_any:
+            break
+
+    # Create result
+    new_placed = []
+    for i in range(n):
+        new_poly = current_polys[i]
+        orig_poly = placed[i].polygon
+
+        dx_total = new_poly.bounds[0] - orig_poly.bounds[0]
+        dy_total = new_poly.bounds[1] - orig_poly.bounds[1]
+
+        item = meta[i]
+        new_placed.append(
+            PlacedCarpet(
+                new_poly,
+                item.x_offset + dx_total,
+                item.y_offset + dy_total,
+                item.angle,
+                item.filename,
+                item.color,
+                item.order_id,
+                item.carpet_id,
+                item.priority,
+            )
+        )
+
+    return new_placed
+
+
+def simple_compaction(
+    placed: list[PlacedCarpet],
+    sheet_size: tuple[float, float],
+    min_gap: float = 0.5
+) -> list[PlacedCarpet]:
+    """FAST Simple compaction - just basic left+down movement."""
+    if not placed or len(placed) > 35:  # Allow processing of larger sets
+        return placed
+
+    sheet_width_mm = sheet_size[0] * 10
+    sheet_height_mm = sheet_size[1] * 10
+
+    current_polys = [item.polygon for item in placed]
+    meta = placed[:]
+    n = len(current_polys)
+
+    moved_any = True
+    max_passes = 2  # Very limited passes
+
+    for pass_num in range(max_passes):
+        if not moved_any:
+            break
+        moved_any = False
+
+        # Simple down movement
+        for i in range(n):
+            poly = current_polys[i]
+            step = 2.0  # Large steps for speed
+
+            while True:
+                test = translate_polygon(poly, 0, -step)
+                if test.bounds[1] < 0:
+                    break
+
+                # Quick collision check - only intersections
+                collision = False
+                for j in range(n):
+                    if j != i and test.intersects(current_polys[j]):
+                        collision = True
+                        break
+
+                if collision:
+                    break
+
+                current_polys[i] = test
+                poly = test
+                moved_any = True
+
+        # AGGRESSIVE LEFT MOVEMENT - push as far left as possible
+        x_order = sorted(range(n), key=lambda i: current_polys[i].bounds[0])  # Process left to right
+
+        for i in x_order:
+            poly = current_polys[i]
+            bounds = poly.bounds
+
+            # Calculate maximum possible left movement
+            max_left_move = bounds[0]  # Distance to left edge
+
+            # Try to move maximum distance first, then smaller steps
+            for left_distance in [max_left_move, max_left_move * 0.75, max_left_move * 0.5, max_left_move * 0.25, 5.0, 2.0, 1.0]:
+                if left_distance < 0.5:  # Skip tiny movements
+                    continue
+
+                test = translate_polygon(poly, -left_distance, 0)
+                if test.bounds[0] < 0:  # Don't go beyond left edge
+                    continue
+
+                collision = False
+                for j in range(n):
+                    if j != i and test.intersects(current_polys[j]):
+                        collision = True
+                        break
+
+                if not collision:
+                    current_polys[i] = test
+                    moved_any = True
+                    break  # Found best position, move to next polygon
+
+    # Create result
+    new_placed = []
+    for i in range(n):
+        new_poly = current_polys[i]
+        orig_poly = placed[i].polygon
+
+        dx_total = new_poly.bounds[0] - orig_poly.bounds[0]
+        dy_total = new_poly.bounds[1] - orig_poly.bounds[1]
+
+        item = meta[i]
+        new_placed.append(
+            PlacedCarpet(
+                new_poly,
+                item.x_offset + dx_total,
+                item.y_offset + dy_total,
+                item.angle,
+                item.filename,
+                item.color,
+                item.order_id,
+                item.carpet_id,
+                item.priority,
+            )
+        )
+
+    return new_placed
+
+
+def fast_edge_snap(
+    placed: list[PlacedCarpet],
+    sheet_size: tuple[float, float],
+    min_gap: float = 1.0
+) -> list[PlacedCarpet]:
+    """FAST edge snapping - just basic left/bottom movement."""
+    if not placed or len(placed) > 25:  # Allow larger sets for better optimization
+        return placed
+
+    sheet_width_mm = sheet_size[0] * 10
+    sheet_height_mm = sheet_size[1] * 10
+
+    current_polys = [item.polygon for item in placed]
+    meta = placed[:]
+    n = len(current_polys)
+
+    max_iterations = 2  # Very limited iterations
+
+    for iteration in range(max_iterations):
+        moved_any = False
+
+        # Simple movement - try to move each polygon left and down
+        for i in range(n):
+            poly = current_polys[i]
+
+            # Try to move down
+            step = 5.0  # Large step for speed
+            test = translate_polygon(poly, 0, -step)
+            if test.bounds[1] >= 0:
+                # Quick collision check - only intersections
+                collision = False
+                for j in range(n):
+                    if j != i and test.intersects(current_polys[j]):
+                        collision = True
+                        break
+
+                if not collision:
+                    current_polys[i] = test
+                    moved_any = True
+                    poly = test
+
+            # AGGRESSIVE LEFT PUSH - move as far left as possible
+            bounds = poly.bounds
+            max_left = bounds[0]  # Maximum distance we can move left
+
+            # Try progressively smaller left movements for maximum compaction
+            for left_distance in [max_left, max_left * 0.75, max_left * 0.5, max_left * 0.25, step, step/2]:
+                if left_distance < 0.5:
+                    continue
+
+                test = translate_polygon(poly, -left_distance, 0)
+                if test.bounds[0] < 0:
+                    continue
+
+                collision = False
+                for j in range(n):
+                    if j != i and test.intersects(current_polys[j]):
+                        collision = True
+                        break
+
+                if not collision:
+                    current_polys[i] = test
+                    moved_any = True
+                    break  # Found best left position
+
+        if not moved_any:
+            break
+
+    # Create result list
+    new_placed: list[PlacedCarpet] = []
+
+    for i in range(n):
+        new_poly = current_polys[i]
+        orig_poly = placed[i].polygon
+
+        # Calculate total displacement
+        dx_total = new_poly.bounds[0] - orig_poly.bounds[0]
+        dy_total = new_poly.bounds[1] - orig_poly.bounds[1]
+
+        item = meta[i]
+        new_x_off = item.x_offset + dx_total
+        new_y_off = item.y_offset + dy_total
+
+        new_placed.append(
+            PlacedCarpet(
+                new_poly,
+                new_x_off,
+                new_y_off,
+                item.angle,
+                item.filename,
+                item.color,
+                item.order_id,
+                item.carpet_id,
+                item.priority,
+            )
+        )
+
+    return new_placed
 
 
 def bin_packing(
@@ -405,9 +684,9 @@ def bin_packing(
             unplaced.append(UnplacedCarpet.from_carpet(carpet))
             continue
 
-        # SPEED OPTIMIZATION: Smart rotation strategy
+        # REVOLUTIONARY TETRIS ROTATION STRATEGY: Bottom-left priority
         best_placement = None
-        best_waste = float("inf")
+        best_priority = float("inf")  # Lower is better (Y*1000 + X)
 
         rotation_angles = [0, 90, 180, 270]
 
@@ -423,22 +702,20 @@ def bin_packing(
             if rotated_width > sheet_width_mm or rotated_height > sheet_height_mm:
                 continue
 
-            # IMPROVEMENT 3: Bottom-Left Fill algorithm for better placement
+            # Use Tetris gravity algorithm for placement
             best_x, best_y = find_bottom_left_position(
                 rotated, placed, sheet_width_mm, sheet_height_mm
             )
 
             if best_x is not None and best_y is not None:
-                # Calculate waste for this placement
-                translated = translate_polygon(
-                    rotated, best_x - rotated_bounds[0], best_y - rotated_bounds[1]
-                )
-                waste = calculate_placement_waste(
-                    translated, placed, sheet_width_mm, sheet_height_mm
-                )
+                # MAXIMUM LEFT PRIORITY: Strongly favor left positions over bottom positions
+                tetris_priority = best_y * 10 + best_x * 100  # X position much more important than Y!
 
-                if waste < best_waste:
-                    best_waste = waste
+                if tetris_priority < best_priority:
+                    best_priority = tetris_priority
+                    translated = translate_polygon(
+                        rotated, best_x - rotated_bounds[0], best_y - rotated_bounds[1]
+                    )
                     best_placement = {
                         "polygon": translated,
                         "x_offset": best_x - rotated_bounds[0],
@@ -554,8 +831,27 @@ def bin_packing(
                 )
             )
 
-    # Применяем жадный сдвиг
-    placed = tighten_layout(placed, sheet_size)
+    # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
+    if len(placed) <= 20:  # Optimize most reasonable sets
+        # Ultra-aggressive left compaction to squeeze everything left
+        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.4)
+
+        # Simple compaction with aggressive left push
+        placed = simple_compaction(placed, sheet_size)
+
+        # Additional edge snapping for maximum left compaction
+        placed = fast_edge_snap(placed, sheet_size)
+
+        # Final ultra-left compaction
+        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.5)
+
+        # Light tightening to clean up
+        placed = tighten_layout(placed, sheet_size, min_gap=0.5, step=2.0, max_passes=1)
+    elif len(placed) <= 35:  # For larger sets, still do aggressive compaction
+        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.6)
+        placed = simple_compaction(placed, sheet_size)
+        placed = fast_edge_snap(placed, sheet_size)
+    # No optimization for very large sets
 
     if verbose:
         usage_percent = calculate_usage_percent(placed, sheet_size)
@@ -834,133 +1130,92 @@ def find_quick_position(
 def find_bottom_left_position(
     polygon: Polygon, placed_polygons, sheet_width: float, sheet_height: float
 ):
-    """Find the bottom-left position for a polygon using ultra-tight Bottom-Left Fill algorithm with timeout."""
-    import time
+    """FAST Simple bottom-left placement - prioritize speed over perfect density."""
 
-    start_time = time.time()
-    timeout = 5.0  # Faster timeout for quicker processing
+    # First placement - always bottom-left corner
+    if not placed_polygons:
+        return 0, 0
 
-    # PERFORMANCE: Quick fallback for too many obstacles - aggressive for speed
-    if len(placed_polygons) > 8:  # More aggressive fallback for reasonable performance
-        return find_quick_position(polygon, placed_polygons, sheet_width, sheet_height)
-
-    # Convert placed polygons to obstacles and use ultra-tight algorithm
-    obstacles = [placed_tuple.polygon for placed_tuple in placed_polygons]
-
-    # Try ultra-tight algorithm with timeout
-    try:
-        result = find_ultra_tight_position(
-            polygon, obstacles, sheet_width, sheet_height
-        )
-        if result[0] is not None and time.time() - start_time < timeout:
-            return result
-    except Exception:
-        pass  # Fallback to conventional algorithm
-
-    # Fallback to improved conventional algorithm
     bounds = polygon.bounds
     poly_width = bounds[2] - bounds[0]
     poly_height = bounds[3] - bounds[1]
 
-    # PERFORMANCE OPTIMIZATION: Pre-compute placed polygon bounds
-    placed_bounds_list = []
-    for placed_tuple in placed_polygons:
-        placed_polygon = placed_tuple.polygon
-        placed_bounds_list.append(placed_polygon.bounds)
+    # FAST SCAN: Use large steps for speed
+    step = max(10.0, min(poly_width, poly_height) / 3)  # Large adaptive step for speed
 
-    # Generate candidate positions with fine granularity
-    candidate_positions = set()  # Use set to avoid duplicates
+    best_y = None
+    best_positions = []
 
-    # Balanced step size for good density without excessive computation
-    step_size = 1.0  # 1mm steps for good precision with reasonable performance
+    # PRIORITY LEFT SCAN - try left positions first for maximum compaction
+    # Create X positions with strong preference for left side
+    x_positions = []
+    for x in range(0, int(sheet_width - poly_width), max(5, int(step))):
+        x_positions.append(x)
 
-    # Bottom edge positions
-    for x in np.arange(0, sheet_width - poly_width + 1, step_size):
-        candidate_positions.add((x, 0))
+    # Sort to prioritize leftmost positions
+    x_positions.sort()
 
-    # Left edge positions
-    for y in np.arange(0, sheet_height - poly_height + 1, step_size):
-        candidate_positions.add((0, y))
+    for test_x in x_positions[:15]:  # Limit for speed but favor left
 
-    # OPTIMIZATION: Generate positions based on existing polygons with tight packing
-    min_gap = 0.1  # Tight gap for good density
-    for placed_bounds in placed_bounds_list:
-        # Try position to the right of existing polygon
-        x = placed_bounds[2] + min_gap
-        if x + poly_width <= sheet_width:
-            # Add multiple Y positions for better fit
-            y_positions = [
-                placed_bounds[1],  # Same Y as existing
-                0,  # Bottom edge
-                placed_bounds[1] - poly_height / 2,  # Below existing
-                placed_bounds[1] + poly_height / 2,  # Above existing
-                placed_bounds[3] - poly_height,  # Top-aligned with existing
-            ]
-            for y_pos in y_positions:
-                if 0 <= y_pos <= sheet_height - poly_height:
-                    candidate_positions.add((x, y_pos))
+        # Test only a few Y positions per X for speed
+        test_y_positions = [0]  # Always try bottom
 
-        # Try position above existing polygon
-        y = placed_bounds[3] + min_gap
-        if y + poly_height <= sheet_height:
-            # Add multiple X positions for better fit
-            x_positions = [
-                placed_bounds[0],  # Same X as existing
-                0,  # Left edge
-                placed_bounds[0] - poly_width / 2,  # Left of existing
-                placed_bounds[0] + poly_width / 2,  # Right of existing
-                placed_bounds[2] - poly_width,  # Right-aligned with existing
-            ]
-            for x_pos in x_positions:
-                if 0 <= x_pos <= sheet_width - poly_width:
-                    candidate_positions.add((x_pos, y))
+        # Add positions based on existing polygons (very limited)
+        for placed_poly in placed_polygons[:2]:  # Only first 2 polygons for speed
+            other_bounds = placed_poly.polygon.bounds
+            test_y_positions.append(other_bounds[3] + 2.0)  # Above with 2mm gap
 
-    # Convert to sorted list (bottom-left preference)
-    candidate_positions = sorted(candidate_positions, key=lambda pos: (pos[1], pos[0]))
+        # Test positions
+        for test_y in sorted(set(test_y_positions)):
+            if test_y < 0 or test_y + poly_height > sheet_height:
+                continue
 
-    # PERFORMANCE: Ultra-tight collision checking for each candidate
-    for x, y in candidate_positions:
-        # Ultra-precise boundary pre-check
-        if (
-            x + poly_width > sheet_width + 0.01
-            or y + poly_height > sheet_height + 0.01
-            or x < -0.01
-            or y < -0.01
-        ):
-            continue
+            # Quick test
+            x_offset = test_x - bounds[0]
+            y_offset = test_y - bounds[1]
+            test_polygon = translate_polygon(polygon, x_offset, y_offset)
 
-        x_offset = x - bounds[0]
-        y_offset = y - bounds[1]
+            # Simple bounds check
+            test_bounds = test_polygon.bounds
+            if (test_bounds[0] < 0 or test_bounds[1] < 0 or
+                test_bounds[2] > sheet_width or test_bounds[3] > sheet_height):
+                continue
 
-        # Check bounds with minimal tolerance
-        test_bounds = (
-            bounds[0] + x_offset,
-            bounds[1] + y_offset,
-            bounds[2] + x_offset,
-            bounds[3] + y_offset,
-        )
-        if (
-            test_bounds[0] < -0.01
-            or test_bounds[1] < -0.01
-            or test_bounds[2] > sheet_width + 0.01
-            or test_bounds[3] > sheet_height + 0.01
-        ):
-            continue
+            # Super fast collision check - only check intersections
+            collision = False
+            for placed_poly in placed_polygons:
+                if test_polygon.intersects(placed_poly.polygon):
+                    collision = True
+                    break
 
-        # REVOLUTIONARY: Skip ALL bounding box checks - use only true geometric collision
-        test_polygon = translate_polygon(polygon, x_offset, y_offset)
-
-        # Final collision check with actual polygons
-        collision = False
-        for p in placed_polygons:
-            if check_collision(
-                test_polygon, p.polygon, min_gap=0.1
-            ):  # Standard tight gap
-                collision = True
+            if not collision:
+                if best_y is None or test_y < best_y:
+                    best_y = test_y
+                    best_positions = [(test_x, test_y)]
+                elif test_y == best_y:
+                    best_positions.append((test_x, test_y))
                 break
 
-        if not collision:
-            return x, y
+    # Return leftmost position
+    if best_positions:
+        best_positions.sort()
+        return best_positions[0]
+
+    # Simple fallback - try grid positions
+    for y in range(0, int(sheet_height - poly_height), 20):
+        for x in range(0, int(sheet_width - poly_width), 20):
+            x_offset = x - bounds[0]
+            y_offset = y - bounds[1]
+            test_polygon = translate_polygon(polygon, x_offset, y_offset)
+
+            collision = False
+            for placed_poly in placed_polygons:
+                if test_polygon.intersects(placed_poly.polygon):
+                    collision = True
+                    break
+
+            if not collision:
+                return x, y
 
     return None, None
 
@@ -2099,9 +2354,9 @@ def tighten_layout_with_obstacles(
 def tighten_layout(
     placed: list[PlacedCarpet],
     sheet_size=None,
-    min_gap: float = 0.1,
-    step: float = 1.0,
-    max_passes: int = 3,
+    min_gap: float = 0.05,  # ULTRA-tight gap for maximum density
+    step: float = 0.5,     # Finer step for better precision
+    max_passes: int = 5,   # More passes for better optimization
 ) -> list[PlacedCarpet]:
     """
     Жадный сдвиг (greedy push): для каждого полигона пробуем сдвинуть максимально
@@ -2130,64 +2385,116 @@ def tighten_layout(
 
     n = len(current_polys)
 
-    # Несколько проходов, пока происходят сдвиги или пока не исчерпаны max_passes
+    # ULTRA-AGGRESSIVE multi-directional tightening for maximum density
     for pass_idx in range(max_passes):
         moved_any = False
 
-        for i in range(n):
+        # Try multiple tightening strategies in each pass
+        strategies = [
+            # Strategy 1: Bottom-left priority (traditional)
+            [(-step, 0), (0, -step)],  # left, then down
+            # Strategy 2: Top-right to bottom-left sweep
+            [(0, -step), (-step, 0)],  # down, then left
+            # Strategy 3: Diagonal micro-adjustments for ultra-tight packing
+            [(-step/2, -step/2), (-step, 0), (0, -step)],  # diagonal, left, down
+        ]
+
+        # Use different strategy each pass for better convergence
+        strategy = strategies[pass_idx % len(strategies)]
+
+        # Process polygons in different orders for better optimization
+        order_strategies = [
+            range(n),  # Normal order
+            range(n-1, -1, -1),  # Reverse order
+            sorted(range(n), key=lambda i: current_polys[i].bounds[1]),  # Bottom to top
+            sorted(range(n), key=lambda i: current_polys[i].bounds[0]),  # Left to right
+        ]
+
+        process_order = order_strategies[pass_idx % len(order_strategies)]
+
+        for i in process_order:
             poly = current_polys[i]
             moved = poly
 
-            # --- Сдвигаем влево по шагам ---
-            while True:
-                test = translate_polygon(moved, -step, 0)
-                # Пробуем выйти за левую границу? Останавливаемся
-                if test.bounds[0] < -0.01:
-                    break
+            # Apply the selected strategy
+            for dx, dy in strategy:
+                # Keep moving in this direction until we hit something
+                while True:
+                    test = translate_polygon(moved, dx, dy)
 
-                # Проверяем столкновения со всеми остальными полигонами
-                collision = False
-                for j in range(n):
-                    if j == i:
-                        continue
-                    other = current_polys[j]
-                    # Точная проверка: true если пересекается или ближе минимума
-                    if check_collision(test, other, min_gap=min_gap):
-                        collision = True
+                    # Check sheet boundaries with ultra-tight tolerance
+                    if (test.bounds[0] < -0.001 or test.bounds[1] < -0.001 or
+                        (sheet_size and test.bounds[2] > sheet_size[0] * 10 + 0.001) or
+                        (sheet_size and test.bounds[3] > sheet_size[1] * 10 + 0.001)):
                         break
 
-                if collision:
-                    break
+                    # Check collisions with all other polygons
+                    collision = False
+                    for j in range(n):
+                        if j == i:
+                            continue
+                        other = current_polys[j]
+                        # Ultra-tight collision check for maximum density
+                        if check_collision(test, other, min_gap=min_gap):
+                            collision = True
+                            break
 
-                # Нет столкновений — применяем сдвиг
-                moved = test
-                moved_any = True
-
-            # --- Сдвигаем вниз по шагам ---
-            while True:
-                test = translate_polygon(moved, 0, -step)
-                if test.bounds[1] < -0.01:
-                    break
-
-                collision = False
-                for j in range(n):
-                    if j == i:
-                        continue
-                    other = current_polys[j]
-                    if check_collision(test, other, min_gap=min_gap):
-                        collision = True
+                    if collision:
                         break
 
-                if collision:
-                    break
+                    # No collision - apply the move
+                    moved = test
+                    moved_any = True
 
-                moved = test
-                moved_any = True
+                # Update current position after each direction
+                current_polys[i] = moved
 
-            # Обновляем текущую позицию полигона
-            current_polys[i] = moved
+            # REVOLUTIONARY: Try "corner snapping" - move towards nearest corner/edge
+            if pass_idx >= 2:  # Only in later passes when basic positioning is done
+                # Calculate distances to edges
+                bounds = moved.bounds
 
-        # Если за проход изменений не было — прекращаем
+                # Try to snap to bottom edge
+                if bounds[1] > step:
+                    potential_y_move = -min(bounds[1], step * 3)  # Move up to 3 steps toward bottom
+                    test = translate_polygon(moved, 0, potential_y_move)
+
+                    if test.bounds[1] >= -0.001:  # Don't go below bottom
+                        # Check if this position is collision-free
+                        collision = False
+                        for j in range(n):
+                            if j == i:
+                                continue
+                            if check_collision(test, current_polys[j], min_gap=min_gap):
+                                collision = True
+                                break
+
+                        if not collision:
+                            moved = test
+                            current_polys[i] = moved
+                            moved_any = True
+
+                # Try to snap to left edge
+                if bounds[0] > step:
+                    potential_x_move = -min(bounds[0], step * 3)  # Move up to 3 steps toward left
+                    test = translate_polygon(moved, potential_x_move, 0)
+
+                    if test.bounds[0] >= -0.001:  # Don't go beyond left edge
+                        # Check if this position is collision-free
+                        collision = False
+                        for j in range(n):
+                            if j == i:
+                                continue
+                            if check_collision(test, current_polys[j], min_gap=min_gap):
+                                collision = True
+                                break
+
+                        if not collision:
+                            moved = test
+                            current_polys[i] = moved
+                            moved_any = True
+
+        # If no movement in this pass, stop early
         if not moved_any:
             break
 
