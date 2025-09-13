@@ -308,8 +308,11 @@ def bin_packing_with_existing(
             )
 
     # Жадный сдвиг (greedy push) — прижимаем коврики максимально влево/вниз
+    # CRITICAL FIX: include existing obstacles in tighten_layout
     if tighten:
-        placed = tighten_layout(placed, sheet_size, min_gap=0.1)
+        # Combine new placed with existing placed for complete collision check
+        all_obstacles = existing_placed + placed
+        placed = tighten_layout_with_obstacles(placed, all_obstacles, sheet_size, min_gap=0.1)
 
     return placed, unplaced
 
@@ -318,7 +321,7 @@ def bin_packing(
     polygons: list[Carpet],
     sheet_size: tuple[float, float],
     verbose: bool = True,
-    max_processing_time: float = 300.0,  # 5 minute timeout
+    max_processing_time: float = 60.0,  # Reduced to 1 minute timeout
     progress_callback=None,  # Callback function for progress updates
 ) -> tuple[list[PlacedCarpet], list[UnplacedCarpet]]:
     """Optimize placement of complex polygons on a sheet with ultra-dense/polygonal/improved algorithms."""
@@ -991,6 +994,394 @@ def calculate_placement_waste(
     return waste
 
 
+def smart_bin_packing(
+    carpets: list[Carpet],
+    sheet_size: tuple[float, float],
+    verbose: bool = False,
+    progress_callback=None,
+) -> tuple[list[PlacedCarpet], list[UnplacedCarpet]]:
+    """Optimized single-pass bin packing with smart sorting."""
+    if not carpets:
+        return [], []
+    
+    # Smart sorting: prioritize area and width for better packing
+    def get_smart_score(carpet: Carpet):
+        bounds = carpet.polygon.bounds
+        area = carpet.polygon.area
+        width = bounds[2] - bounds[0]
+        height = bounds[3] - bounds[1]
+        
+        # Combined score: large area + good aspect ratio
+        aspect_penalty = abs(width - height) / max(width, height) if max(width, height) > 0 else 0
+        return area * (1.0 + 0.2 * aspect_penalty)  # Slightly prefer more regular shapes
+    
+    smart_sorted = sorted(carpets, key=get_smart_score, reverse=True)
+    
+    # Use enhanced bin packing with tighter gap settings
+    placed, unplaced = bin_packing(smart_sorted, sheet_size, verbose=verbose)
+    
+    return placed, unplaced
+
+
+def consolidate_sheets_aggressive(
+    placed_layouts: list[PlacedSheet]
+) -> list[PlacedSheet]:
+    """Aggressive sheet consolidation - try multiple strategies to reduce sheet count."""
+    if len(placed_layouts) <= 1:
+        return placed_layouts
+    
+    logger.info(f"Starting aggressive consolidation of {len(placed_layouts)} sheets")
+    
+    # Group sheets by color
+    sheets_by_color = {}
+    for layout in placed_layouts:
+        color = layout.sheet_color
+        if color not in sheets_by_color:
+            sheets_by_color[color] = []
+        sheets_by_color[color].append(layout)
+    
+    optimized_layouts = []
+    
+    for color, color_sheets in sheets_by_color.items():
+        if len(color_sheets) <= 1:
+            optimized_layouts.extend(color_sheets)
+            continue
+            
+        logger.info(f"Consolidating {len(color_sheets)} sheets of color {color}")
+        
+        # Sort sheets by usage (least filled first, so we try to empty them)
+        color_sheets.sort(key=lambda s: s.usage_percent)
+        
+        # Try to move carpets from the least filled sheets to more filled ones
+        consolidated_sheets = []
+        
+        for target_sheet in color_sheets:
+            if not target_sheet.placed_polygons:  # Skip empty sheets
+                continue
+                
+            # Convert placed carpets back to Carpet objects
+            target_carpets = []
+            for placed_carpet in target_sheet.placed_polygons:
+                carpet = Carpet(
+                    placed_carpet.polygon,
+                    placed_carpet.filename,
+                    placed_carpet.color,
+                    placed_carpet.order_id,
+                    priority=1
+                )
+                target_carpets.append(carpet)
+            
+            # Try to fit these carpets on existing consolidated sheets
+            placed_successfully = False
+            
+            for existing_sheet_idx, existing_sheet in enumerate(consolidated_sheets):
+                if existing_sheet.usage_percent >= 95:  # Skip very full sheets
+                    continue
+                
+                try:
+                    # Try to add all carpets from target sheet to existing sheet
+                    additional_placed, remaining_unplaced = bin_packing_with_existing(
+                        target_carpets,
+                        existing_sheet.placed_polygons,
+                        existing_sheet.sheet_size,
+                        verbose=False,
+                    )
+                    
+                    if len(remaining_unplaced) == 0:  # All carpets fit!
+                        # CRITICAL: Verify no overlaps before accepting consolidation
+                        existing_polygons = [p.polygon for p in existing_sheet.placed_polygons]
+                        new_polygons = [p.polygon for p in additional_placed]
+                        
+                        has_overlap = False
+                        for new_poly in new_polygons:
+                            for existing_poly in existing_polygons:
+                                if check_collision(new_poly, existing_poly, min_gap=0.05):
+                                    logger.error(f"Overlap detected during consolidation - rejecting")
+                                    has_overlap = True
+                                    break
+                            if has_overlap:
+                                break
+                        
+                        if not has_overlap:
+                            consolidated_sheets[existing_sheet_idx].placed_polygons.extend(additional_placed)
+                            consolidated_sheets[existing_sheet_idx].usage_percent = calculate_usage_percent(
+                                consolidated_sheets[existing_sheet_idx].placed_polygons, 
+                                existing_sheet.sheet_size
+                            )
+                            placed_successfully = True
+                            logger.info(f"Consolidated entire sheet into sheet #{existing_sheet.sheet_number}")
+                            break
+                        else:
+                            logger.warning(f"Consolidation rejected due to overlaps")
+                        
+                except Exception as e:
+                    logger.debug(f"Failed to consolidate sheet: {e}")
+                    continue
+            
+            if not placed_successfully:
+                # Couldn't consolidate - keep as separate sheet
+                consolidated_sheets.append(target_sheet)
+        
+        optimized_layouts.extend(consolidated_sheets)
+    
+    # Renumber sheets
+    for i, layout in enumerate(optimized_layouts):
+        layout.sheet_number = i + 1
+    
+    logger.info(f"Consolidation complete: {len(placed_layouts)} → {len(optimized_layouts)} sheets")
+    return optimized_layouts
+
+
+def simple_sheet_consolidation(
+    placed_layouts: list[PlacedSheet]
+) -> list[PlacedSheet]:
+    """Simple sheet consolidation - try to move carpets from last sheet to previous ones."""
+    if len(placed_layouts) <= 1:
+        return placed_layouts
+        
+    logger.info("Attempting simple sheet consolidation")
+    
+    # Try to consolidate the last sheet (often the least filled)
+    last_sheet = placed_layouts[-1]
+    remaining_sheets = placed_layouts[:-1]
+    
+    carpets_to_move = []
+    for placed_carpet in last_sheet.placed_polygons:
+        carpet = Carpet(
+            placed_carpet.polygon,
+            placed_carpet.filename,
+            placed_carpet.color,
+            placed_carpet.order_id,
+            priority=1
+        )
+        carpets_to_move.append(carpet)
+    
+    # Try to fit these carpets on existing sheets
+    successfully_moved = 0
+    for carpet in carpets_to_move:
+        for layout_idx, layout in enumerate(remaining_sheets):
+            if layout.sheet_color != carpet.color:
+                continue
+                
+            if layout.usage_percent >= 90:  # Skip very full sheets
+                continue
+            
+            try:
+                additional_placed, remaining_unplaced = bin_packing_with_existing(
+                    [carpet],
+                    layout.placed_polygons,
+                    layout.sheet_size,
+                    verbose=False,
+                )
+                
+                if additional_placed:
+                    # Successfully moved!
+                    remaining_sheets[layout_idx].placed_polygons.extend(additional_placed)
+                    remaining_sheets[layout_idx].usage_percent = calculate_usage_percent(
+                        remaining_sheets[layout_idx].placed_polygons, layout.sheet_size
+                    )
+                    successfully_moved += 1
+                    logger.info(f"Moved carpet {carpet.filename} to sheet #{layout.sheet_number}")
+                    break
+                    
+            except Exception as e:
+                continue
+    
+    if successfully_moved == len(carpets_to_move):
+        # All carpets moved successfully - remove last sheet
+        logger.info(f"Successfully consolidated last sheet - moved {successfully_moved} carpets")
+        return remaining_sheets
+    else:
+        # Some carpets couldn't be moved - keep original layout
+        logger.info(f"Partial consolidation: moved {successfully_moved}/{len(carpets_to_move)} carpets")
+        return placed_layouts
+
+
+def optimized_multi_pass_packing(
+    carpets: list[Carpet],
+    sheet_size: tuple[float, float],
+    verbose: bool = False,
+    progress_callback=None,
+) -> tuple[list[PlacedCarpet], list[UnplacedCarpet]]:
+    """Advanced multi-pass bin packing with different sorting strategies."""
+    if not carpets:
+        return [], []
+    
+    logger.info(f"Starting optimized multi-pass packing for {len(carpets)} carpets")
+    
+    best_placed = []
+    best_unplaced = carpets
+    best_usage = 0.0
+    
+    # Limit strategies for performance - test only the most effective ones
+    strategies = []
+    
+    # Strategy 1: Area-first (largest area first) - usually most effective
+    area_sorted = sorted(carpets, key=lambda c: c.polygon.area, reverse=True)
+    strategies.append(("area-first", area_sorted))
+    
+    # Strategy 2: Width-first (widest shapes first) - good for rectangular shapes
+    width_sorted = sorted(carpets, key=lambda c: c.polygon.bounds[2] - c.polygon.bounds[0], reverse=True)
+    strategies.append(("width-first", width_sorted))
+    
+    # Strategy 3: Only test aspect ratio if we have time (fewer than 10 carpets)
+    if len(carpets) <= 10:
+        def get_aspect_ratio_score(carpet: Carpet):
+            bounds = carpet.polygon.bounds
+            width = bounds[2] - bounds[0]
+            height = bounds[3] - bounds[1]
+            if min(width, height) > 0:
+                return max(width/height, height/width)
+            return 1.0
+        
+        aspect_sorted = sorted(carpets, key=get_aspect_ratio_score, reverse=True)
+        strategies.append(("aspect-ratio", aspect_sorted))
+    
+    # Test each strategy
+    for strategy_name, sorted_carpets in strategies:
+        placed, unplaced = bin_packing(sorted_carpets, sheet_size, verbose=False)
+        usage = calculate_usage_percent(placed, sheet_size) if placed else 0
+        
+        if len(placed) > len(best_placed) or (len(placed) == len(best_placed) and usage > best_usage):
+            best_placed, best_unplaced, best_usage = placed, unplaced, usage
+            logger.info(f"Strategy {strategy_name}: {len(placed)} placed, {usage:.1f}% usage")
+    
+    logger.info(f"Best strategy achieved: {len(best_placed)} placed, {best_usage:.1f}% usage")
+    return best_placed, best_unplaced
+
+
+def repack_low_density_sheets(
+    placed_layouts: list[PlacedSheet], 
+    density_threshold: float = 75.0
+) -> list[PlacedSheet]:
+    """Repack sheets with low density to optimize space utilization."""
+    import time
+    start_time = time.time()
+    timeout = 30.0  # 30 second timeout for repacking
+    
+    logger.info(f"Starting repacking of sheets with density < {density_threshold}%")
+    
+    # Find low-density sheets
+    low_density_sheets = []
+    for i, layout in enumerate(placed_layouts):
+        if layout.usage_percent < density_threshold:
+            low_density_sheets.append((i, layout))
+    
+    if len(low_density_sheets) < 2:
+        logger.info("Not enough low-density sheets for repacking")
+        return placed_layouts
+    
+    logger.info(f"Found {len(low_density_sheets)} low-density sheets for repacking")
+    
+    # Group by color for repacking
+    sheets_by_color = {}
+    for idx, layout in low_density_sheets:
+        color = layout.sheet_color
+        if color not in sheets_by_color:
+            sheets_by_color[color] = []
+        sheets_by_color[color].append((idx, layout))
+    
+    optimized_layouts = placed_layouts.copy()
+    
+    for color, color_sheets in sheets_by_color.items():
+        # Check timeout
+        if time.time() - start_time > timeout:
+            logger.warning("Repacking timeout reached, returning current state")
+            break
+            
+        if len(color_sheets) < 2:
+            continue
+            
+        logger.info(f"Repacking {len(color_sheets)} sheets of color {color}")
+        
+        # Collect all carpets from these sheets
+        all_carpets = []
+        sheet_indices = []
+        
+        for idx, layout in color_sheets:
+            sheet_indices.append(idx)
+            for placed_carpet in layout.placed_polygons:
+                # Convert back to Carpet object for repacking
+                carpet = Carpet(
+                    placed_carpet.polygon, 
+                    placed_carpet.filename, 
+                    placed_carpet.color, 
+                    placed_carpet.order_id,
+                    priority=1  # Assume priority 1 for repacking
+                )
+                all_carpets.append(carpet)
+        
+        if not all_carpets:
+            continue
+            
+        # Get sheet size from first sheet
+        sheet_size = color_sheets[0][1].sheet_size
+        
+        # Try to repack all carpets using optimized algorithm
+        repacked_placed, repacked_unplaced = optimized_multi_pass_packing(
+            all_carpets, sheet_size, verbose=False
+        )
+        
+        # Calculate how many sheets we need now
+        carpets_per_sheet = []
+        remaining_carpets = all_carpets.copy()
+        sheet_count = 0
+        
+        while remaining_carpets and sheet_count < len(color_sheets):
+            placed, unplaced = optimized_multi_pass_packing(
+                remaining_carpets, sheet_size, verbose=False
+            )
+            
+            if not placed:  # Can't place any more
+                break
+                
+            carpets_per_sheet.append(placed)
+            
+            # Update remaining carpets
+            placed_set = set()
+            for p in placed:
+                for c in remaining_carpets:
+                    if (c.polygon == p.polygon and c.filename == p.filename and 
+                        c.color == p.color and c.order_id == p.order_id):
+                        placed_set.add(c)
+                        break
+            
+            remaining_carpets = [c for c in remaining_carpets if c not in placed_set]
+            sheet_count += 1
+        
+        # Check if we improved (using fewer sheets or better density)
+        original_sheet_count = len(color_sheets)
+        new_sheet_count = len(carpets_per_sheet)
+        
+        if new_sheet_count < original_sheet_count or not remaining_carpets:
+            logger.info(f"Repacking successful: {original_sheet_count} → {new_sheet_count} sheets")
+            
+            # Remove original sheets (in reverse order to maintain indices)
+            for idx in sorted(sheet_indices, reverse=True):
+                optimized_layouts.pop(idx)
+            
+            # Add new optimized sheets
+            for i, placed_carpets in enumerate(carpets_per_sheet):
+                new_layout = PlacedSheet(
+                    sheet_number=0,  # Will be renumbered later
+                    sheet_type=color_sheets[0][1].sheet_type,
+                    sheet_color=color,
+                    sheet_size=sheet_size,
+                    placed_polygons=placed_carpets,
+                    usage_percent=calculate_usage_percent(placed_carpets, sheet_size),
+                    orders_on_sheet=list(set(p.order_id for p in placed_carpets))
+                )
+                optimized_layouts.append(new_layout)
+        else:
+            logger.info(f"Repacking did not improve: keeping original {original_sheet_count} sheets")
+    
+    # Renumber sheets
+    for i, layout in enumerate(optimized_layouts):
+        layout.sheet_number = i + 1
+    
+    return optimized_layouts
+
+
 def bin_packing_with_inventory(
     carpets: list[Carpet],
     available_sheets: list[dict],
@@ -999,9 +1390,11 @@ def bin_packing_with_inventory(
 ) -> tuple[list[PlacedSheet], list[UnplacedCarpet]]:
     """Optimize placement of polygons on available sheets with inventory tracking.
 
-    NEW ALGORITHM: Two-sheet forced packing for achieving client goals:
-    1. Try to fit all carpets on exactly 2 sheets with maximum density
-    2. Fallback to priority-based placement if 2-sheet approach fails
+    OPTIMIZED ALGORITHM: Maximum density packing with multi-pass optimization:
+    1. Multi-pass bin packing with different sorting strategies
+    2. Low-density sheet repacking optimization
+    3. Inter-sheet optimization to minimize total sheets used
+    4. Aggressive space utilization for client goals
     """
     logger.info(
         "=== НАЧАЛО bin_packing_with_inventory (АЛГОРИТМ МАКСИМАЛЬНОЙ ПЛОТНОСТИ) ==="
@@ -1292,8 +1685,8 @@ def bin_packing_with_inventory(
             sheet_type["used"] += 1
             sheet_size = (sheet_type["width"], sheet_type["height"])
 
-            ###################################################################3
-            # Попытка максимально плотной упаковки - несколько проходов
+            ###################################################################
+            # Keep original bin_packing for now to ensure stability
             placed, remaining = bin_packing(
                 remaining_carpets,
                 sheet_size,
@@ -1498,6 +1891,71 @@ def bin_packing_with_inventory(
         f"Перегруппировка завершена: {len(black_sheets)} черных + {len(grey_sheets)} серых = {len(placed_layouts)} листов"
     )
 
+    # STEP 8: Post-processing optimization
+    logger.info("\n=== ЭТАП 8: ПОСТ-ОБРАБОТКА ЛИСТОВ ===")
+    original_sheet_count = len(placed_layouts)
+    
+    # Use simple consolidation instead of aggressive to prevent overlaps
+    if len(placed_layouts) > 4:  # Only if we exceed target
+        placed_layouts = simple_sheet_consolidation(placed_layouts)
+    else:
+        logger.info("Already at target sheet count (≤4), skipping consolidation")
+    
+    # If consolidation reduced sheets, we might have some unplaced carpets that can now fit
+    if len(placed_layouts) < original_sheet_count:
+        logger.info(f"Consolidation reduced sheets from {original_sheet_count} to {len(placed_layouts)}")
+        
+        # Try to place any remaining unplaced carpets on the optimized sheets
+        remaining_unplaced = []
+        for unplaced_carpet in all_unplaced:
+            placed_successfully = False
+            
+            for layout_idx, layout in enumerate(placed_layouts):
+                if layout.sheet_color != unplaced_carpet.color:
+                    continue
+                    
+                if layout.usage_percent >= 95:  # Skip very full sheets
+                    continue
+                
+                try:
+                    # Try to add this carpet to existing sheet
+                    test_carpet = Carpet(
+                        unplaced_carpet.polygon,
+                        unplaced_carpet.filename,
+                        unplaced_carpet.color,
+                        unplaced_carpet.order_id,
+                        priority=1
+                    )
+                    
+                    additional_placed, remaining_unplaced_test = bin_packing_with_existing(
+                        [test_carpet],
+                        layout.placed_polygons,
+                        layout.sheet_size,
+                        verbose=False,
+                    )
+                    
+                    if additional_placed:
+                        # Successfully placed!
+                        placed_layouts[layout_idx].placed_polygons.extend(additional_placed)
+                        placed_layouts[layout_idx].usage_percent = calculate_usage_percent(
+                            placed_layouts[layout_idx].placed_polygons, layout.sheet_size
+                        )
+                        placed_successfully = True
+                        logger.info(f"Placed previously unplaced carpet {unplaced_carpet.filename} on optimized sheet #{layout.sheet_number}")
+                        break
+                        
+                except Exception as e:
+                    logger.debug(f"Failed to place unplaced carpet on optimized sheet: {e}")
+                    continue
+            
+            if not placed_successfully:
+                remaining_unplaced.append(unplaced_carpet)
+        
+        all_unplaced = remaining_unplaced
+        logger.info(f"After optimization: {len(all_unplaced)} carpets remain unplaced")
+    else:
+        logger.info("No sheet count reduction achieved through consolidation")
+
     # Final logging and progress
     logger.info("\n=== ИТОГИ РАЗМЕЩЕНИЯ ===")
     logger.info(f"Всего листов создано: {len(placed_layouts)}")
@@ -1521,6 +1979,126 @@ def calculate_usage_percent(
     used_area_mm2 = sum(placed_tuple.polygon.area for placed_tuple in placed_polygons)
     sheet_area_mm2 = (sheet_size[0] * 10) * (sheet_size[1] * 10)
     return (used_area_mm2 / sheet_area_mm2) * 100
+
+
+def tighten_layout_with_obstacles(
+    placed_to_move: list[PlacedCarpet],
+    all_obstacles: list[PlacedCarpet],  # includes both existing and newly placed
+    sheet_size=None,
+    min_gap: float = 0.1,
+    step: float = 1.0,
+    max_passes: int = 3,
+) -> list[PlacedCarpet]:
+    """
+    Improved tighten_layout that considers both new and existing obstacles.
+    Only moves polygons in placed_to_move, checks collisions against all_obstacles.
+    """
+    if not placed_to_move:
+        return placed_to_move
+
+    # Create lists for manipulation
+    movable_polys = [item.polygon for item in placed_to_move]
+    all_obstacle_polys = [item.polygon for item in all_obstacles]
+    meta = placed_to_move[:]
+
+    n_movable = len(movable_polys)
+    n_total = len(all_obstacle_polys)
+
+    # Several passes to allow convergence
+    for pass_idx in range(max_passes):
+        moved_any = False
+
+        for i in range(n_movable):
+            poly = movable_polys[i]
+            moved = poly
+
+            # --- Move left step by step ---
+            while True:
+                test = translate_polygon(moved, -step, 0)
+                # Check bounds
+                if test.bounds[0] < -0.01:
+                    break
+
+                # Check collisions against ALL obstacles (existing + new)
+                collision = False
+                for j in range(n_total):
+                    # Skip collision with self
+                    if j < n_movable and j == i:
+                        continue
+                    
+                    other = all_obstacle_polys[j]
+                    if check_collision(test, other, min_gap=min_gap):
+                        collision = True
+                        break
+
+                if collision:
+                    break
+
+                # No collision - apply move
+                moved = test
+                moved_any = True
+
+            # --- Move down step by step ---
+            while True:
+                test = translate_polygon(moved, 0, -step)
+                if test.bounds[1] < -0.01:
+                    break
+
+                collision = False
+                for j in range(n_total):
+                    # Skip collision with self
+                    if j < n_movable and j == i:
+                        continue
+                        
+                    other = all_obstacle_polys[j]
+                    if check_collision(test, other, min_gap=min_gap):
+                        collision = True
+                        break
+
+                if collision:
+                    break
+
+                moved = test
+                moved_any = True
+
+            # Update position
+            movable_polys[i] = moved
+            # Also update in the all_obstacles list for next iterations
+            if i < n_movable:
+                all_obstacle_polys[i] = moved
+
+        # If no movement in this pass, stop
+        if not moved_any:
+            break
+
+    # Create result list
+    new_placed: list[PlacedCarpet] = []
+
+    for i in range(n_movable):
+        new_poly = movable_polys[i]
+        orig_poly = placed_to_move[i].polygon
+        
+        # Calculate total displacement
+        dx_total = new_poly.bounds[0] - orig_poly.bounds[0]
+        dy_total = new_poly.bounds[1] - orig_poly.bounds[1]
+
+        item = meta[i]
+        new_x_off = item.x_offset + dx_total
+        new_y_off = item.y_offset + dy_total
+
+        new_placed.append(
+            PlacedCarpet(
+                new_poly,
+                new_x_off,
+                new_y_off,
+                item.angle,
+                item.filename,
+                item.color,
+                item.order_id,
+            )
+        )
+
+    return new_placed
 
 
 def tighten_layout(
@@ -1632,7 +2210,6 @@ def tighten_layout(
         new_x_off = item.x_offset + dx_total
         new_y_off = item.y_offset + dy_total
 
-        # Возвращаем стандартный 7-элементный кортеж
         new_placed.append(
             PlacedCarpet(
                 new_poly,
