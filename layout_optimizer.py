@@ -1478,17 +1478,15 @@ def bin_packing_with_inventory(
                     if remaining_carpet in remaining_carpet_map:
                         newly_remaining.add(remaining_carpet_map[remaining_carpet])
 
-                # Remove placed carpets from remaining list
+                # Remove placed carpets from remaining list - FIXED: Use Carpet objects directly
                 placed_carpet_set = set(
-                    UnplacedCarpet(c.polygon, c.filename, c.color, c.order_id)
-                    for c in matching_carpets
+                    c for c in matching_carpets
                     if c not in newly_remaining
                 )
                 remaining_priority1 = [
                     c
                     for c in remaining_priority1
-                    if UnplacedCarpet(c.polygon, c.filename, c.color, c.order_id)
-                    not in placed_carpet_set
+                    if c not in placed_carpet_set
                 ]
 
                 logger.info(
@@ -1823,17 +1821,19 @@ def bin_packing_with_inventory(
                         placed_layouts[layout_idx].placed_polygons,
                         layout.sheet_size,
                     )
-                    # Update remaining - SIMPLIFIED approach using filename comparison
-                    # Create set of successfully placed carpet filenames
-                    placed_filenames = set()
+                    # Update remaining - ROBUST approach using carpet object comparison
+                    # Create set of successfully placed carpet identifiers  
+                    placed_carpet_ids = set()
                     for placed_carpet in additional_placed:
-                        placed_filenames.add(placed_carpet.filename)
+                        # Create a matching Carpet object for comparison
+                        carpet_id = (placed_carpet.filename, placed_carpet.color, placed_carpet.order_id)
+                        placed_carpet_ids.add(carpet_id)
                     
                     # Remove carpets from remaining_priority2 that were successfully placed
                     old_remaining_count = len(remaining_priority2)
                     remaining_priority2 = [
                         c for c in remaining_priority2 
-                        if c.filename not in placed_filenames
+                        if (c.filename, c.color, c.order_id) not in placed_carpet_ids
                     ]
                     new_remaining_count = len(remaining_priority2)
                     logger.info(

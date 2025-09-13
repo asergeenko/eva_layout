@@ -40,7 +40,7 @@ def test_priority2_placement():
     polygon_data = parse_dxf_complete(dxf_file.as_posix(), verbose=False)
     if polygon_data and polygon_data.get("combined_polygon"):
         base_polygon = polygon_data["combined_polygon"]
-        for i in range(10):
+        for i in range(15):
             priority2_polygons.append(Carpet(base_polygon, f"{dxf_file.name}_копия_{i}", "чёрный", f"group_2", 2))
 
     all_polygons = priority1_polygons + priority2_polygons
@@ -58,7 +58,12 @@ def test_priority2_placement():
 
     # Вычисляем общую площадь ковриков (ИСПРАВЛЕНО: используем all_polygons)
     total_carpet_area_mm2 = sum(carpet.polygon.area for carpet in all_polygons)
-    placed_carpet_area_mm2 = sum(carpet.polygon.area for carpet in all_polygons if carpet not in unplaced)
+    # FIXED: Convert unplaced to set of identifiers for proper comparison
+    unplaced_ids = set((u.filename, u.color, u.order_id) for u in unplaced)
+    placed_carpet_area_mm2 = sum(
+        carpet.polygon.area for carpet in all_polygons 
+        if (carpet.filename, carpet.color, carpet.order_id) not in unplaced_ids
+    )
 
     # Площадь листов
     sheet_area_mm2 = (available_sheets[0]['width'] * 10) * (available_sheets[0]['height'] * 10)
