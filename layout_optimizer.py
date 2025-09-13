@@ -1823,27 +1823,19 @@ def bin_packing_with_inventory(
                         placed_layouts[layout_idx].placed_polygons,
                         layout.sheet_size,
                     )
-
-                    # Update remaining
-                    remaining_carpet_map = {
-                        UnplacedCarpet(c.polygon, c.filename, c.color, c.order_id): c
-                        for c in matching_carpets
-                    }
-                    newly_remaining = []
-                    for carpet in remaining_unplaced:
-                        if carpet in remaining_carpet_map:
-                            newly_remaining.append(remaining_carpet_map[carpet])
-
-                    # Remove placed carpets from remaining list
-                    placed_carpet_set = set(
-                        c for c in matching_carpets if c not in newly_remaining
-                    )
+                    # Update remaining - SIMPLIFIED approach using filename comparison
+                    # Create set of successfully placed carpet filenames
+                    placed_filenames = set()
+                    for placed_carpet in additional_placed:
+                        placed_filenames.add(placed_carpet.filename)
+                    
+                    # Remove carpets from remaining_priority2 that were successfully placed
+                    old_remaining_count = len(remaining_priority2)
                     remaining_priority2 = [
-                        c
-                        for c in remaining_priority2
-                        if (c.polygon, c.filename, c.color, c.order_id)
-                        not in placed_carpet_set
+                        c for c in remaining_priority2 
+                        if c.filename not in placed_filenames
                     ]
+                    new_remaining_count = len(remaining_priority2)
                     logger.info(
                         f"    Дозаполнен лист #{layout.sheet_number}: +{len(additional_placed)} приоритет2"
                     )
