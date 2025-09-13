@@ -291,6 +291,9 @@ def bin_packing_with_existing(
                     file_name,
                     color,
                     order_id,
+                    carpet.carpet_id,
+                    carpet.priority,
+
                 )
             )
             # Add this polygon as an obstacle for subsequent placements
@@ -298,7 +301,7 @@ def bin_packing_with_existing(
             placed_successfully = True
 
         if not placed_successfully:
-            unplaced.append(UnplacedCarpet(polygon, file_name, color, order_id))
+            unplaced.append(UnplacedCarpet.from_carpet(carpet))
 
         # ПРОФИЛИРОВАНИЕ: Логируем время обработки медленных полигонов
         polygon_elapsed = time.time() - polygon_start_time
@@ -382,9 +385,7 @@ def bin_packing(
                     f"⏰ Превышено время обработки ({max_processing_time}s), остальные полигоны добавлены в неразмещенные"
                 )
             unplaced.extend(
-                UnplacedCarpet(
-                    carpet.polygon, carpet.filename, carpet.color, carpet.order_id
-                )
+                UnplacedCarpet.from_carpet(carpet)
                 for carpet in sorted_polygons[i:]
             )
             break
@@ -401,11 +402,7 @@ def bin_packing(
                 st.warning(
                     f"Полигон из {carpet.filename} слишком большой: {poly_width/10:.1f}x{poly_height/10:.1f} см > {sheet_size[0]}x{sheet_size[1]} см"
                 )
-            unplaced.append(
-                UnplacedCarpet(
-                    carpet.polygon, carpet.filename, carpet.color, carpet.order_id
-                )
-            )
+            unplaced.append(UnplacedCarpet.from_carpet(carpet))
             continue
 
         # SPEED OPTIMIZATION: Smart rotation strategy
@@ -460,6 +457,8 @@ def bin_packing(
                     carpet.filename,
                     carpet.color,
                     carpet.order_id,
+                    carpet.carpet_id,
+                    carpet.priority,
                 )
             )
             placed_successfully = True
@@ -532,6 +531,8 @@ def bin_packing(
                                 carpet.filename,
                                 carpet.color,
                                 carpet.order_id,
+                                carpet.carpet_id,
+                                carpet.priority
                             )
                         )
                         placed_successfully = True
@@ -1470,7 +1471,7 @@ def bin_packing_with_inventory(
 
                 # Update remaining
                 remaining_carpet_map = {
-                    UnplacedCarpet(c.polygon, c.filename, c.color, c.order_id): c
+                    UnplacedCarpet.from_carpet(c): c
                     for c in matching_carpets
                 }
                 newly_remaining = set()
@@ -1532,7 +1533,7 @@ def bin_packing_with_inventory(
                     best_placed = []
                     best_remaining = matching_carpets
                     remaining_carpet_map = {
-                        UnplacedCarpet(c.polygon, c.filename, c.color, c.order_id): c
+                        UnplacedCarpet.from_carpet(c): c
                         for c in matching_carpets
                     }
 
@@ -1676,7 +1677,7 @@ def bin_packing_with_inventory(
             sheet_type = find_available_sheet_of_color(color, sheet_inventory)
             if not sheet_type:
                 logger.warning(f"Нет доступных листов цвета {color} для приоритета 1")
-                all_unplaced.extend(remaining_carpets)
+                all_unplaced.extend(UnplacedCarpet.from_carpet(carpet) for carpet in remaining_carpets)
                 break
 
             sheet_counter += 1
@@ -1728,7 +1729,7 @@ def bin_packing_with_inventory(
                 logger.warning(
                     f"Не удалось разместить приоритет 1 на новом листе {color}"
                 )
-                all_unplaced.extend(remaining_carpets)
+                all_unplaced.extend(UnplacedCarpet.from_carpet(carpet) for carpet in remaining_carpets)
                 sheet_type["used"] -= 1
                 sheet_counter -= 1
                 break
@@ -1853,7 +1854,7 @@ def bin_packing_with_inventory(
         logger.info(
             f"Остается неразмещенными {len(remaining_priority2)} приоритет2 (новые листы не создаются)"
         )
-        all_unplaced.extend(remaining_priority2)
+        all_unplaced.extend(UnplacedCarpet.from_carpet(carpet) for carpet in remaining_priority2)
 
     # STEP 7: Sort sheets by color (group black together, then grey)
     logger.info("\n=== ЭТАП 7: ГРУППИРОВКА ЛИСТОВ ПО ЦВЕТАМ ===")
@@ -2087,6 +2088,8 @@ def tighten_layout_with_obstacles(
                 item.filename,
                 item.color,
                 item.order_id,
+                item.carpet_id,
+                item.priority,
             )
         )
 
@@ -2211,6 +2214,8 @@ def tighten_layout(
                 item.filename,
                 item.color,
                 item.order_id,
+                item.carpet_id,
+                item.priority,
             )
         )
 

@@ -46,11 +46,11 @@ def test_golf_plus():
 
     # Вычисляем общую площадь ковриков
     total_carpet_area_mm2 = sum(carpet.polygon.area for carpet in priority1_polygons)
-    # FIXED: Convert unplaced to set of identifiers for proper comparison
-    unplaced_ids = set((u.filename, u.color, u.order_id) for u in unplaced)
+    # FIXED: Convert unplaced to set of carpet_ids for proper comparison
+    unplaced_ids = set(u.carpet_id for u in unplaced)
     placed_carpet_area_mm2 = sum(
         carpet.polygon.area for carpet in priority1_polygons 
-        if (carpet.filename, carpet.color, carpet.order_id) not in unplaced_ids
+        if carpet.carpet_id not in unplaced_ids
     )
 
     # Площадь листов
