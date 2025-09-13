@@ -246,11 +246,59 @@ def bin_packing_with_existing(
             )
 
             if best_x is not None and best_y is not None:
-                # MAXIMUM LEFT PRIORITY: Strongly favor left positions over bottom positions
-                tetris_priority = best_y * 10 + best_x * 100  # X position much more important than Y!
+                # TETRIS STRATEGY: Prioritize orientations that create more space
 
-                if tetris_priority < best_priority:
-                    best_priority = tetris_priority
+                # Base position score (prefer bottom-left)
+                position_score = best_y * 10 + best_x * 100
+
+                # УЛУЧШЕННЫЙ ТЕТРИС: Более чувствительная оценка aspect ratio
+                shape_bonus = 0
+                aspect_ratio = rotated_width / rotated_height if rotated_height > 0 else 1
+
+                # Bonus for longest side horizontal (along bottom/top edges)
+                if aspect_ratio > 1.05:  # Даже слегка широкие получают бонус
+                    # Прогрессивный бонус в зависимости от степени "широкости"
+                    width_bonus = min(2000, int((aspect_ratio - 1) * 2000))
+                    shape_bonus -= width_bonus
+
+                    # Extra bonus if touching bottom edge (creating clean horizontal line)
+                    if best_y < 5:  # Within 5mm of bottom
+                        shape_bonus -= 3000  # Увеличенный бонус за касание низа
+
+                    # Extra bonus if touching left edge (creating clean vertical line)
+                    if best_x < 5:  # Within 5mm of left
+                        shape_bonus -= 2000  # Увеличенный бонус за касание левого края
+
+                # Penalty for tall orientations (мы хотим горизонтальные)
+                elif aspect_ratio < 0.95:  # Высокие получают штраф
+                    height_penalty = min(1000, int((1 - aspect_ratio) * 1000))
+                    shape_bonus += height_penalty  # Штраф вместо бонуса
+
+                # УСИЛЕННОЕ ОСВОБОЖДЕНИЕ ПРОСТРАНСТВА: Максимизируем свободные прямоугольные области
+                remaining_right_space = sheet_width_mm - (best_x + rotated_width)
+                remaining_top_space = sheet_height_mm - (best_y + rotated_height)
+
+                # Бонус за освобождение больших прямоугольных зон (улучшенный алгоритм)
+                if remaining_right_space > 100:  # Даже 10см справа ценны
+                    # Квадратичный бонус для больших областей
+                    space_bonus = min(5000, int(remaining_right_space * 3 + (remaining_right_space/100)**2 * 500))
+                    shape_bonus -= space_bonus
+
+                if remaining_top_space > 150:   # Даже 15см сверху полезны
+                    # Линейный бонус для верхнего пространства
+                    top_bonus = min(3000, int(remaining_top_space * 2))
+                    shape_bonus -= top_bonus
+
+                # СУПЕРСИЛА: Бонус за создание ОГРОМНЫХ свободных зон
+                total_free_area = remaining_right_space * remaining_top_space
+                if total_free_area > 100000:  # Больше 1000 см² свободной площади
+                    mega_bonus = min(10000, int(total_free_area / 200))
+                    shape_bonus -= mega_bonus
+
+                total_score = position_score + shape_bonus
+
+                if total_score < best_priority:
+                    best_priority = total_score
                     translated = translate_polygon(
                         rotated, best_x - rotated_bounds[0], best_y - rotated_bounds[1]
                     )
@@ -684,9 +732,9 @@ def bin_packing(
             unplaced.append(UnplacedCarpet.from_carpet(carpet))
             continue
 
-        # REVOLUTIONARY TETRIS ROTATION STRATEGY: Bottom-left priority
+        # REVOLUTIONARY TETRIS ROTATION STRATEGY: Optimize for space liberation
         best_placement = None
-        best_priority = float("inf")  # Lower is better (Y*1000 + X)
+        best_score = float("inf")  # Lower is better
 
         rotation_angles = [0, 90, 180, 270]
 
@@ -708,11 +756,49 @@ def bin_packing(
             )
 
             if best_x is not None and best_y is not None:
-                # MAXIMUM LEFT PRIORITY: Strongly favor left positions over bottom positions
-                tetris_priority = best_y * 10 + best_x * 100  # X position much more important than Y!
+                # TETRIS STRATEGY: Prioritize orientations that create more space
 
-                if tetris_priority < best_priority:
-                    best_priority = tetris_priority
+                # Base position score (prefer bottom-left)
+                position_score = best_y * 10 + best_x * 100
+
+                # УЛУЧШЕННЫЙ ТЕТРИС: Более чувствительная оценка aspect ratio
+                shape_bonus = 0
+                aspect_ratio = rotated_width / rotated_height if rotated_height > 0 else 1
+
+                # Bonus for longest side horizontal (along bottom/top edges)
+                if aspect_ratio > 1.05:  # Даже слегка широкие получают бонус
+                    # Прогрессивный бонус в зависимости от степени "широкости"
+                    width_bonus = min(2000, int((aspect_ratio - 1) * 2000))
+                    shape_bonus -= width_bonus
+
+                    # Extra bonus if touching bottom edge (creating clean horizontal line)
+                    if best_y < 5:  # Within 5mm of bottom
+                        shape_bonus -= 3000  # Увеличенный бонус за касание низа
+
+                    # Extra bonus if touching left edge (creating clean vertical line)
+                    if best_x < 5:  # Within 5mm of left
+                        shape_bonus -= 2000  # Увеличенный бонус за касание левого края
+
+                # Penalty for tall orientations (мы хотим горизонтальные)
+                elif aspect_ratio < 0.95:  # Высокие получают штраф
+                    height_penalty = min(1000, int((1 - aspect_ratio) * 1000))
+                    shape_bonus += height_penalty  # Штраф вместо бонуса
+
+                # SPACE LIBERATION BONUS: Prefer orientations that leave more rectangular space
+                # Calculate remaining space quality
+                remaining_right_space = sheet_width_mm - (best_x + rotated_width)
+                remaining_top_space = sheet_height_mm - (best_y + rotated_height)
+
+                # Bonus for leaving large rectangular areas
+                if remaining_right_space > 200:  # More than 20cm right
+                    shape_bonus -= remaining_right_space * 2
+                if remaining_top_space > 300:   # More than 30cm top
+                    shape_bonus -= remaining_top_space * 1
+
+                total_score = position_score + shape_bonus
+
+                if total_score < best_score:
+                    best_score = total_score
                     translated = translate_polygon(
                         rotated, best_x - rotated_bounds[0], best_y - rotated_bounds[1]
                     )
