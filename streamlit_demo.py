@@ -950,7 +950,7 @@ if st.button("🚀 Оптимизировать раскрой"):
         try:
             # Actual processing with progress tracking
             st.info("🔄 Запуск процесса оптимизации...")
-            optimization_progress = st.progress(0)
+            optimization_progress = st.progress(10)
             optimization_status = st.empty()
 
             logger.info(

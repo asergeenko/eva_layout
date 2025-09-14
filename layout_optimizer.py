@@ -2552,11 +2552,18 @@ def bin_packing_with_inventory(
     remaining_priority1: list[Carpet] = list(priority1_carpets)
 
     # First try to fill existing sheets with priority 1 carpets
-    for layout_idx, layout in enumerate(placed_layouts):
+    # Sort layouts by usage percent to fill least-filled sheets first
+    layout_indices_by_usage = sorted(
+        range(len(placed_layouts)),
+        key=lambda i: placed_layouts[i].usage_percent
+    )
+
+    for layout_idx in layout_indices_by_usage:
         if not remaining_priority1:
             break
+        layout = placed_layouts[layout_idx]
         if (
-            layout.usage_percent >= 95
+            layout.usage_percent >= 85  # Lowered threshold for better filling
         ):  # More aggressive filling - try harder to use existing sheets
             continue
 
@@ -2854,11 +2861,18 @@ def bin_packing_with_inventory(
 
     remaining_priority2 = list(priority2_carpets)
 
-    for layout_idx, layout in enumerate(placed_layouts):
+    # Sort layouts by usage percent to fill least-filled sheets first
+    layout_indices_by_usage = sorted(
+        range(len(placed_layouts)),
+        key=lambda i: placed_layouts[i].usage_percent
+    )
+
+    for layout_idx in layout_indices_by_usage:
         if not remaining_priority2:
             break
+        layout = placed_layouts[layout_idx]
         if (
-            layout.usage_percent >= 95
+            layout.usage_percent >= 80  # Lower threshold for priority 2 to maximize filling
         ):  # More aggressive filling - try harder to use existing sheets
             continue
 
@@ -2868,6 +2882,10 @@ def bin_packing_with_inventory(
         ]
         if not matching_carpets:
             continue
+
+        # CRITICAL: Sort small carpets first for better gap-filling
+        # Small carpets fit better into remaining spaces
+        matching_carpets.sort(key=lambda c: c.polygon.area)
 
         try:
             additional_placed, remaining_unplaced = bin_packing_with_existing(
@@ -2962,10 +2980,59 @@ def bin_packing_with_inventory(
             logger.debug(f"Не удалось дозаполнить лист приоритетом 2: {e}")
             continue
 
+    # AGGRESSIVE PASS: Try to place remaining small priority 2 carpets on any compatible sheet
+    if remaining_priority2:
+        logger.info(f"\n=== АГРЕССИВНОЕ ДОЗАПОЛНЕНИЕ: {len(remaining_priority2)} приоритет2 ===")
+
+        # Focus on small carpets only for this aggressive pass
+        small_carpets = [c for c in remaining_priority2 if c.polygon.area < 50000]  # 500cm²
+
+        if small_carpets:
+            logger.info(f"Пытаемся агрессивно разместить {len(small_carpets)} маленьких ковров")
+
+            # Sort by smallest first
+            small_carpets.sort(key=lambda c: c.polygon.area)
+
+            # Try each small carpet on every compatible sheet
+            for carpet in small_carpets[:]:  # copy list to avoid modification issues
+                placed = False
+                for layout_idx, layout in enumerate(placed_layouts):
+                    if layout.sheet_color != carpet.color:
+                        continue
+
+                    if layout.usage_percent >= 95:  # Only skip if very full
+                        continue
+
+                    try:
+                        test_placed, _ = bin_packing_with_existing(
+                            [carpet],
+                            layout.placed_polygons,
+                            layout.sheet_size,
+                            verbose=False,
+                            tighten=False,
+                        )
+
+                        if test_placed:
+                            # Success! Add to sheet
+                            placed_layouts[layout_idx].placed_polygons.extend(test_placed)
+                            placed_layouts[layout_idx].usage_percent = calculate_usage_percent(
+                                placed_layouts[layout_idx].placed_polygons,
+                                layout.sheet_size,
+                            )
+                            remaining_priority2.remove(carpet)
+                            placed = True
+                            logger.info(f"    Агрессивно размещен {carpet.filename} на лист #{layout.sheet_number}")
+                            break
+                    except Exception:
+                        continue
+
+                if placed:
+                    continue
+
     # Add any remaining priority 2 to unplaced (no new sheets allowed)
     if remaining_priority2:
         logger.info(
-            f"Остается неразмещенными {len(remaining_priority2)} приоритет2 (новые листы не создаются)"
+            f"Остается неразмещенными {len(remaining_priority2)} приоритет2 после агрессивного дозаполнения"
         )
         all_unplaced.extend(UnplacedCarpet.from_carpet(carpet) for carpet in remaining_priority2)
 
