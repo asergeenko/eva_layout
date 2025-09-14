@@ -666,21 +666,62 @@ def rotate_polygon(polygon: Polygon, angle: float) -> Polygon:
     # Rotate around centroid instead of corner to avoid positioning issues
     rotated = affinity.rotate(polygon, angle, origin=rotation_origin)
 
-    # Ensure the rotated polygon is valid
-    if not rotated.is_valid:
+    # CRITICAL FIX: More robust polygon validation and repair
+    if not rotated.is_valid or not rotated.is_simple:
         try:
-            # Try to fix invalid geometry
-            rotated = rotated.buffer(0)
+            # Multiple repair attempts
+            # 1. Standard buffer repair
+            fixed = rotated.buffer(0)
+            if fixed.is_valid and fixed.is_simple:
+                return fixed
+
+            # 2. Small buffer repair
+            fixed = rotated.buffer(0.001)
+            if fixed.is_valid and fixed.is_simple:
+                return fixed
+
+            # 3. Convex hull as last resort
+            fixed = rotated.convex_hull
+            if fixed.is_valid and fixed.is_simple:
+                return fixed
+
         except Exception:
-            # If fixing fails, return original polygon
+            pass
+
+        # If all repairs fail, try the original polygon
+        if polygon.is_valid and polygon.is_simple:
             return polygon
+
+        # Last resort: try to repair the original
+        try:
+            fixed_original = polygon.buffer(0)
+            if fixed_original.is_valid:
+                return fixed_original
+        except Exception:
+            pass
 
     return rotated
 
 
 def translate_polygon(polygon: Polygon, x: float, y: float) -> Polygon:
     """Translate a polygon to a new position."""
-    return affinity.translate(polygon, xoff=x, yoff=y)
+    translated = affinity.translate(polygon, xoff=x, yoff=y)
+
+    # CRITICAL FIX: Ensure translated polygon is valid
+    if not translated.is_valid or not translated.is_simple:
+        try:
+            # Try to repair
+            fixed = translated.buffer(0)
+            if fixed.is_valid:
+                return fixed
+        except Exception:
+            pass
+
+        # If repair fails, return original if it's valid
+        if polygon.is_valid:
+            return polygon
+
+    return translated
 
 
 def place_polygon_at_origin(polygon: Polygon) -> Polygon:
