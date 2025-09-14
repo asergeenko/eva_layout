@@ -666,21 +666,56 @@ def rotate_polygon(polygon: Polygon, angle: float) -> Polygon:
     # Rotate around centroid instead of corner to avoid positioning issues
     rotated = affinity.rotate(polygon, angle, origin=rotation_origin)
 
-    # Ensure the rotated polygon is valid
+    # CONSERVATIVE FIX: Only repair if necessary, preserve geometry when possible
     if not rotated.is_valid:
         try:
-            # Try to fix invalid geometry
-            rotated = rotated.buffer(0)
+            # Try minimal buffer repair first
+            fixed = rotated.buffer(0)
+            if fixed.is_valid:
+                return fixed
+
+            # Try tiny buffer if needed
+            fixed = rotated.buffer(0.001)
+            if fixed.is_valid:
+                return fixed
+
         except Exception:
-            # If fixing fails, return original polygon
+            pass
+
+        # If repair fails, return original only if it's valid
+        if polygon.is_valid:
             return polygon
 
+    # Return rotated result even if not perfectly valid - it's usually fine for collision detection
     return rotated
 
 
 def translate_polygon(polygon: Polygon, x: float, y: float) -> Polygon:
     """Translate a polygon to a new position."""
-    return affinity.translate(polygon, xoff=x, yoff=y)
+    translated = affinity.translate(polygon, xoff=x, yoff=y)
+
+    # CONSERVATIVE FIX: Only repair if necessary, preserve translation accuracy
+    if not translated.is_valid:
+        try:
+            # Try minimal buffer repair
+            fixed = translated.buffer(0)
+            if fixed.is_valid:
+                return fixed
+
+            # Try tiny buffer if needed
+            fixed = translated.buffer(0.001)
+            if fixed.is_valid:
+                return fixed
+
+        except Exception:
+            pass
+
+        # If repair fails, return original only if it's valid
+        if polygon.is_valid:
+            return polygon
+
+    # Return translated result - preserve the translation even if not perfectly valid
+    return translated
 
 
 def place_polygon_at_origin(polygon: Polygon) -> Polygon:
@@ -1702,8 +1737,12 @@ def find_contour_following_position(
                     ):
                         candidates.append((test_x, test_y))
 
-    # Add sheet edges
-    step = max(1.0, min(poly_width, poly_height) / 10)  # Adaptive step
+    # Add sheet edges with adaptive step for small polygons
+    polygon_size = poly_width * poly_height
+    is_small = polygon_size < 10000  # 100mm x 100mm
+
+    step = 0.5 if is_small else max(1.0, min(poly_width, poly_height) / 10)
+
     for x in np.arange(0, sheet_width - poly_width + 1, step):
         candidates.append((x, 0))
     for y in np.arange(0, sheet_height - poly_height + 1, step):
@@ -1712,7 +1751,10 @@ def find_contour_following_position(
     # Sort by bottom-left preference and limit candidates
     candidates = list(set(candidates))  # Remove duplicates
     candidates.sort(key=lambda pos: (pos[1], pos[0]))
-    candidates = candidates[: min(1000, len(candidates))]  # Performance limit
+
+    # Increase limit for small polygons to improve placement success
+    max_candidates = 1500 if is_small else 1000
+    candidates = candidates[: min(max_candidates, len(candidates))]
 
     # Test each position using true geometric collision detection
     for x, y in candidates:
@@ -1750,17 +1792,28 @@ def find_ultra_tight_position(
     poly_width = bounds[2] - bounds[0]
     poly_height = bounds[3] - bounds[1]
 
-    # Use fine grid for small number of obstacles
-    step_size = 1.0 if len(obstacles) <= 5 else 2.0
+    # Use adaptive grid size - finer for smaller polygons
+    polygon_size = poly_width * poly_height
+    small_polygon = polygon_size < 10000  # 100mm x 100mm
+
+    if small_polygon:
+        step_size = 0.5  # Very fine grid for small polygons
+    elif len(obstacles) <= 5:
+        step_size = 1.0
+    else:
+        step_size = 2.0
+
     candidates = []
 
-    # Grid search with no bounding box prefiltering
+    # Grid search with adaptive limits
+    max_candidates = 1000 if small_polygon else 500
+
     for x in np.arange(0, sheet_width - poly_width + 1, step_size):
         for y in np.arange(0, sheet_height - poly_height + 1, step_size):
             candidates.append((x, y))
-            if len(candidates) >= 500:  # Performance limit
+            if len(candidates) >= max_candidates:
                 break
-        if len(candidates) >= 500:
+        if len(candidates) >= max_candidates:
             break
 
     # Test positions using pure geometric collision detection
@@ -1799,8 +1852,11 @@ def find_bottom_left_position_with_obstacles(
     # Try positions along bottom and left edges first
     candidate_positions = []
 
-    # ОПТИМИЗАЦИЯ: Увеличиваем шаг сетки для ускорения поиска
-    grid_step = 15  # Увеличено с 5mm до 15mm для 3x ускорения
+    # ADAPTIVE STEP: Fine grid for small polygons, coarse for large ones
+    polygon_size = poly_width * poly_height
+    is_small = polygon_size < 10000  # 100mm x 100mm
+
+    grid_step = 2.0 if is_small else 15  # Fine step for small polygons
 
     # Bottom edge positions
     for x in np.arange(0, sheet_width - poly_width + 1, grid_step):
@@ -2495,12 +2551,11 @@ def bin_packing_with_inventory(
     # Group priority 1 carpets by color for efficient processing
     remaining_priority1: list[Carpet] = list(priority1_carpets)
 
-    # First try to fill existing sheets with priority 1 carpets
     for layout_idx, layout in enumerate(placed_layouts):
         if not remaining_priority1:
             break
         if (
-            layout.usage_percent >= 95
+            layout.usage_percent >= 85  # Lowered threshold for better filling
         ):  # More aggressive filling - try harder to use existing sheets
             continue
 
@@ -2775,8 +2830,8 @@ def bin_packing_with_inventory(
 
                 if progress_callback:
                     progress = min(
-                        70,
-                        int(70 * len(placed_layouts) / (len(carpets))),
+                        90,
+                        int(90 * len(placed_layouts) / (len(carpets))),
                     )
                     progress_callback(
                         progress,
@@ -2802,7 +2857,7 @@ def bin_packing_with_inventory(
         if not remaining_priority2:
             break
         if (
-            layout.usage_percent >= 95
+            layout.usage_percent >= 80  # Lower threshold for priority 2 to maximize filling
         ):  # More aggressive filling - try harder to use existing sheets
             continue
 

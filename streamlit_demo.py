@@ -53,6 +53,12 @@ DEFAULT_SHEET_TYPES = [
     (200, 300),
 ]
 OUTPUT_FOLDER = "output_layouts"
+
+def deselect(orders_to_show, start_idx):
+    for i in range(len(orders_to_show)):
+        st.session_state[f"order_{start_idx + i}"] = False
+    st.rerun()
+
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 # Streamlit App
@@ -449,9 +455,7 @@ if excel_file is not None:
 
                 with col2:
                     if st.button("❌ Снять выбор", key="deselect_all_orders"):
-                        for i in range(len(orders_to_show)):
-                            st.session_state[f"order_{start_idx + i}"] = False
-                        st.rerun()
+                        deselect(orders_to_show, start_idx)
 
             # Collect all selected orders, multiplying by quantity
             all_selected_orders = []
@@ -946,7 +950,7 @@ if st.button("🚀 Оптимизировать раскрой"):
         try:
             # Actual processing with progress tracking
             st.info("🔄 Запуск процесса оптимизации...")
-            optimization_progress = st.progress(0)
+            optimization_progress = st.progress(10)
             optimization_status = st.empty()
 
             logger.info(
@@ -961,8 +965,7 @@ if st.button("🚀 Оптимизировать раскрой"):
 
             # Progress callback function with more detailed updates
             def update_progress(percent, status_text):
-                # Ensure percent is between 50-95 for main processing
-                adjusted_percent = 50 + (percent * 0.45)  # Scale to 50-95% range
+                adjusted_percent = 10 + (percent * 0.9)  # Scale to 10%-100% range
                 optimization_progress.progress(min(95, int(adjusted_percent)))
                 optimization_status.text(f"🔄 {status_text}")
 
@@ -1009,7 +1012,7 @@ if st.button("🚀 Оптимизировать раскрой"):
             )
             results_progress.progress(progress_value)
             results_status.text(
-                f"Создание файла {i + 1}/{total_layouts}: лист {layout.sheet_number}"
+                f"Создание файла {i + 1}/{total_layouts}"
             )
 
             # Save and visualize layout with new naming format: length_width_number_color.dxf
