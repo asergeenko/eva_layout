@@ -95,7 +95,7 @@ def create_priority2_polygons():
             base_polygon = polygon_data["combined_polygon"]
 
             # 20 черных полигонов приоритета 2
-            for i in range(20):
+            for i in range(9):
                 filename = f"ДЕКА_KUGOO_M4_PRO_JILONG_черный_{i+1}.dxf"
                 priority2_polygons.append(Carpet(base_polygon, filename, "чёрный", "group_1",2))
 
