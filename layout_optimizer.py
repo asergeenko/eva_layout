@@ -666,40 +666,27 @@ def rotate_polygon(polygon: Polygon, angle: float) -> Polygon:
     # Rotate around centroid instead of corner to avoid positioning issues
     rotated = affinity.rotate(polygon, angle, origin=rotation_origin)
 
-    # CRITICAL FIX: More robust polygon validation and repair
-    if not rotated.is_valid or not rotated.is_simple:
+    # CONSERVATIVE FIX: Only repair if necessary, preserve geometry when possible
+    if not rotated.is_valid:
         try:
-            # Multiple repair attempts
-            # 1. Standard buffer repair
+            # Try minimal buffer repair first
             fixed = rotated.buffer(0)
-            if fixed.is_valid and fixed.is_simple:
+            if fixed.is_valid:
                 return fixed
 
-            # 2. Small buffer repair
+            # Try tiny buffer if needed
             fixed = rotated.buffer(0.001)
-            if fixed.is_valid and fixed.is_simple:
-                return fixed
-
-            # 3. Convex hull as last resort
-            fixed = rotated.convex_hull
-            if fixed.is_valid and fixed.is_simple:
+            if fixed.is_valid:
                 return fixed
 
         except Exception:
             pass
 
-        # If all repairs fail, try the original polygon
-        if polygon.is_valid and polygon.is_simple:
+        # If repair fails, return original only if it's valid
+        if polygon.is_valid:
             return polygon
 
-        # Last resort: try to repair the original
-        try:
-            fixed_original = polygon.buffer(0)
-            if fixed_original.is_valid:
-                return fixed_original
-        except Exception:
-            pass
-
+    # Return rotated result even if not perfectly valid - it's usually fine for collision detection
     return rotated
 
 
@@ -707,20 +694,27 @@ def translate_polygon(polygon: Polygon, x: float, y: float) -> Polygon:
     """Translate a polygon to a new position."""
     translated = affinity.translate(polygon, xoff=x, yoff=y)
 
-    # CRITICAL FIX: Ensure translated polygon is valid
-    if not translated.is_valid or not translated.is_simple:
+    # CONSERVATIVE FIX: Only repair if necessary, preserve translation accuracy
+    if not translated.is_valid:
         try:
-            # Try to repair
+            # Try minimal buffer repair
             fixed = translated.buffer(0)
             if fixed.is_valid:
                 return fixed
+
+            # Try tiny buffer if needed
+            fixed = translated.buffer(0.001)
+            if fixed.is_valid:
+                return fixed
+
         except Exception:
             pass
 
-        # If repair fails, return original if it's valid
+        # If repair fails, return original only if it's valid
         if polygon.is_valid:
             return polygon
 
+    # Return translated result - preserve the translation even if not perfectly valid
     return translated
 
 
@@ -1743,8 +1737,12 @@ def find_contour_following_position(
                     ):
                         candidates.append((test_x, test_y))
 
-    # Add sheet edges
-    step = max(1.0, min(poly_width, poly_height) / 10)  # Adaptive step
+    # Add sheet edges with adaptive step for small polygons
+    polygon_size = poly_width * poly_height
+    is_small = polygon_size < 10000  # 100mm x 100mm
+
+    step = 0.5 if is_small else max(1.0, min(poly_width, poly_height) / 10)
+
     for x in np.arange(0, sheet_width - poly_width + 1, step):
         candidates.append((x, 0))
     for y in np.arange(0, sheet_height - poly_height + 1, step):
@@ -1753,7 +1751,10 @@ def find_contour_following_position(
     # Sort by bottom-left preference and limit candidates
     candidates = list(set(candidates))  # Remove duplicates
     candidates.sort(key=lambda pos: (pos[1], pos[0]))
-    candidates = candidates[: min(1000, len(candidates))]  # Performance limit
+
+    # Increase limit for small polygons to improve placement success
+    max_candidates = 1500 if is_small else 1000
+    candidates = candidates[: min(max_candidates, len(candidates))]
 
     # Test each position using true geometric collision detection
     for x, y in candidates:
@@ -1791,17 +1792,28 @@ def find_ultra_tight_position(
     poly_width = bounds[2] - bounds[0]
     poly_height = bounds[3] - bounds[1]
 
-    # Use fine grid for small number of obstacles
-    step_size = 1.0 if len(obstacles) <= 5 else 2.0
+    # Use adaptive grid size - finer for smaller polygons
+    polygon_size = poly_width * poly_height
+    small_polygon = polygon_size < 10000  # 100mm x 100mm
+
+    if small_polygon:
+        step_size = 0.5  # Very fine grid for small polygons
+    elif len(obstacles) <= 5:
+        step_size = 1.0
+    else:
+        step_size = 2.0
+
     candidates = []
 
-    # Grid search with no bounding box prefiltering
+    # Grid search with adaptive limits
+    max_candidates = 1000 if small_polygon else 500
+
     for x in np.arange(0, sheet_width - poly_width + 1, step_size):
         for y in np.arange(0, sheet_height - poly_height + 1, step_size):
             candidates.append((x, y))
-            if len(candidates) >= 500:  # Performance limit
+            if len(candidates) >= max_candidates:
                 break
-        if len(candidates) >= 500:
+        if len(candidates) >= max_candidates:
             break
 
     # Test positions using pure geometric collision detection
@@ -1840,8 +1852,11 @@ def find_bottom_left_position_with_obstacles(
     # Try positions along bottom and left edges first
     candidate_positions = []
 
-    # ОПТИМИЗАЦИЯ: Увеличиваем шаг сетки для ускорения поиска
-    grid_step = 15  # Увеличено с 5mm до 15mm для 3x ускорения
+    # ADAPTIVE STEP: Fine grid for small polygons, coarse for large ones
+    polygon_size = poly_width * poly_height
+    is_small = polygon_size < 10000  # 100mm x 100mm
+
+    grid_step = 2.0 if is_small else 15  # Fine step for small polygons
 
     # Bottom edge positions
     for x in np.arange(0, sheet_width - poly_width + 1, grid_step):
@@ -2816,8 +2831,8 @@ def bin_packing_with_inventory(
 
                 if progress_callback:
                     progress = min(
-                        70,
-                        int(70 * len(placed_layouts) / (len(carpets))),
+                        90,
+                        int(90 * len(placed_layouts) / (len(carpets))),
                     )
                     progress_callback(
                         progress,
