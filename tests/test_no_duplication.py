@@ -84,24 +84,16 @@ def test_no_duplication():
     print(f"Листов создано: {len(placed_layouts)}")
     print(f"Неразмещенных полигонов: {len(unplaced_polygons)}")
     
-    total_placed = sum(len(layout["placed_polygons"]) for layout in placed_layouts)
+    total_placed = sum(len(layout.placed_polygons) for layout in placed_layouts)
     print(f"Всего размещено: {total_placed}")
     
     # Check for duplications
     actual_placements = {}
     
     for layout in placed_layouts:
-        for placed_tuple in layout['placed_polygons']:
+        for placed_tuple in layout.placed_polygons:
             # Handle different tuple structures
-            if len(placed_tuple) >= 5:
-                # Extended format: (polygon, x, y, angle, filename, color, order_id)
-                filename = placed_tuple[4]
-            elif len(placed_tuple) >= 2:
-                # Standard format: (polygon, filename, ...)
-                filename = placed_tuple[1]
-            else:
-                filename = "unknown"
-            
+            filename = placed_tuple.filename
             if filename in expected_placements:
                 actual_placements[filename] = actual_placements.get(filename, 0) + 1
     
@@ -206,14 +198,9 @@ def test_specific_sample_input():
     total_placed = 0
     
     for layout in placed_layouts:
-        for placed_tuple in layout['placed_polygons']:
+        for placed_tuple in layout.placed_polygons:
             total_placed += 1
-            if len(placed_tuple) >= 5:
-                filename = placed_tuple[4]
-            elif len(placed_tuple) >= 2:
-                filename = placed_tuple[1]
-            else:
-                filename = "unknown"
+            filename = placed_tuple.filename
             placed_files.add(filename)
     
     unique_placed = len(placed_files)

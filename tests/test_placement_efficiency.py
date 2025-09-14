@@ -1,7 +1,8 @@
 from pathlib import Path
 import time
 
-from layout_optimizer import parse_dxf_complete, Carpet, bin_packing_with_inventory
+from dxf_utils import parse_dxf_complete
+from layout_optimizer import Carpet, bin_packing_with_inventory
 
 
 def test_placement_efficiency():
@@ -57,7 +58,12 @@ def test_placement_efficiency():
     
     # Вычисляем общую площадь ковриков
     total_carpet_area_mm2 = sum(carpet.polygon.area for carpet in priority1_polygons)
-    placed_carpet_area_mm2 = sum(carpet.polygon.area for carpet in priority1_polygons if carpet not in unplaced)
+    # FIXED: Convert unplaced to set of carpet_ids for proper comparison
+    unplaced_ids = set(u.carpet_id for u in unplaced)
+    placed_carpet_area_mm2 = sum(
+        carpet.polygon.area for carpet in priority1_polygons 
+        if carpet.carpet_id not in unplaced_ids
+    )
     
     # Площадь листов
     sheet_area_mm2 = (available_sheets[0]['width'] * 10) * (available_sheets[0]['height'] * 10)
@@ -79,8 +85,8 @@ def test_placement_efficiency():
         print(f"\n📄 ДЕТАЛИ ПО ЛИСТАМ:")
         total_sheet_usage = 0
         for i, layout in enumerate(placed_layouts, 1):
-            carpet_count = len(layout['placed_polygons'])
-            usage = layout.get('usage_percent', 0)
+            carpet_count = len(layout.placed_polygons)
+            usage = layout.usage_percent
             total_sheet_usage += usage
             print(f"   Лист {i}: {carpet_count} ковриков, {usage:.1f}% заполнение")
         

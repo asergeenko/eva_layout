@@ -6,21 +6,19 @@ from io import BytesIO
 import zipfile
 import logging
 
+from dxf_utils import parse_dxf_complete, save_dxf_layout_complete
 from file_object import FileObject
 from layout_optimizer import (
-    parse_dxf_complete,
     bin_packing_with_inventory,
-    plot_layout,
-    save_dxf_layout_complete,
     Carpet,
 )
 
 from excel_loader import (
-    TARGET_SHEET,
     load_excel_file,
     parse_orders_from_excel,
     find_dxf_files_for_article,
 )
+from plot import plot_layout
 
 # Настройка логирования
 logging.basicConfig(
@@ -73,14 +71,20 @@ with col_logo:
 with col_clear:
     st.write("")  # Add some spacing
     st.write("")  # Add some spacing
-    if st.button("🗑️ Очистить всё",
-                 help="Очистить все данные и начать заново",
-                 type="secondary"):
+    if st.button(
+        "🗑️ Очистить всё", help="Очистить все данные и начать заново", type="secondary"
+    ):
         # Clear all session state
         keys_to_clear = [
-            'available_sheets', 'selected_orders', 'manual_files',
-            'file_groups', 'group_counter', 'optimization_results',
-            'manual_file_settings', 'current_excel_hash', 'excel_upload'
+            "available_sheets",
+            "selected_orders",
+            "manual_files",
+            "file_groups",
+            "group_counter",
+            "optimization_results",
+            "manual_file_settings",
+            "current_excel_hash",
+            "excel_upload",
         ]
 
         for key in keys_to_clear:
@@ -88,8 +92,11 @@ with col_clear:
                 del st.session_state[key]
 
         # Clear all order selection states
-        keys_to_remove = [key for key in st.session_state.keys()
-                          if key.startswith(('order_', 'quantity_', 'select_', 'qty_'))]
+        keys_to_remove = [
+            key
+            for key in st.session_state.keys()
+            if key.startswith(("order_", "quantity_", "select_", "qty_"))
+        ]
         for key in keys_to_remove:
             del st.session_state[key]
 
@@ -234,15 +241,18 @@ if excel_file is not None:
                 st.session_state.current_excel_hash = file_hash
 
                 # Clear all order selection states
-                keys_to_remove = [key for key in st.session_state.keys()
-                                  if key.startswith(('order_', 'quantity_', 'select_', 'qty_'))]
+                keys_to_remove = [
+                    key
+                    for key in st.session_state.keys()
+                    if key.startswith(("order_", "quantity_", "select_", "qty_"))
+                ]
                 for key in keys_to_remove:
                     del st.session_state[key]
 
                 # Clear selected orders
                 st.session_state.selected_orders = []
 
-                logger.info(f"Новый Excel файл загружен, предыдущие выборы очищены")
+                logger.info("Новый Excel файл загружен, предыдущие выборы очищены")
 
             excel_data = load_excel_file(file_content)
             logger.info(f"Excel файл загружен. Листы: {list(excel_data.keys())}")
@@ -379,7 +389,9 @@ if excel_file is not None:
                         with cols[0]:
                             is_selected = st.checkbox(
                                 f"№{actual_idx + 1}",
-                                value=st.session_state.get(f"order_{actual_idx}", False),
+                                value=st.session_state.get(
+                                    f"order_{actual_idx}", False
+                                ),
                                 key=f"select_{actual_idx}",
                                 label_visibility="collapsed",
                             )
@@ -514,7 +526,6 @@ if st.session_state.selected_orders:
     articles_found = []
     articles_not_found = []
 
-
     # Create a file-like object with name attribute
     class FileObj:
         def __init__(self, content, name):
@@ -526,6 +537,7 @@ if st.session_state.selected_orders:
 
         def seek(self, pos):
             return self.content.seek(pos)
+
 
 # Additional DXF files section (always available)
 st.subheader("📎 Загрузить вручную")
@@ -589,8 +601,8 @@ if manual_files:
 
     # Button to create group with current settings
     if st.button(
-            f"➕ Создать группу #{st.session_state.group_counter}",
-            key=f"create_group_{current_group_key}",
+        f"➕ Создать группу #{st.session_state.group_counter}",
+        key=f"create_group_{current_group_key}",
     ):
         # Create group with selected settings
         group_files = []
@@ -941,7 +953,6 @@ if st.button("🚀 Оптимизировать раскрой"):
                 f"Входные параметры: {len(carpets)} полигонов, {len(st.session_state.available_sheets)} типов листов"
             )
 
-
             # logger.info("ПОЛИГОНЫ ПЕРЕД ОТПРАВКОЙ В bin_packing_with_inventory:")
             # for i, carpet in enumerate(carpets):
             #    logger.info(
@@ -954,7 +965,6 @@ if st.button("🚀 Оптимизировать раскрой"):
                 adjusted_percent = 50 + (percent * 0.45)  # Scale to 50-95% range
                 optimization_progress.progress(min(95, int(adjusted_percent)))
                 optimization_status.text(f"🔄 {status_text}")
-
 
             placed_layouts, unplaced_polygons = bin_packing_with_inventory(
                 carpets,
@@ -999,33 +1009,24 @@ if st.button("🚀 Оптимизировать раскрой"):
             )
             results_progress.progress(progress_value)
             results_status.text(
-                f"Создание файла {i + 1}/{total_layouts}: лист {layout['sheet_number']}"
+                f"Создание файла {i + 1}/{total_layouts}: лист {layout.sheet_number}"
             )
 
             # Save and visualize layout with new naming format: length_width_number_color.dxf
-            sheet_width = int(layout["sheet_size"][0])
-            sheet_height = int(layout["sheet_size"][1])
-            sheet_number = layout["sheet_number"]
+            sheet_width = int(layout.sheet_size[0])
+            sheet_height = int(layout.sheet_size[1])
+            sheet_number = layout.sheet_number
 
             # Find sheet color from original sheet data
             sheet_color = "не указан"
             color_suffix = "unknown"
 
             # Try to get sheet color from layout first, then match by name
-            if "sheet_color" in layout:
-                sheet_color = layout["sheet_color"]
-            elif "sheet_type" in layout:
-                for sheet in st.session_state.available_sheets:
-                    if sheet["name"] == layout["sheet_type"]:
-                        sheet_color = sheet.get("color", "не указан")
-                        break
-            else:
-                # Fallback: use first available sheet color
-                if st.session_state.available_sheets:
-                    sheet_color = st.session_state.available_sheets[0].get(
-                        "color", "не указан"
-                    )
-
+            sheet_color = layout.sheet_color
+            for sheet in st.session_state.available_sheets:
+                if sheet["name"] == layout.sheet_type:
+                    sheet_color = sheet.get("color", "не указан")
+                    break
             # Convert color name to English suffix
             if sheet_color == "чёрный":
                 color_suffix = "black"
@@ -1040,50 +1041,38 @@ if st.button("🚀 Оптимизировать раскрой"):
             output_file = os.path.join(OUTPUT_FOLDER, output_filename)
 
             save_dxf_layout_complete(
-                layout["placed_polygons"],
-                layout["sheet_size"],
+                layout.placed_polygons,
+                layout.sheet_size,
                 output_file,
                 original_dxf_data_map,
             )
-            layout_plot = plot_layout(layout["placed_polygons"], layout["sheet_size"])
+            layout_plot = plot_layout(layout.placed_polygons, layout.sheet_size)
 
             # Store layout info in old format for compatibility
-            shapes_count = len(layout["placed_polygons"])
+            shapes_count = len(layout.placed_polygons)
             logger.info(
-                f"Лист #{layout['sheet_number']}: создаем all_layouts запись с {shapes_count} размещенными полигонами"
+                f"Лист #{layout.sheet_number}: создаем all_layouts запись с {shapes_count} размещенными полигонами"
             )
 
             # Определяем тип листа с проверкой наличия ключа
-            if "sheet_type" in layout:
-                sheet_type = layout["sheet_type"]
-            elif "sheet_color" in layout:
-                sheet_type = layout["sheet_color"]
-            else:
-                # Fallback: используем первый доступный лист как тип
-                if st.session_state.available_sheets:
-                    sheet_type = st.session_state.available_sheets[0].get(
-                        "name", "Unknown"
-                    )
-                else:
-                    sheet_type = "Unknown"
-
+            sheet_type = layout.sheet_type
             all_layouts.append(
                 {
-                    "Sheet": layout["sheet_number"],
+                    "Sheet": layout.sheet_number,
                     "Sheet Type": sheet_type,
                     "Sheet Color": sheet_color,
-                    "Sheet Size": f"{layout['sheet_size'][0]}x{layout['sheet_size'][1]} см",
+                    "Sheet Size": f"{layout.sheet_size[0]}x{layout.sheet_size[1]} см",
                     "Output File": output_file,
                     "Plot": layout_plot,
                     "Shapes Placed": shapes_count,
-                    "Material Usage (%)": f"{layout['usage_percent']:.2f}",
-                    "Placed Polygons": layout["placed_polygons"],
+                    "Material Usage (%)": f"{layout.usage_percent:.2f}",
+                    "Placed Polygons": layout.placed_polygons,
                 }
             )
             report_data.extend(
                 [
-                    (p[4], layout["sheet_number"], output_file)
-                    for p in layout["placed_polygons"]
+                    (p.filename, layout.sheet_number, output_file)
+                    for p in layout.placed_polygons
                 ]
             )
 
@@ -1094,27 +1083,12 @@ if st.button("🚀 Оптимизировать раскрой"):
         # Update sheet inventory in session state
         for layout in placed_layouts:
             # Определяем тип листа с проверкой наличия ключа
-            layout_sheet_type = None
-            if "sheet_type" in layout:
-                layout_sheet_type = layout["sheet_type"]
-            elif "sheet_color" in layout:
-                # Если нет sheet_type, попробуем найти лист по цвету и размеру
-                sheet_color = layout["sheet_color"]
-                sheet_size = layout.get("sheet_size", (0, 0))
-                for sheet in st.session_state.available_sheets:
-                    if (
-                            sheet.get("color", "") == sheet_color
-                            and sheet.get("width", 0) == sheet_size[0]
-                            and sheet.get("height", 0) == sheet_size[1]
-                    ):
-                        layout_sheet_type = sheet["name"]
-                        break
 
-            if layout_sheet_type:
-                for original_sheet in st.session_state.available_sheets:
-                    if layout_sheet_type == original_sheet["name"]:
-                        original_sheet["used"] += 1
-                        break
+            layout_sheet_type = layout.sheet_type
+            for original_sheet in st.session_state.available_sheets:
+                if layout_sheet_type == original_sheet["name"]:
+                    original_sheet["used"] += 1
+                    break
 
         # Clear progress indicators
         import time
@@ -1138,8 +1112,8 @@ if st.button("🚀 Оптимизировать раскрой"):
 if "optimization_results" in st.session_state and st.session_state.optimization_results:
     # Add button to clear results
     if st.button(
-            "🗑️ Очистить результаты",
-            help="Очистить результаты оптимизации для нового расчета",
+        "🗑️ Очистить результаты",
+        help="Очистить результаты оптимизации для нового расчета",
     ):
         st.session_state.optimization_results = None
         st.rerun()
@@ -1170,7 +1144,7 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
 
             # Debug: log the calculation
             raw_count_from_layouts = sum(
-                len(layout["placed_polygons"]) for layout in placed_layouts
+                len(layout.placed_polygons) for layout in placed_layouts
             )
             logger.info(
                 f"DEBUG подсчет: raw_from_layouts={raw_count_from_layouts}, calculated_placed={actual_placed_count}, input={total_input_polygons}, unplaced={len(unplaced_polygons)}"
@@ -1180,7 +1154,7 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
                 f"UI подсчет: actual_placed={actual_placed_count}, total_input={total_input_polygons}, unplaced={len(unplaced_polygons)}"
             )
             logger.info(
-                f"Подробности по листам: {[(layout['sheet_number'], len(layout['placed_polygons'])) for layout in placed_layouts]}"
+                f"Подробности по листам: {[(layout.sheet_number, len(layout.placed_polygons)) for layout in placed_layouts]}"
             )
             st.metric(
                 "Размещено объектов", f"{actual_placed_count}/{total_input_polygons}"
@@ -1233,11 +1207,11 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
         enhanced_report_data = []
         for layout in all_layouts:
             for placed_tuple in layout["Placed Polygons"]:
-                if len(placed_tuple) >= 6:  # New format with color
-                    polygon, _, _, angle, file_name, color = placed_tuple[:6]
-                else:  # Old format without color
-                    polygon, _, _, angle, file_name = placed_tuple[:5]
-                    color = "серый"
+                polygon = placed_tuple.polygon
+                angle = placed_tuple.angle
+                file_name = placed_tuple.filename
+                color = placed_tuple.color
+
                 bounds = polygon.bounds
                 width_cm = (bounds[2] - bounds[0]) / 10
                 height_cm = (bounds[3] - bounds[1]) / 10
@@ -1316,10 +1290,14 @@ if "optimization_results" in st.session_state and st.session_state.optimization_
                         )
 
                         st.write(f"**Тип листа:** {layout['Sheet Type']}")
-                        st.write(f"**Цвет листа:** {color_emoji} {layout['Sheet Color']}")
+                        st.write(
+                            f"**Цвет листа:** {color_emoji} {layout['Sheet Color']}"
+                        )
                         st.write(f"**Размер листа:** {layout['Sheet Size']}")
                         st.write(f"**Размещено объектов:** {layout['Shapes Placed']}")
-                        st.write(f"**Расход материала:** {layout['Material Usage (%)']}%")
+                        st.write(
+                            f"**Расход материала:** {layout['Material Usage (%)']}%"
+                        )
                         with open(layout["Output File"], "rb") as f:
                             st.download_button(
                                 label="📥 Скачать DXF",

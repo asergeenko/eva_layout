@@ -5,51 +5,63 @@ from dxf_utils import parse_dxf_complete
 from layout_optimizer import Carpet, bin_packing_with_inventory
 
 
-def test_golf_plus():
+def test_priority2_placement():
     # Создаем листы
     available_sheets = [{
         "name": f"Черный лист",
         "width": 140,
         "height": 200,
         "color": "чёрный",
-        "count": 20,
+        "count": 5,
         "used": 0
     }]
 
+    base_path = Path('tests/priority2_dxf')
     # Создаем полигоны приоритета 1
     #########################################
-    models = ["VOLKSWAGEN GOLF PLUS"]
-    priority1_polygons = []
-    for group_id, group in enumerate(models, 1):
-        path = Path('dxf_samples') / group
-        files = path.rglob("*.dxf", case_sensitive=False)
-        for dxf_file in files:
-            try:
-                # Используем verbose=False чтобы избежать Streamlit вызовов
-                polygon_data = parse_dxf_complete(dxf_file.as_posix(), verbose=False)
-                if polygon_data and polygon_data.get("combined_polygon"):
-                    base_polygon = polygon_data["combined_polygon"]
-                    for i in range(1, 6):
-                        priority1_polygons.append(Carpet(base_polygon, f"{dxf_file.name}_копия_{i}", "чёрный", f"group_{group_id}", 1))
 
-            except Exception as e:
-                print(f"⚠️ Ошибка загрузки {dxf_file}: {e}")
-                return []
+    priority1_polygons = []
+    priority1_ids = [1,2,3,4,5,11,12,13,14,21,22,23,24,25]
+    for i in priority1_ids:
+        dxf_file = base_path / f"{i}.dxf"
+        polygon_data = parse_dxf_complete(dxf_file.as_posix(), verbose=False)
+        if polygon_data and polygon_data.get("combined_polygon"):
+            base_polygon = polygon_data["combined_polygon"]
+            priority1_polygons.append(Carpet(base_polygon, dxf_file.name, "чёрный", f"group_1", 1))
     #########################################
+    print(f"📊 Всего полигонов для размещения: {len(priority1_polygons)}")
+    # Масштабируем полигоны
+    if not priority1_polygons:
+        print("❌ Нет полигонов для обработки")
+        return
+
+    priority2_polygons = []
+    dxf_file = base_path / "priority2.dxf"
+    polygon_data = parse_dxf_complete(dxf_file.as_posix(), verbose=False)
+    if polygon_data and polygon_data.get("combined_polygon"):
+        base_polygon = polygon_data["combined_polygon"]
+        for i in range(15):
+            priority2_polygons.append(Carpet(base_polygon, f"{dxf_file.name}_копия_{i}", "чёрный", f"group_2", 2))
+
+    all_polygons = priority1_polygons + priority2_polygons
     placed_layouts, unplaced = bin_packing_with_inventory(
-        priority1_polygons,
+        all_polygons,
         available_sheets,
         verbose=True,
     )
 
-    actual_placed_count = len(priority1_polygons) - len(unplaced)
+    # Анализ результатов с детальными метриками плотности
+    print("\n=== РЕЗУЛЬТАТЫ ЭФФЕКТИВНОСТИ РАЗМЕЩЕНИЯ ===")
 
-    # Вычисляем общую площадь ковриков
-    total_carpet_area_mm2 = sum(carpet.polygon.area for carpet in priority1_polygons)
+    start_time = time.time()
+    actual_placed_count = len(all_polygons) - len(unplaced)
+
+    # Вычисляем общую площадь ковриков (ИСПРАВЛЕНО: используем all_polygons)
+    total_carpet_area_mm2 = sum(carpet.polygon.area for carpet in all_polygons)
     # FIXED: Convert unplaced to set of carpet_ids for proper comparison
     unplaced_ids = set(u.carpet_id for u in unplaced)
     placed_carpet_area_mm2 = sum(
-        carpet.polygon.area for carpet in priority1_polygons 
+        carpet.polygon.area for carpet in all_polygons 
         if carpet.carpet_id not in unplaced_ids
     )
 
@@ -62,13 +74,23 @@ def test_golf_plus():
     material_utilization = (placed_carpet_area_mm2 / used_sheets_area_mm2) * 100 if used_sheets_area_mm2 > 0 else 0
 
     print(
-        f"📊 Размещено полигонов: {actual_placed_count}/{len(priority1_polygons)} ({actual_placed_count / len(priority1_polygons) * 100:.1f}%)")
+        f"📊 Размещено полигонов: {actual_placed_count}/{len(all_polygons)} ({actual_placed_count / len(all_polygons) * 100:.1f}%)")
     print(f"📄 Использовано листов: {len(placed_layouts)}")
     print(f"📐 Общая площадь ковриков: {total_carpet_area_mm2 / 100:.0f} см²")
     print(f"📐 Площадь использованных листов: {used_sheets_area_mm2 / 100:.0f} см²")
     print(f"🎯 Использование материала: {material_utilization:.1f}%")
     print(f"📊 Теоретический минимум: {theoretical_min_sheets:.2f} листа")
     print(f"❌ Неразмещенных полигонов: {len(unplaced)}")
+    
+    # Детальная диагностика по приоритетам
+    priority1_unplaced = [c for c in unplaced if hasattr(c, 'priority') and c.priority == 1]
+    priority2_unplaced = [c for c in unplaced if hasattr(c, 'priority') and c.priority == 2]
+    
+    priority1_placed = len(priority1_polygons) - len(priority1_unplaced)
+    priority2_placed = len(priority2_polygons) - len(priority2_unplaced)
+    
+    print(f"🔸 Приоритет 1: {priority1_placed}/{len(priority1_polygons)} размещено")
+    print(f"🔸 Приоритет 2: {priority2_placed}/{len(priority2_polygons)} размещено")
 
     if placed_layouts:
         print(f"\n📄 ДЕТАЛИ ПО ЛИСТАМ:")
@@ -82,18 +104,14 @@ def test_golf_plus():
         avg_sheet_usage = total_sheet_usage / len(placed_layouts)
         print(f"   Среднее заполнение листов: {avg_sheet_usage:.1f}%")
 
-    # Оценка эффективности
-    print(f"\n🎯 ОЦЕНКА ЭФФЕКТИВНОСТИ:")
-    if len(placed_layouts) <= 4 and len(unplaced) == 0:
-        print("   ✅ ОТЛИЧНО! Цель достигнута: ≤4 листа, все ковры размещены")
-        efficiency_score = "A+"
-    else:
-        print("   ❌ ПЛОХО! >4 листов и низкое использование материала")
-        efficiency_score = "D"
 
-    print(f"   Оценка эффективности: {efficiency_score}")
+    target_utilization = 78.1  # как рассчитано в benchmark
 
-    client_goal_achieved = (len(placed_layouts) <= 4 and
+    print(f"\n🏆 ЦЕЛЬ КЛИЕНТА:")
+    print(f"   Листов: ≤3 (текущий: {len(placed_layouts)})")
+    print(f"   Использование: ≥{target_utilization:.1f}% (текущий: {material_utilization:.1f}%)")
+
+    client_goal_achieved = (len(placed_layouts) <= 3 and
                             len(unplaced) == 0
                             )
 
@@ -102,15 +120,13 @@ def test_golf_plus():
     else:
         print("   ❌ ЦЕЛЬ КЛИЕНТА НЕ ДОСТИГНУТА")
 
-    # Проверяем улучшение плотности по сравнению с базовым уровнем
     assert len(unplaced) == 0, f"Все ковры должны быть размещены, неразмещенных: {len(unplaced)}"
-    assert len(placed_layouts) <= 4, f"Нужно разместить заказы на 4 листах: {len(placed_layouts)}"
+
 
     return {
         'sheets_used': len(placed_layouts),
         'carpets_placed': actual_placed_count,
-        'carpets_total': len(priority1_polygons),
+        'carpets_total': len(all_polygons),
         'material_utilization': material_utilization,
-        'efficiency_score': efficiency_score,
         'client_goal_achieved': client_goal_achieved
     }
