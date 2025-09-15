@@ -903,9 +903,20 @@ def bin_packing_with_existing(
 
                 # 🎯 МАКСИМИЗАЦИЯ ВЕРХНЕГО ПРОСТРАНСТВА: Стратегия для existing carpets
                 # Симулируем размещение с учетом существующих ковров
+                dx_to_target = best_x - rotated_bounds[0]
+                dy_to_target = best_y - rotated_bounds[1]
+                test_translated = translate_polygon(rotated, dx_to_target, dy_to_target)
+
                 all_test_placed = existing_placed + placed + [PlacedCarpet(
-                    translate_polygon(rotated, best_x - rotated_bounds[0], best_y - rotated_bounds[1]),
-                    0, 0, angle, "test", "test", "test", 0, 1
+                    polygon=test_translated,
+                    x_offset=dx_to_target,
+                    y_offset=dy_to_target,
+                    angle=angle,
+                    filename="test",
+                    color="test",
+                    order_id="test",
+                    carpet_id=0,
+                    priority=1
                 )]
 
                 # Находим максимальную высоту после размещения
@@ -929,13 +940,22 @@ def bin_packing_with_existing(
 
                 if total_score < best_priority:
                     best_priority = total_score
-                    translated = translate_polygon(
-                        rotated, best_x - rotated_bounds[0], best_y - rotated_bounds[1]
-                    )
+
+                    # Calculate proper offsets from original carpet position
+                    orig_bounds = carpet.polygon.bounds
+                    dx_to_target = best_x - rotated_bounds[0]
+                    dy_to_target = best_y - rotated_bounds[1]
+                    translated = translate_polygon(rotated, dx_to_target, dy_to_target)
+
+                    # Calculate actual offset from original position
+                    final_bounds = translated.bounds
+                    actual_x_offset = final_bounds[0] - orig_bounds[0]
+                    actual_y_offset = final_bounds[1] - orig_bounds[1]
+
                     best_placement = {
                         "polygon": translated,
-                        "x_offset": best_x - rotated_bounds[0],
-                        "y_offset": best_y - rotated_bounds[1],
+                        "x_offset": actual_x_offset,
+                        "y_offset": actual_y_offset,
                         "angle": angle,
                     }
 
@@ -1349,22 +1369,29 @@ def bin_packing(
         height = bounds[3] - bounds[1]
 
         # Multi-factor scoring for better packing:
-        # 1. Area (larger first)
-        # 2. Aspect ratio (irregular shapes first)
-        # 3. Compactness (less regular shapes first)
+        # 1. Priority level (priority 1 always comes first)
+        # 2. Area (larger first within same priority)
+        # 3. Aspect ratio (irregular shapes first)
+        # 4. Compactness (less regular shapes first)
         aspect_ratio = (
             max(width / height, height / width) if min(width, height) > 0 else 1
         )
         compactness = area / (width * height) if width * height > 0 else 0
         perimeter_approx = 2 * (width + height)
 
-        # Prioritize larger, more irregular shapes for better space utilization
-        return (
+        # Base score from geometry
+        geometry_score = (
             area * 1.0
             + (aspect_ratio - 1) * area * 0.3
             + (1 - compactness) * area * 0.2
             + perimeter_approx * 0.05
         )
+
+        # CRITICAL: Priority 1 gets huge boost to ensure they are placed first
+        # This prevents underfilled sheets when mixing priority 1 and 2 carpets
+        priority_boost = 1000000 if carpet.priority == 1 else 0
+
+        return priority_boost + geometry_score
 
     sorted_polygons = sorted(polygons, key=get_polygon_priority, reverse=True)
 
@@ -1458,9 +1485,20 @@ def bin_packing(
                 # Предпочитаем ориентации которые максимизируют непрерывное свободное пространство сверху
 
                 # Симулируем размещение этого ковра и вычисляем будущую максимальную высоту
+                dx_to_target = best_x - rotated_bounds[0]
+                dy_to_target = best_y - rotated_bounds[1]
+                test_translated = translate_polygon(rotated, dx_to_target, dy_to_target)
+
                 test_placed = placed + [PlacedCarpet(
-                    translate_polygon(rotated, best_x - rotated_bounds[0], best_y - rotated_bounds[1]),
-                    0, 0, angle, "test", "test", "test", 0, 1
+                    polygon=test_translated,
+                    x_offset=dx_to_target,
+                    y_offset=dy_to_target,
+                    angle=angle,
+                    filename="test",
+                    color="test",
+                    order_id="test",
+                    carpet_id=0,
+                    priority=1
                 )]
 
                 # Находим максимальную высоту после размещения
@@ -1484,13 +1522,22 @@ def bin_packing(
 
                 if total_score < best_score:
                     best_score = total_score
-                    translated = translate_polygon(
-                        rotated, best_x - rotated_bounds[0], best_y - rotated_bounds[1]
-                    )
+
+                    # Calculate proper offsets from original carpet position
+                    orig_bounds = carpet.polygon.bounds
+                    dx_to_target = best_x - rotated_bounds[0]
+                    dy_to_target = best_y - rotated_bounds[1]
+                    translated = translate_polygon(rotated, dx_to_target, dy_to_target)
+
+                    # Calculate actual offset from original position
+                    final_bounds = translated.bounds
+                    actual_x_offset = final_bounds[0] - orig_bounds[0]
+                    actual_y_offset = final_bounds[1] - orig_bounds[1]
+
                     best_placement = {
                         "polygon": translated,
-                        "x_offset": best_x - rotated_bounds[0],
-                        "y_offset": best_y - rotated_bounds[1],
+                        "x_offset": actual_x_offset,
+                        "y_offset": actual_y_offset,
                         "angle": angle,
                     }
 
@@ -1699,28 +1746,17 @@ def apply_gravity_optimization(placed_carpets: list[PlacedCarpet], sheet_width_m
     if not placed_carpets:
         return placed_carpets
 
-    print(f"🔧 GRAVITY OPTIMIZATION: Processing {len(placed_carpets)} carpets")
-
     # STEP 1: Vertical compaction (move down)
     # Sort carpets by Y coordinate (top to bottom) - move top ones down first for maximum benefit
     sorted_carpets = sorted(placed_carpets, key=lambda c: c.polygon.bounds[3], reverse=True)
     vertically_optimized = []
 
-    print(f"  📏 VERTICAL COMPACTION:")
     for i, carpet in enumerate(sorted_carpets):
         # Get all carpets except current one
         other_carpets = vertically_optimized + sorted_carpets[i+1:]
 
-        orig_y = carpet.polygon.bounds[1]
-        print(f"    Processing carpet {carpet.filename} at Y={orig_y:.0f}mm")
-
         # Try to move this carpet as low as possible
         moved_carpet = move_carpet_down(carpet, other_carpets, sheet_width_mm, sheet_height_mm)
-
-        new_y = moved_carpet.polygon.bounds[1]
-        improvement = orig_y - new_y
-        print(f"      → Moved to Y={new_y:.0f}mm (improvement: {improvement:.0f}mm)")
-
         vertically_optimized.append(moved_carpet)
 
     # STEP 2: Horizontal compaction (move left)
@@ -1728,21 +1764,12 @@ def apply_gravity_optimization(placed_carpets: list[PlacedCarpet], sheet_width_m
     sorted_by_x = sorted(vertically_optimized, key=lambda c: c.polygon.bounds[2], reverse=True)
     fully_optimized = []
 
-    print(f"  📐 HORIZONTAL COMPACTION:")
     for i, carpet in enumerate(sorted_by_x):
         # Get all carpets except current one
         other_carpets = fully_optimized + sorted_by_x[i+1:]
 
-        orig_x = carpet.polygon.bounds[0]
-        print(f"    Processing carpet {carpet.filename} at X={orig_x:.0f}mm")
-
         # Try to move this carpet as far left as possible
         moved_carpet = move_carpet_left(carpet, other_carpets, sheet_width_mm, sheet_height_mm)
-
-        new_x = moved_carpet.polygon.bounds[0]
-        improvement = orig_x - new_x
-        print(f"      → Moved to X={new_x:.0f}mm (improvement: {improvement:.0f}mm)")
-
         fully_optimized.append(moved_carpet)
 
     return fully_optimized
@@ -1761,8 +1788,6 @@ def move_carpet_down(carpet: PlacedCarpet, other_carpets: list[PlacedCarpet], sh
 
     # Try different Y positions from bottom to current position
     step_size = 10  # 1cm steps for better precision
-
-    print(f"    🔍 Trying to move {carpet.filename} from Y={bounds[1]:.0f}mm...")
 
     # Try different rotations to fit through narrow spaces
     angles_to_try = [carpet.angle]  # Start with current angle
@@ -1827,7 +1852,6 @@ def move_carpet_down(carpet: PlacedCarpet, other_carpets: list[PlacedCarpet], sh
                     if improvement > max_improvement:
                         max_improvement = improvement
                         best_position = (test_x_base, test_y, test_angle)
-                        print(f"      ✅ Found better position: Y={test_y:.0f}mm, angle={test_angle}°, improvement={improvement:.0f}mm")
 
     # If we found a better position, create new carpet
     if max_improvement > 1:  # Move even for small improvements (>1mm)
@@ -1857,7 +1881,6 @@ def move_carpet_down(carpet: PlacedCarpet, other_carpets: list[PlacedCarpet], sh
             priority=carpet.priority
         )
 
-    print(f"      ❌ No improvement found for {carpet.filename}")
     return carpet  # No significant improvement found
 
 
@@ -1874,8 +1897,6 @@ def move_carpet_left(carpet: PlacedCarpet, other_carpets: list[PlacedCarpet], sh
 
     # Try different X positions from left to current position
     step_size = 10  # 1cm steps for better precision
-
-    print(f"    🔍 Trying to move {carpet.filename} from X={bounds[0]:.0f}mm...")
 
     # Try different rotations to fit through narrow spaces
     angles_to_try = [carpet.angle]  # Start with current angle
@@ -1940,7 +1961,6 @@ def move_carpet_left(carpet: PlacedCarpet, other_carpets: list[PlacedCarpet], sh
                     if improvement > max_improvement:
                         max_improvement = improvement
                         best_position = (test_x, test_y_base, test_angle)
-                        print(f"      ✅ Found better position: X={test_x:.0f}mm, Y={test_y_base:.0f}mm, angle={test_angle}°, improvement={improvement:.0f}mm")
 
     # If we found a better position, create new carpet
     if max_improvement > 1:  # Move even for small improvements (>1mm)
@@ -1970,7 +1990,6 @@ def move_carpet_left(carpet: PlacedCarpet, other_carpets: list[PlacedCarpet], sh
             priority=carpet.priority
         )
 
-    print(f"      ❌ No improvement found for {carpet.filename}")
     return carpet  # No significant improvement found
 
 
@@ -2585,7 +2604,7 @@ def simple_sheet_consolidation(
         logger.info(f"Partial consolidation: moved {successfully_moved}/{len(carpets_to_move)} carpets")
         return placed_layouts
 
-def try_simple_placement(carpet: Carpet, existing_placed: list[PlacedCarpet], sheet_size: tuple[float, float]) -> PlacedCarpet:
+def try_simple_placement(carpet: Carpet, existing_placed: list[PlacedCarpet], sheet_size: tuple[float, float]) -> PlacedCarpet | None:
     """Simple placement function for priority 2 carpets - just find ANY available space."""
     from shapely.geometry import Polygon
     import shapely.affinity
@@ -2637,13 +2656,19 @@ def try_simple_placement(carpet: Carpet, existing_placed: list[PlacedCarpet], sh
 
                     if not has_collision:
                         # Found a valid position!
+                        # Calculate correct offsets: how much we moved from original position
+                        orig_bounds = carpet.polygon.bounds
+                        final_bounds = positioned_polygon.bounds
+                        actual_x_offset = final_bounds[0] - orig_bounds[0]
+                        actual_y_offset = final_bounds[1] - orig_bounds[1]
+
                         return PlacedCarpet(
                             polygon=positioned_polygon,
                             filename=carpet.filename,
                             color=carpet.color,
                             order_id=carpet.order_id,
-                            x_offset=x,
-                            y_offset=y,
+                            x_offset=actual_x_offset,
+                            y_offset=actual_y_offset,
                             angle=angle,
                             carpet_id=carpet.carpet_id,
                             priority=carpet.priority
