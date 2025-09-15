@@ -1679,12 +1679,299 @@ def bin_packing(
         placed = fast_edge_snap(placed, sheet_size)
     # No optimization for very large sets
 
+    # POST-OPTIMIZATION: Gravity compaction - move carpets down to maximize free space at top
+    if placed:
+        placed = apply_gravity_optimization(placed, sheet_width_mm, sheet_height_mm)
+
     if verbose:
         usage_percent = calculate_usage_percent(placed, sheet_size)
         st.info(
             f"🏁 Упаковка завершена: {len(placed)} размещено, {len(unplaced)} не размещено, использование: {usage_percent:.1f}%"
         )
     return placed, unplaced
+
+
+def apply_gravity_optimization(placed_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float) -> list[PlacedCarpet]:
+    """
+    Apply gravity optimization - move carpets down and left to maximize free space.
+    This helps place larger carpets in the freed areas.
+    """
+    if not placed_carpets:
+        return placed_carpets
+
+    print(f"🔧 GRAVITY OPTIMIZATION: Processing {len(placed_carpets)} carpets")
+
+    # STEP 1: Vertical compaction (move down)
+    # Sort carpets by Y coordinate (top to bottom) - move top ones down first for maximum benefit
+    sorted_carpets = sorted(placed_carpets, key=lambda c: c.polygon.bounds[3], reverse=True)
+    vertically_optimized = []
+
+    print(f"  📏 VERTICAL COMPACTION:")
+    for i, carpet in enumerate(sorted_carpets):
+        # Get all carpets except current one
+        other_carpets = vertically_optimized + sorted_carpets[i+1:]
+
+        orig_y = carpet.polygon.bounds[1]
+        print(f"    Processing carpet {carpet.filename} at Y={orig_y:.0f}mm")
+
+        # Try to move this carpet as low as possible
+        moved_carpet = move_carpet_down(carpet, other_carpets, sheet_width_mm, sheet_height_mm)
+
+        new_y = moved_carpet.polygon.bounds[1]
+        improvement = orig_y - new_y
+        print(f"      → Moved to Y={new_y:.0f}mm (improvement: {improvement:.0f}mm)")
+
+        vertically_optimized.append(moved_carpet)
+
+    # STEP 2: Horizontal compaction (move left)
+    # Sort carpets by X coordinate (right to left) - move right ones left first
+    sorted_by_x = sorted(vertically_optimized, key=lambda c: c.polygon.bounds[2], reverse=True)
+    fully_optimized = []
+
+    print(f"  📐 HORIZONTAL COMPACTION:")
+    for i, carpet in enumerate(sorted_by_x):
+        # Get all carpets except current one
+        other_carpets = fully_optimized + sorted_by_x[i+1:]
+
+        orig_x = carpet.polygon.bounds[0]
+        print(f"    Processing carpet {carpet.filename} at X={orig_x:.0f}mm")
+
+        # Try to move this carpet as far left as possible
+        moved_carpet = move_carpet_left(carpet, other_carpets, sheet_width_mm, sheet_height_mm)
+
+        new_x = moved_carpet.polygon.bounds[0]
+        improvement = orig_x - new_x
+        print(f"      → Moved to X={new_x:.0f}mm (improvement: {improvement:.0f}mm)")
+
+        fully_optimized.append(moved_carpet)
+
+    return fully_optimized
+
+
+def move_carpet_down(carpet: PlacedCarpet, other_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float) -> PlacedCarpet:
+    """Move a single carpet as low as possible without collisions, including trying different rotations."""
+    import shapely.affinity
+
+    bounds = carpet.polygon.bounds
+    poly_width = bounds[2] - bounds[0]
+    poly_height = bounds[3] - bounds[1]
+
+    best_position = (bounds[0], bounds[1], carpet.angle)  # Current position and angle
+    max_improvement = 0  # Track how much we moved down
+
+    # Try different Y positions from bottom to current position
+    step_size = 10  # 1cm steps for better precision
+
+    print(f"    🔍 Trying to move {carpet.filename} from Y={bounds[1]:.0f}mm...")
+
+    # Try different rotations to fit through narrow spaces
+    angles_to_try = [carpet.angle]  # Start with current angle
+    if carpet.angle == 0:
+        angles_to_try.extend([90, 180, 270])
+    elif carpet.angle == 90:
+        angles_to_try.extend([0, 180, 270])
+    elif carpet.angle == 180:
+        angles_to_try.extend([0, 90, 270])
+    elif carpet.angle == 270:
+        angles_to_try.extend([0, 90, 180])
+
+    # Start from bottom and go up, looking for the lowest possible position
+    for test_y in range(0, int(sheet_height_mm - max(poly_width, poly_height)) + step_size, step_size):
+        # Only consider positions that are lower than current position (actual improvement)
+        if test_y >= bounds[1]:
+            continue
+
+        # Try different rotations
+        for test_angle in angles_to_try:
+            # Create rotated polygon at origin
+            rotated_polygon = shapely.affinity.rotate(carpet.polygon, test_angle - carpet.angle, origin=(0, 0))
+            rot_bounds = rotated_polygon.bounds
+            rot_width = rot_bounds[2] - rot_bounds[0]
+            rot_height = rot_bounds[3] - rot_bounds[1]
+
+            # Also try X adjustments for better fitting
+            x_offsets = [bounds[0], bounds[0] - 20, bounds[0] + 20, bounds[0] - 50, bounds[0] + 50]
+
+            for test_x_base in x_offsets:
+                # Skip if rotated carpet would be outside sheet bounds
+                if test_x_base < 0 or test_x_base + rot_width > sheet_width_mm:
+                    continue
+                if test_y + rot_height > sheet_height_mm:
+                    continue
+
+                # Calculate final position by moving rotated polygon to test position
+                # First move to origin, then rotate, then move to target position
+                dx_to_origin = -bounds[0]
+                dy_to_origin = -bounds[1]
+                moved_to_origin = shapely.affinity.translate(carpet.polygon, dx_to_origin, dy_to_origin)
+                rotated_at_origin = shapely.affinity.rotate(moved_to_origin, test_angle - carpet.angle, origin=(0, 0))
+                test_polygon = shapely.affinity.translate(rotated_at_origin, test_x_base, test_y)
+
+                test_bounds = test_polygon.bounds
+
+                # Double-check bounds
+                if test_bounds[0] < 0 or test_bounds[1] < 0 or test_bounds[2] > sheet_width_mm or test_bounds[3] > sheet_height_mm:
+                    continue
+
+                # Check for collisions with other carpets
+                has_collision = False
+                for other in other_carpets:
+                    if test_polygon.intersects(other.polygon):
+                        intersection = test_polygon.intersection(other.polygon)
+                        if hasattr(intersection, 'area') and intersection.area > 1:  # Reduced overlap tolerance for tighter packing
+                            has_collision = True
+                            break
+
+                if not has_collision:
+                    improvement = bounds[1] - test_y  # How much we moved down
+                    if improvement > max_improvement:
+                        max_improvement = improvement
+                        best_position = (test_x_base, test_y, test_angle)
+                        print(f"      ✅ Found better position: Y={test_y:.0f}mm, angle={test_angle}°, improvement={improvement:.0f}mm")
+
+    # If we found a better position, create new carpet
+    if max_improvement > 1:  # Move even for small improvements (>1mm)
+        new_x, new_y, new_angle = best_position
+
+        # Calculate the final polygon position
+        dx_to_origin = -bounds[0]
+        dy_to_origin = -bounds[1]
+        moved_to_origin = shapely.affinity.translate(carpet.polygon, dx_to_origin, dy_to_origin)
+        rotated_at_origin = shapely.affinity.rotate(moved_to_origin, new_angle - carpet.angle, origin=(0, 0))
+        new_polygon = shapely.affinity.translate(rotated_at_origin, new_x, new_y)
+
+        # Calculate the offset change
+        new_bounds = new_polygon.bounds
+        dx_total = new_bounds[0] - bounds[0]
+        dy_total = new_bounds[1] - bounds[1]
+
+        return PlacedCarpet(
+            polygon=new_polygon,
+            x_offset=carpet.x_offset + dx_total,
+            y_offset=carpet.y_offset + dy_total,
+            angle=new_angle,
+            filename=carpet.filename,
+            color=carpet.color,
+            order_id=carpet.order_id,
+            carpet_id=carpet.carpet_id,
+            priority=carpet.priority
+        )
+
+    print(f"      ❌ No improvement found for {carpet.filename}")
+    return carpet  # No significant improvement found
+
+
+def move_carpet_left(carpet: PlacedCarpet, other_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float) -> PlacedCarpet:
+    """Move a single carpet as far left as possible without collisions, including trying different rotations."""
+    import shapely.affinity
+
+    bounds = carpet.polygon.bounds
+    poly_width = bounds[2] - bounds[0]
+    poly_height = bounds[3] - bounds[1]
+
+    best_position = (bounds[0], bounds[1], carpet.angle)  # Current position and angle
+    max_improvement = 0  # Track how much we moved left
+
+    # Try different X positions from left to current position
+    step_size = 10  # 1cm steps for better precision
+
+    print(f"    🔍 Trying to move {carpet.filename} from X={bounds[0]:.0f}mm...")
+
+    # Try different rotations to fit through narrow spaces
+    angles_to_try = [carpet.angle]  # Start with current angle
+    if carpet.angle == 0:
+        angles_to_try.extend([90, 180, 270])
+    elif carpet.angle == 90:
+        angles_to_try.extend([0, 180, 270])
+    elif carpet.angle == 180:
+        angles_to_try.extend([0, 90, 270])
+    elif carpet.angle == 270:
+        angles_to_try.extend([0, 90, 180])
+
+    # Start from left edge and go right, looking for the leftmost possible position
+    for test_x in range(0, int(bounds[0]) + step_size, step_size):
+        # Only consider positions that are further left than current position (actual improvement)
+        if test_x >= bounds[0]:
+            continue
+
+        # Try different rotations
+        for test_angle in angles_to_try:
+            # Create rotated polygon at origin
+            rotated_polygon = shapely.affinity.rotate(carpet.polygon, test_angle - carpet.angle, origin=(0, 0))
+            rot_bounds = rotated_polygon.bounds
+            rot_width = rot_bounds[2] - rot_bounds[0]
+            rot_height = rot_bounds[3] - rot_bounds[1]
+
+            # Also try Y adjustments for better fitting
+            y_offsets = [bounds[1], bounds[1] - 20, bounds[1] + 20, bounds[1] - 50, bounds[1] + 50]
+
+            for test_y_base in y_offsets:
+                # Skip if rotated carpet would be outside sheet bounds
+                if test_x + rot_width > sheet_width_mm:
+                    continue
+                if test_y_base < 0 or test_y_base + rot_height > sheet_height_mm:
+                    continue
+
+                # Calculate final position by moving rotated polygon to test position
+                # First move to origin, then rotate, then move to target position
+                dx_to_origin = -bounds[0]
+                dy_to_origin = -bounds[1]
+                moved_to_origin = shapely.affinity.translate(carpet.polygon, dx_to_origin, dy_to_origin)
+                rotated_at_origin = shapely.affinity.rotate(moved_to_origin, test_angle - carpet.angle, origin=(0, 0))
+                test_polygon = shapely.affinity.translate(rotated_at_origin, test_x, test_y_base)
+
+                test_bounds = test_polygon.bounds
+
+                # Double-check bounds
+                if test_bounds[0] < 0 or test_bounds[1] < 0 or test_bounds[2] > sheet_width_mm or test_bounds[3] > sheet_height_mm:
+                    continue
+
+                # Check for collisions with other carpets
+                has_collision = False
+                for other in other_carpets:
+                    if test_polygon.intersects(other.polygon):
+                        intersection = test_polygon.intersection(other.polygon)
+                        if hasattr(intersection, 'area') and intersection.area > 1:  # Reduced overlap tolerance for tighter packing
+                            has_collision = True
+                            break
+
+                if not has_collision:
+                    improvement = bounds[0] - test_x  # How much we moved left
+                    if improvement > max_improvement:
+                        max_improvement = improvement
+                        best_position = (test_x, test_y_base, test_angle)
+                        print(f"      ✅ Found better position: X={test_x:.0f}mm, Y={test_y_base:.0f}mm, angle={test_angle}°, improvement={improvement:.0f}mm")
+
+    # If we found a better position, create new carpet
+    if max_improvement > 1:  # Move even for small improvements (>1mm)
+        new_x, new_y, new_angle = best_position
+
+        # Calculate the final polygon position
+        dx_to_origin = -bounds[0]
+        dy_to_origin = -bounds[1]
+        moved_to_origin = shapely.affinity.translate(carpet.polygon, dx_to_origin, dy_to_origin)
+        rotated_at_origin = shapely.affinity.rotate(moved_to_origin, new_angle - carpet.angle, origin=(0, 0))
+        new_polygon = shapely.affinity.translate(rotated_at_origin, new_x, new_y)
+
+        # Calculate the offset change
+        new_bounds = new_polygon.bounds
+        dx_total = new_bounds[0] - bounds[0]
+        dy_total = new_bounds[1] - bounds[1]
+
+        return PlacedCarpet(
+            polygon=new_polygon,
+            x_offset=carpet.x_offset + dx_total,
+            y_offset=carpet.y_offset + dy_total,
+            angle=new_angle,
+            filename=carpet.filename,
+            color=carpet.color,
+            order_id=carpet.order_id,
+            carpet_id=carpet.carpet_id,
+            priority=carpet.priority
+        )
+
+    print(f"      ❌ No improvement found for {carpet.filename}")
+    return carpet  # No significant improvement found
 
 
 def find_contour_following_position(
@@ -2298,6 +2585,74 @@ def simple_sheet_consolidation(
         logger.info(f"Partial consolidation: moved {successfully_moved}/{len(carpets_to_move)} carpets")
         return placed_layouts
 
+def try_simple_placement(carpet: Carpet, existing_placed: list[PlacedCarpet], sheet_size: tuple[float, float]) -> PlacedCarpet:
+    """Simple placement function for priority 2 carpets - just find ANY available space."""
+    from shapely.geometry import Polygon
+    import shapely.affinity
+
+    # Convert sheet size from cm to mm
+    sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
+
+    # Get existing obstacles
+    obstacles = [placed.polygon for placed in existing_placed]
+
+    # Try different rotations
+    for angle in [0, 90, 180, 270]:
+        # Rotate polygon
+        if angle == 0:
+            rotated_polygon = carpet.polygon
+        else:
+            rotated_polygon = rotate_polygon(carpet.polygon, angle)
+
+        bounds = rotated_polygon.bounds
+        poly_width = bounds[2] - bounds[0]
+        poly_height = bounds[3] - bounds[1]
+
+        # Skip if doesn't fit in sheet
+        if poly_width > sheet_width_mm or poly_height > sheet_height_mm:
+            continue
+
+        # Try grid positions (simple grid search)
+        step = 50  # 5cm steps
+        for x in range(0, int(sheet_width_mm - poly_width + 1), step):
+            for y in range(0, int(sheet_height_mm - poly_height + 1), step):
+                # Move polygon to position
+                dx = x - bounds[0]
+                dy = y - bounds[1]
+                positioned_polygon = shapely.affinity.translate(rotated_polygon, dx, dy)
+
+                # Check if it fits in sheet
+                pos_bounds = positioned_polygon.bounds
+                if (pos_bounds[0] >= 0 and pos_bounds[1] >= 0 and
+                    pos_bounds[2] <= sheet_width_mm and pos_bounds[3] <= sheet_height_mm):
+
+                    # Check for collisions with existing polygons
+                    has_collision = False
+                    for obstacle in obstacles:
+                        if positioned_polygon.intersects(obstacle):
+                            intersection = positioned_polygon.intersection(obstacle)
+                            if hasattr(intersection, 'area') and intersection.area > 1:  # Allow 1mm² overlap
+                                has_collision = True
+                                break
+
+                    if not has_collision:
+                        # Found a valid position!
+                        return PlacedCarpet(
+                            polygon=positioned_polygon,
+                            filename=carpet.filename,
+                            color=carpet.color,
+                            order_id=carpet.order_id,
+                            x_offset=x,
+                            y_offset=y,
+                            angle=angle,
+                            carpet_id=carpet.carpet_id,
+                            priority=carpet.priority
+                        )
+
+    # No valid position found
+    return None
+
+
 def bin_packing_with_inventory(
     carpets: list[Carpet],
     available_sheets: list[dict],
@@ -2659,7 +3014,7 @@ def bin_packing_with_inventory(
         if not remaining_priority2:
             break
         if (
-            layout.usage_percent >= 95  # Lower threshold for priority 2 to maximize filling
+            layout.usage_percent >= 95  # Same threshold as priority 1
         ):  # More aggressive filling - try harder to use existing sheets
             continue
 
@@ -2668,23 +3023,134 @@ def bin_packing_with_inventory(
             c for c in remaining_priority2 if c.color == layout.sheet_color
         ]
         if not matching_carpets:
+            logger.info(f"Лист #{layout.sheet_number}: нет совпадающих ковров приоритета 2 по цвету {layout.sheet_color}")
             continue
 
+        logger.info(f"Лист #{layout.sheet_number} ({layout.usage_percent:.1f}% заполнен): пытаемся разместить {len(matching_carpets)} ковров приоритета 2")
+
         try:
-            additional_placed, remaining_unplaced = bin_packing_with_existing(
-                matching_carpets,
-                layout.placed_polygons,
-                layout.sheet_size,
-                verbose=False,
-                tighten=False,
-            )
+            # Try multiple attempts with different carpet orderings for better fit (like priority 1)
+            best_placed = []
+            best_remaining = matching_carpets
+            remaining_carpet_map = {
+                UnplacedCarpet.from_carpet(c): c
+                for c in matching_carpets
+            }
+
+            for attempt in range(1):  # Single attempt like priority 1
+                if attempt == 1:
+                    # Try reverse order
+                    test_carpets = list(reversed(matching_carpets))
+                elif attempt == 2:
+                    # Try sorted by area (smallest first for gaps)
+                    test_carpets = sorted(
+                        matching_carpets, key=lambda c: c.polygon.area
+                    )
+                elif attempt == 3:
+                    # Try sorted by area (largest first)
+                    test_carpets = sorted(
+                        matching_carpets, key=lambda c: c.polygon.area, reverse=True
+                    )
+                else:
+                    test_carpets = matching_carpets
+
+                # Use EXACTLY the same algorithm as for priority 1
+                additional_placed, remaining_unplaced = bin_packing_with_existing(
+                    test_carpets,
+                    layout.placed_polygons,
+                    layout.sheet_size,
+                    verbose=False,
+                )
+
+                # Keep the best result
+                if len(additional_placed) > len(best_placed):
+                    logger.info(f"  Попытка {attempt}: размещено {len(additional_placed)} ковров (лучший результат)")
+                    best_placed = additional_placed
+                else:
+                    logger.info(f"  Попытка {attempt}: размещено {len(additional_placed)} ковров")
+                    best_remaining = [
+                        remaining_carpet_map.get(
+                            UnplacedCarpet(
+                                rt.polygon, rt.filename, rt.color, rt.order_id
+                            ),
+                            next(
+                                (
+                                    c
+                                    for c in matching_carpets
+                                    if (
+                                        c.polygon,
+                                        c.filename,
+                                        c.color,
+                                        c.order_id,
+                                    )
+                                    == (
+                                        rt.polygon,
+                                        rt.filename,
+                                        rt.color,
+                                        rt.order_id,
+                                    )
+                                ),
+                                None,
+                            ),
+                        )
+                        for rt in remaining_unplaced
+                        if remaining_carpet_map.get(
+                            UnplacedCarpet(
+                                rt.polygon, rt.filename, rt.color, rt.order_id
+                            )
+                        ) is not None
+                    ]
+                    best_remaining = [c for c in best_remaining if c is not None]
+
+            # Use the best result
+            additional_placed = best_placed
+            remaining_unplaced = [UnplacedCarpet.from_carpet(c) for c in best_remaining]
+
+            logger.info(f"Лучший результат для листа #{layout.sheet_number}: {len(additional_placed)} размещено из {len(matching_carpets)}")
+
+            # If standard algorithm fails, try placing each carpet individually
+            if not additional_placed and matching_carpets:
+                logger.info(f"Стандартный алгоритм не сработал, пробуем размещение по одному ковру")
+
+                individual_placed = []
+                for i, carpet in enumerate(matching_carpets):
+                    logger.info(f"Пробуем разместить ковер {i+1}: {carpet.filename}")
+                    try:
+                        # Try simple placement without complex optimization
+                        simple_placed = try_simple_placement(
+                            carpet,
+                            layout.placed_polygons + individual_placed,
+                            layout.sheet_size
+                        )
+
+                        if simple_placed:
+                            single_placed = [simple_placed]
+                        else:
+                            single_placed = []
+                        if single_placed:
+                            individual_placed.extend(single_placed)
+                            logger.info(f"  ✅ Ковер {carpet.filename} размещен успешно")
+                        else:
+                            logger.info(f"  ❌ Ковер {carpet.filename} не размещен")
+                    except Exception as e:
+                        logger.warning(f"  ❌ Ошибка размещения ковра {carpet.filename}: {e}")
+
+                if individual_placed:
+                    additional_placed = individual_placed
+                    # Calculate remaining unplaced
+                    placed_filenames = {p.filename for p in individual_placed}
+                    remaining_unplaced = [
+                        UnplacedCarpet.from_carpet(c) for c in matching_carpets
+                        if c.filename not in placed_filenames
+                    ]
+                    logger.info(f"Индивидуальное размещение: {len(individual_placed)} ковров из {len(matching_carpets)}")
 
             if additional_placed:
                 # SMART: Skip overlap check if sheet has plenty of free space (low usage)
                 current_usage = layout.usage_percent
 
-                if current_usage < 20:
-                    # If sheet is mostly empty, trust bin_packing_with_existing
+                if current_usage < 30:
+                    # If sheet has reasonable space, trust bin_packing_with_existing more
                     logger.info(
                         f"Лист #{layout.sheet_number} заполнен всего на {current_usage:.1f}% - пропускаем проверку перекрытий для приоритета 2"
                     )
@@ -2707,10 +3173,10 @@ def bin_packing_with_inventory(
                                     )
                                     new_poly_area = new_poly.area
 
-                                    # More permissive threshold for fuller sheets (50%)
+                                    # Very permissive threshold for priority 2 (60%)
                                     if (
                                         intersection_area > 0
-                                        and intersection_area / new_poly_area > 0.50
+                                        and intersection_area / new_poly_area > 0.60
                                     ):
                                         logger.warning(
                                             f"Крупное перекрытие при размещении приоритета 2: {intersection_area/new_poly_area*100:.1f}% от полигона {i} на листе #{layout.sheet_number}"
@@ -2747,12 +3213,12 @@ def bin_packing_with_inventory(
                     # Remove carpets from remaining_priority2 that were successfully placed
                     old_remaining_count = len(remaining_priority2)
                     remaining_priority2 = [
-                        c for c in remaining_priority2 
+                        c for c in remaining_priority2
                         if (c.filename, c.color, c.order_id) not in placed_carpet_ids
                     ]
                     new_remaining_count = len(remaining_priority2)
                     logger.info(
-                        f"    Дозаполнен лист #{layout.sheet_number}: +{len(additional_placed)} приоритет2"
+                        f"    Дозаполнен лист #{layout.sheet_number}: +{len(additional_placed)} приоритет2, осталось {new_remaining_count}"
                     )
                 else:
                     logger.warning(
@@ -2763,7 +3229,7 @@ def bin_packing_with_inventory(
             logger.debug(f"Не удалось дозаполнить лист приоритетом 2: {e}")
             continue
 
-    # Add any remaining priority 2 to unplaced (no new sheets allowed)
+    # Add any remaining priority 2 to unplaced (no new sheets allowed for priority 2)
     if remaining_priority2:
         logger.info(
             f"Остается неразмещенными {len(remaining_priority2)} приоритет2 (новые листы не создаются)"
