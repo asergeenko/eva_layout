@@ -834,11 +834,6 @@ def bin_packing_with_existing(
     sorted_polygons = sorted(polygons, key=get_polygon_priority, reverse=True)
 
     for i, carpet in enumerate(sorted_polygons):
-        # ПРОФИЛИРОВАНИЕ: Измеряем время обработки каждого полигона
-        import time
-
-        polygon_start_time = time.time()
-
         polygon = carpet.polygon
         file_name = carpet.filename
         color = carpet.color
@@ -1013,12 +1008,6 @@ def bin_packing_with_existing(
         if not placed_successfully:
             unplaced.append(UnplacedCarpet.from_carpet(carpet))
 
-        # ПРОФИЛИРОВАНИЕ: Логируем время обработки медленных полигонов
-        polygon_elapsed = time.time() - polygon_start_time
-        if polygon_elapsed > 2.0:  # Логируем полигоны, обрабатывающиеся дольше 2 секунд
-            logger.warning(
-                f"⏱️ Медленный полигон {file_name}: {polygon_elapsed:.2f}s, размещен={placed_successfully}"
-            )
 
     # FAST OPTIMIZATION for existing sheets
     if tighten and len(placed) <= 5:  # Very conservative optimization
@@ -1845,7 +1834,6 @@ def find_bottom_left_position_with_obstacles(
 
     # Fallback to improved algorithm
     bounds = polygon.bounds
-    bounds = polygon.bounds
     poly_width = bounds[2] - bounds[0]
     poly_height = bounds[3] - bounds[1]
 
@@ -2277,7 +2265,7 @@ def simple_sheet_consolidation(
             if layout.sheet_color != carpet.color:
                 continue
                 
-            if layout.usage_percent >= 90:  # Skip very full sheets
+            if layout.usage_percent >= 95:  # Skip very full sheets
                 continue
             
             try:
@@ -2309,192 +2297,6 @@ def simple_sheet_consolidation(
         # Some carpets couldn't be moved - keep original layout
         logger.info(f"Partial consolidation: moved {successfully_moved}/{len(carpets_to_move)} carpets")
         return placed_layouts
-
-
-def optimized_multi_pass_packing(
-    carpets: list[Carpet],
-    sheet_size: tuple[float, float],
-    verbose: bool = False,
-    progress_callback=None,
-) -> tuple[list[PlacedCarpet], list[UnplacedCarpet]]:
-    """Advanced multi-pass bin packing with different sorting strategies."""
-    if not carpets:
-        return [], []
-    
-    logger.info(f"Starting optimized multi-pass packing for {len(carpets)} carpets")
-    
-    best_placed = []
-    best_unplaced = carpets
-    best_usage = 0.0
-    
-    # Limit strategies for performance - test only the most effective ones
-    strategies = []
-    
-    # Strategy 1: Area-first (largest area first) - usually most effective
-    area_sorted = sorted(carpets, key=lambda c: c.polygon.area, reverse=True)
-    strategies.append(("area-first", area_sorted))
-    
-    # Strategy 2: Width-first (widest shapes first) - good for rectangular shapes
-    width_sorted = sorted(carpets, key=lambda c: c.polygon.bounds[2] - c.polygon.bounds[0], reverse=True)
-    strategies.append(("width-first", width_sorted))
-    
-    # Strategy 3: Only test aspect ratio if we have time (fewer than 10 carpets)
-    if len(carpets) <= 10:
-        def get_aspect_ratio_score(carpet: Carpet):
-            bounds = carpet.polygon.bounds
-            width = bounds[2] - bounds[0]
-            height = bounds[3] - bounds[1]
-            if min(width, height) > 0:
-                return max(width/height, height/width)
-            return 1.0
-        
-        aspect_sorted = sorted(carpets, key=get_aspect_ratio_score, reverse=True)
-        strategies.append(("aspect-ratio", aspect_sorted))
-    
-    # Test each strategy
-    for strategy_name, sorted_carpets in strategies:
-        placed, unplaced = bin_packing(sorted_carpets, sheet_size, verbose=False)
-        usage = calculate_usage_percent(placed, sheet_size) if placed else 0
-        
-        if len(placed) > len(best_placed) or (len(placed) == len(best_placed) and usage > best_usage):
-            best_placed, best_unplaced, best_usage = placed, unplaced, usage
-            logger.info(f"Strategy {strategy_name}: {len(placed)} placed, {usage:.1f}% usage")
-    
-    logger.info(f"Best strategy achieved: {len(best_placed)} placed, {best_usage:.1f}% usage")
-    return best_placed, best_unplaced
-
-
-def repack_low_density_sheets(
-    placed_layouts: list[PlacedSheet], 
-    density_threshold: float = 75.0
-) -> list[PlacedSheet]:
-    """Repack sheets with low density to optimize space utilization."""
-    import time
-    start_time = time.time()
-    timeout = 30.0  # 30 second timeout for repacking
-    
-    logger.info(f"Starting repacking of sheets with density < {density_threshold}%")
-    
-    # Find low-density sheets
-    low_density_sheets = []
-    for i, layout in enumerate(placed_layouts):
-        if layout.usage_percent < density_threshold:
-            low_density_sheets.append((i, layout))
-    
-    if len(low_density_sheets) < 2:
-        logger.info("Not enough low-density sheets for repacking")
-        return placed_layouts
-    
-    logger.info(f"Found {len(low_density_sheets)} low-density sheets for repacking")
-    
-    # Group by color for repacking
-    sheets_by_color = {}
-    for idx, layout in low_density_sheets:
-        color = layout.sheet_color
-        if color not in sheets_by_color:
-            sheets_by_color[color] = []
-        sheets_by_color[color].append((idx, layout))
-    
-    optimized_layouts = placed_layouts.copy()
-    
-    for color, color_sheets in sheets_by_color.items():
-        # Check timeout
-        if time.time() - start_time > timeout:
-            logger.warning("Repacking timeout reached, returning current state")
-            break
-            
-        if len(color_sheets) < 2:
-            continue
-            
-        logger.info(f"Repacking {len(color_sheets)} sheets of color {color}")
-        
-        # Collect all carpets from these sheets
-        all_carpets = []
-        sheet_indices = []
-        
-        for idx, layout in color_sheets:
-            sheet_indices.append(idx)
-            for placed_carpet in layout.placed_polygons:
-                # Convert back to Carpet object for repacking
-                carpet = Carpet(
-                    placed_carpet.polygon, 
-                    placed_carpet.filename, 
-                    placed_carpet.color, 
-                    placed_carpet.order_id,
-                    priority=1  # Assume priority 1 for repacking
-                )
-                all_carpets.append(carpet)
-        
-        if not all_carpets:
-            continue
-            
-        # Get sheet size from first sheet
-        sheet_size = color_sheets[0][1].sheet_size
-        
-        # Try to repack all carpets using optimized algorithm
-        repacked_placed, repacked_unplaced = optimized_multi_pass_packing(
-            all_carpets, sheet_size, verbose=False
-        )
-        
-        # Calculate how many sheets we need now
-        carpets_per_sheet = []
-        remaining_carpets = all_carpets.copy()
-        sheet_count = 0
-        
-        while remaining_carpets and sheet_count < len(color_sheets):
-            placed, unplaced = optimized_multi_pass_packing(
-                remaining_carpets, sheet_size, verbose=False
-            )
-            
-            if not placed:  # Can't place any more
-                break
-                
-            carpets_per_sheet.append(placed)
-            
-            # Update remaining carpets
-            placed_set = set()
-            for p in placed:
-                for c in remaining_carpets:
-                    if (c.polygon == p.polygon and c.filename == p.filename and 
-                        c.color == p.color and c.order_id == p.order_id):
-                        placed_set.add(c)
-                        break
-            
-            remaining_carpets = [c for c in remaining_carpets if c not in placed_set]
-            sheet_count += 1
-        
-        # Check if we improved (using fewer sheets or better density)
-        original_sheet_count = len(color_sheets)
-        new_sheet_count = len(carpets_per_sheet)
-        
-        if new_sheet_count < original_sheet_count or not remaining_carpets:
-            logger.info(f"Repacking successful: {original_sheet_count} → {new_sheet_count} sheets")
-            
-            # Remove original sheets (in reverse order to maintain indices)
-            for idx in sorted(sheet_indices, reverse=True):
-                optimized_layouts.pop(idx)
-            
-            # Add new optimized sheets
-            for i, placed_carpets in enumerate(carpets_per_sheet):
-                new_layout = PlacedSheet(
-                    sheet_number=0,  # Will be renumbered later
-                    sheet_type=color_sheets[0][1].sheet_type,
-                    sheet_color=color,
-                    sheet_size=sheet_size,
-                    placed_polygons=placed_carpets,
-                    usage_percent=calculate_usage_percent(placed_carpets, sheet_size),
-                    orders_on_sheet=list(set(p.order_id for p in placed_carpets))
-                )
-                optimized_layouts.append(new_layout)
-        else:
-            logger.info(f"Repacking did not improve: keeping original {original_sheet_count} sheets")
-    
-    # Renumber sheets
-    for i, layout in enumerate(optimized_layouts):
-        layout.sheet_number = i + 1
-    
-    return optimized_layouts
-
 
 def bin_packing_with_inventory(
     carpets: list[Carpet],
@@ -2555,7 +2357,7 @@ def bin_packing_with_inventory(
         if not remaining_priority1:
             break
         if (
-            layout.usage_percent >= 85  # Lowered threshold for better filling
+            layout.usage_percent >= 95
         ):  # More aggressive filling - try harder to use existing sheets
             continue
 
@@ -2857,7 +2659,7 @@ def bin_packing_with_inventory(
         if not remaining_priority2:
             break
         if (
-            layout.usage_percent >= 80  # Lower threshold for priority 2 to maximize filling
+            layout.usage_percent >= 95  # Lower threshold for priority 2 to maximize filling
         ):  # More aggressive filling - try harder to use existing sheets
             continue
 
@@ -3019,7 +2821,7 @@ def bin_packing_with_inventory(
                 if layout.sheet_color != unplaced_carpet.color:
                     continue
                     
-                if layout.usage_percent >= 95:  # Skip very full sheets
+                if layout.usage_percent >= 98:  # Skip very full sheets
                     continue
                 
                 try:
