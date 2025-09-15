@@ -1740,39 +1740,30 @@ def bin_packing(
 
 def apply_gravity_optimization(placed_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float) -> list[PlacedCarpet]:
     """
-    Apply gravity optimization - move carpets down and left to maximize free space.
-    This helps place larger carpets in the freed areas.
+    Improved gravity optimization for better sheet utilization while maintaining performance.
     """
     if not placed_carpets:
         return placed_carpets
 
     # STEP 1: Vertical compaction (move down)
-    # Sort carpets by Y coordinate (top to bottom) - move top ones down first for maximum benefit
     sorted_carpets = sorted(placed_carpets, key=lambda c: c.polygon.bounds[3], reverse=True)
     vertically_optimized = []
 
     for i, carpet in enumerate(sorted_carpets):
-        # Get all carpets except current one
         other_carpets = vertically_optimized + sorted_carpets[i+1:]
-
-        # Try to move this carpet as low as possible
         moved_carpet = move_carpet_down(carpet, other_carpets, sheet_width_mm, sheet_height_mm)
         vertically_optimized.append(moved_carpet)
 
     # STEP 2: Horizontal compaction (move left)
-    # Sort carpets by X coordinate (right to left) - move right ones left first
     sorted_by_x = sorted(vertically_optimized, key=lambda c: c.polygon.bounds[2], reverse=True)
-    fully_optimized = []
+    horizontally_optimized = []
 
     for i, carpet in enumerate(sorted_by_x):
-        # Get all carpets except current one
-        other_carpets = fully_optimized + sorted_by_x[i+1:]
-
-        # Try to move this carpet as far left as possible
+        other_carpets = horizontally_optimized + sorted_by_x[i+1:]
         moved_carpet = move_carpet_left(carpet, other_carpets, sheet_width_mm, sheet_height_mm)
-        fully_optimized.append(moved_carpet)
+        horizontally_optimized.append(moved_carpet)
 
-    return fully_optimized
+    return horizontally_optimized
 
 
 def move_carpet_down(carpet: PlacedCarpet, other_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float) -> PlacedCarpet:
@@ -1991,6 +1982,245 @@ def move_carpet_left(carpet: PlacedCarpet, other_carpets: list[PlacedCarpet], sh
         )
 
     return carpet  # No significant improvement found
+
+
+def move_carpet_down_aggressive(carpet: PlacedCarpet, other_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float) -> PlacedCarpet:
+    """AGGRESSIVE downward movement with fine-grained steps and rotation."""
+    import shapely.affinity
+
+    bounds = carpet.polygon.bounds
+    best_position = (bounds[0], bounds[1], carpet.angle)
+    max_improvement = 0
+
+    step_size = 5  # 5mm steps for good balance of precision/speed
+
+    # Try current angle and all 90-degree rotations
+    for test_angle in [carpet.angle, 0, 90, 180, 270]:
+        if test_angle == carpet.angle:
+            rotated_polygon = carpet.polygon
+        else:
+            rotated_polygon = shapely.affinity.rotate(carpet.polygon, test_angle - carpet.angle, origin=(0, 0))
+
+        rot_bounds = rotated_polygon.bounds
+        rot_width = rot_bounds[2] - rot_bounds[0]
+        rot_height = rot_bounds[3] - rot_bounds[1]
+
+        # Try moving from bottom up to current position
+        for test_y in range(0, int(bounds[1]) + step_size, step_size):
+            if test_y >= bounds[1]:
+                continue
+
+            # Try slight X adjustments for better fitting
+            for x_adjust in [-50, -20, 0, 20, 50]:
+                test_x = bounds[0] + x_adjust
+                if test_x < 0 or test_x + rot_width > sheet_width_mm:
+                    continue
+
+                # Create test position
+                dx_to_origin = -bounds[0]
+                dy_to_origin = -bounds[1]
+                moved_to_origin = shapely.affinity.translate(carpet.polygon, dx_to_origin, dy_to_origin)
+                rotated_at_origin = shapely.affinity.rotate(moved_to_origin, test_angle - carpet.angle, origin=(0, 0))
+                test_polygon = shapely.affinity.translate(rotated_at_origin, test_x, test_y)
+
+                test_bounds = test_polygon.bounds
+                if (test_bounds[0] < 0 or test_bounds[1] < 0 or
+                    test_bounds[2] > sheet_width_mm or test_bounds[3] > sheet_height_mm):
+                    continue
+
+                # Check collisions with minimal gap tolerance
+                has_collision = False
+                for other in other_carpets:
+                    if test_polygon.intersects(other.polygon):
+                        intersection = test_polygon.intersection(other.polygon)
+                        if hasattr(intersection, 'area') and intersection.area > 0.1:  # Ultra-tight packing
+                            has_collision = True
+                            break
+
+                if not has_collision:
+                    improvement = bounds[1] - test_y
+                    if improvement > max_improvement:
+                        max_improvement = improvement
+                        best_position = (test_x, test_y, test_angle)
+
+    # Apply best position if found
+    if max_improvement > 0.1:  # Any improvement is valuable
+        new_x, new_y, new_angle = best_position
+
+        dx_to_origin = -bounds[0]
+        dy_to_origin = -bounds[1]
+        moved_to_origin = shapely.affinity.translate(carpet.polygon, dx_to_origin, dy_to_origin)
+        rotated_at_origin = shapely.affinity.rotate(moved_to_origin, new_angle - carpet.angle, origin=(0, 0))
+        new_polygon = shapely.affinity.translate(rotated_at_origin, new_x, new_y)
+
+        new_bounds = new_polygon.bounds
+        dx_total = new_bounds[0] - bounds[0]
+        dy_total = new_bounds[1] - bounds[1]
+
+        return PlacedCarpet(
+            polygon=new_polygon,
+            x_offset=carpet.x_offset + dx_total,
+            y_offset=carpet.y_offset + dy_total,
+            angle=new_angle,
+            filename=carpet.filename,
+            color=carpet.color,
+            order_id=carpet.order_id,
+            carpet_id=carpet.carpet_id,
+            priority=carpet.priority
+        )
+
+    return carpet
+
+
+def move_carpet_left_aggressive(carpet: PlacedCarpet, other_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float) -> PlacedCarpet:
+    """AGGRESSIVE leftward movement with rotation support."""
+    import shapely.affinity
+
+    bounds = carpet.polygon.bounds
+    best_position = (bounds[0], bounds[1], carpet.angle)
+    max_improvement = 0
+
+    step_size = 2  # 2mm steps for maximum precision
+
+    # Try current angle and rotations
+    for test_angle in [carpet.angle, 0, 90, 180, 270]:
+        if test_angle == carpet.angle:
+            rotated_polygon = carpet.polygon
+        else:
+            rotated_polygon = shapely.affinity.rotate(carpet.polygon, test_angle - carpet.angle, origin=(0, 0))
+
+        rot_bounds = rotated_polygon.bounds
+        rot_width = rot_bounds[2] - rot_bounds[0]
+
+        # Try moving from left edge to current position
+        for test_x in range(0, int(bounds[0]) + step_size, step_size):
+            if test_x >= bounds[0]:
+                continue
+
+            # Try Y adjustments
+            for y_adjust in [-50, -20, 0, 20, 50]:
+                test_y = bounds[1] + y_adjust
+                if test_x + rot_width > sheet_width_mm:
+                    continue
+
+                # Create test position
+                dx_to_origin = -bounds[0]
+                dy_to_origin = -bounds[1]
+                moved_to_origin = shapely.affinity.translate(carpet.polygon, dx_to_origin, dy_to_origin)
+                rotated_at_origin = shapely.affinity.rotate(moved_to_origin, test_angle - carpet.angle, origin=(0, 0))
+                test_polygon = shapely.affinity.translate(rotated_at_origin, test_x, test_y)
+
+                test_bounds = test_polygon.bounds
+                if (test_bounds[0] < 0 or test_bounds[1] < 0 or
+                    test_bounds[2] > sheet_width_mm or test_bounds[3] > sheet_height_mm):
+                    continue
+
+                # Check collisions
+                has_collision = False
+                for other in other_carpets:
+                    if test_polygon.intersects(other.polygon):
+                        intersection = test_polygon.intersection(other.polygon)
+                        if hasattr(intersection, 'area') and intersection.area > 0.1:
+                            has_collision = True
+                            break
+
+                if not has_collision:
+                    improvement = bounds[0] - test_x
+                    if improvement > max_improvement:
+                        max_improvement = improvement
+                        best_position = (test_x, test_y, test_angle)
+
+    # Apply best position if found
+    if max_improvement > 0.1:
+        new_x, new_y, new_angle = best_position
+
+        dx_to_origin = -bounds[0]
+        dy_to_origin = -bounds[1]
+        moved_to_origin = shapely.affinity.translate(carpet.polygon, dx_to_origin, dy_to_origin)
+        rotated_at_origin = shapely.affinity.rotate(moved_to_origin, new_angle - carpet.angle, origin=(0, 0))
+        new_polygon = shapely.affinity.translate(rotated_at_origin, new_x, new_y)
+
+        new_bounds = new_polygon.bounds
+        dx_total = new_bounds[0] - bounds[0]
+        dy_total = new_bounds[1] - bounds[1]
+
+        return PlacedCarpet(
+            polygon=new_polygon,
+            x_offset=carpet.x_offset + dx_total,
+            y_offset=carpet.y_offset + dy_total,
+            angle=new_angle,
+            filename=carpet.filename,
+            color=carpet.color,
+            order_id=carpet.order_id,
+            carpet_id=carpet.carpet_id,
+            priority=carpet.priority
+        )
+
+    return carpet
+
+
+def move_carpet_right_to_edge(carpet: PlacedCarpet, other_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float) -> PlacedCarpet:
+    """Move carpet as far right as possible to maximize left space."""
+    import shapely.affinity
+
+    bounds = carpet.polygon.bounds
+    poly_width = bounds[2] - bounds[0]
+
+    best_x = bounds[0]
+    max_improvement = 0
+
+    # Try moving right from current position to edge
+    step_size = 2
+    for test_x in range(int(bounds[0]), int(sheet_width_mm - poly_width) + step_size, step_size):
+        if test_x <= bounds[0]:
+            continue
+
+        # Try slight Y adjustments
+        for y_adjust in [-20, 0, 20]:
+            test_y = bounds[1] + y_adjust
+
+            dx = test_x - bounds[0]
+            dy = test_y - bounds[1]
+            test_polygon = shapely.affinity.translate(carpet.polygon, dx, dy)
+
+            test_bounds = test_polygon.bounds
+            if (test_bounds[0] < 0 or test_bounds[1] < 0 or
+                test_bounds[2] > sheet_width_mm or test_bounds[3] > sheet_height_mm):
+                continue
+
+            # Check collisions
+            has_collision = False
+            for other in other_carpets:
+                if test_polygon.intersects(other.polygon):
+                    intersection = test_polygon.intersection(other.polygon)
+                    if hasattr(intersection, 'area') and intersection.area > 0.1:
+                        has_collision = True
+                        break
+
+            if not has_collision:
+                improvement = test_x - bounds[0]
+                if improvement > max_improvement:
+                    max_improvement = improvement
+                    best_x = test_x
+
+    # Apply best position if found
+    if max_improvement > 0.1:
+        dx = best_x - bounds[0]
+        new_polygon = shapely.affinity.translate(carpet.polygon, dx, 0)
+
+        return PlacedCarpet(
+            polygon=new_polygon,
+            x_offset=carpet.x_offset + dx,
+            y_offset=carpet.y_offset,
+            angle=carpet.angle,
+            filename=carpet.filename,
+            color=carpet.color,
+            order_id=carpet.order_id,
+            carpet_id=carpet.carpet_id,
+            priority=carpet.priority
+        )
+
+    return carpet
 
 
 def find_contour_following_position(
@@ -2605,8 +2835,7 @@ def simple_sheet_consolidation(
         return placed_layouts
 
 def try_simple_placement(carpet: Carpet, existing_placed: list[PlacedCarpet], sheet_size: tuple[float, float]) -> PlacedCarpet | None:
-    """Simple placement function for priority 2 carpets - just find ANY available space."""
-    from shapely.geometry import Polygon
+    """ULTRA-AGGRESSIVE placement for priority 2 carpets - use EVERY available space."""
     import shapely.affinity
 
     # Convert sheet size from cm to mm
@@ -2615,64 +2844,77 @@ def try_simple_placement(carpet: Carpet, existing_placed: list[PlacedCarpet], sh
     # Get existing obstacles
     obstacles = [placed.polygon for placed in existing_placed]
 
-    # Try different rotations
-    for angle in [0, 90, 180, 270]:
-        # Rotate polygon
-        if angle == 0:
-            rotated_polygon = carpet.polygon
-        else:
-            rotated_polygon = rotate_polygon(carpet.polygon, angle)
+    # Try multiple approaches for maximum space utilization
+    placement_strategies = [
+        # Strategy 1: Coarse grid first
+        {"step": 10, "rotations": [0, 90, 180, 270]},  # 10mm steps
+        # Strategy 2: Fine grid with all rotations
+        {"step": 5, "rotations": [0, 90, 180, 270]},  # 5mm steps
+        # Strategy 3: Ultra-fine for gaps
+        {"step": 2, "rotations": [0, 90, 180, 270]},  # 2mm steps for tight spots
+    ]
 
-        bounds = rotated_polygon.bounds
-        poly_width = bounds[2] - bounds[0]
-        poly_height = bounds[3] - bounds[1]
+    for strategy in placement_strategies:
+        step = strategy["step"]
+        rotations = strategy["rotations"]
 
-        # Skip if doesn't fit in sheet
-        if poly_width > sheet_width_mm or poly_height > sheet_height_mm:
-            continue
+        # Try different rotations
+        for angle in rotations:
+            # Rotate polygon
+            if angle == 0:
+                rotated_polygon = carpet.polygon
+            else:
+                rotated_polygon = rotate_polygon(carpet.polygon, angle)
 
-        # Try grid positions (simple grid search)
-        step = 50  # 5cm steps
-        for x in range(0, int(sheet_width_mm - poly_width + 1), step):
+            bounds = rotated_polygon.bounds
+            poly_width = bounds[2] - bounds[0]
+            poly_height = bounds[3] - bounds[1]
+
+            # Skip if doesn't fit in sheet
+            if poly_width > sheet_width_mm or poly_height > sheet_height_mm:
+                continue
+
+            # BOTTOM-LEFT FIRST approach for maximum compaction
             for y in range(0, int(sheet_height_mm - poly_height + 1), step):
-                # Move polygon to position
-                dx = x - bounds[0]
-                dy = y - bounds[1]
-                positioned_polygon = shapely.affinity.translate(rotated_polygon, dx, dy)
+                for x in range(0, int(sheet_width_mm - poly_width + 1), step):
+                    # Move polygon to position
+                    dx = x - bounds[0]
+                    dy = y - bounds[1]
+                    positioned_polygon = shapely.affinity.translate(rotated_polygon, dx, dy)
 
-                # Check if it fits in sheet
-                pos_bounds = positioned_polygon.bounds
-                if (pos_bounds[0] >= 0 and pos_bounds[1] >= 0 and
-                    pos_bounds[2] <= sheet_width_mm and pos_bounds[3] <= sheet_height_mm):
+                    # Check if it fits in sheet
+                    pos_bounds = positioned_polygon.bounds
+                    if (pos_bounds[0] >= 0 and pos_bounds[1] >= 0 and
+                        pos_bounds[2] <= sheet_width_mm and pos_bounds[3] <= sheet_height_mm):
 
-                    # Check for collisions with existing polygons
-                    has_collision = False
-                    for obstacle in obstacles:
-                        if positioned_polygon.intersects(obstacle):
-                            intersection = positioned_polygon.intersection(obstacle)
-                            if hasattr(intersection, 'area') and intersection.area > 1:  # Allow 1mm² overlap
-                                has_collision = True
-                                break
+                        # Check for collisions with existing polygons
+                        has_collision = False
+                        for obstacle in obstacles:
+                            if positioned_polygon.intersects(obstacle):
+                                intersection = positioned_polygon.intersection(obstacle)
+                                if hasattr(intersection, 'area') and intersection.area > 0.1:  # Ultra-tight packing
+                                    has_collision = True
+                                    break
 
-                    if not has_collision:
-                        # Found a valid position!
-                        # Calculate correct offsets: how much we moved from original position
-                        orig_bounds = carpet.polygon.bounds
-                        final_bounds = positioned_polygon.bounds
-                        actual_x_offset = final_bounds[0] - orig_bounds[0]
-                        actual_y_offset = final_bounds[1] - orig_bounds[1]
+                        if not has_collision:
+                            # Found a valid position!
+                            # Calculate correct offsets: how much we moved from original position
+                            orig_bounds = carpet.polygon.bounds
+                            final_bounds = positioned_polygon.bounds
+                            actual_x_offset = final_bounds[0] - orig_bounds[0]
+                            actual_y_offset = final_bounds[1] - orig_bounds[1]
 
-                        return PlacedCarpet(
-                            polygon=positioned_polygon,
-                            filename=carpet.filename,
-                            color=carpet.color,
-                            order_id=carpet.order_id,
-                            x_offset=actual_x_offset,
-                            y_offset=actual_y_offset,
-                            angle=angle,
-                            carpet_id=carpet.carpet_id,
-                            priority=carpet.priority
-                        )
+                            return PlacedCarpet(
+                                polygon=positioned_polygon,
+                                filename=carpet.filename,
+                                color=carpet.color,
+                                order_id=carpet.order_id,
+                                x_offset=actual_x_offset,
+                                y_offset=actual_y_offset,
+                                angle=angle,
+                                carpet_id=carpet.carpet_id,
+                                priority=carpet.priority
+                            )
 
     # No valid position found
     return None
@@ -3039,7 +3281,7 @@ def bin_packing_with_inventory(
         if not remaining_priority2:
             break
         if (
-            layout.usage_percent >= 95  # Same threshold as priority 1
+            layout.usage_percent >= 85  # MUCH lower threshold for priority 2 - use more space!
         ):  # More aggressive filling - try harder to use existing sheets
             continue
 
