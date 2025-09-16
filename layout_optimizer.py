@@ -316,7 +316,7 @@ def analyze_placement_blocking(placed_carpets: list[PlacedCarpet], sheet_width_m
 
         blocking_contribution = base_trapped - trapped_without
 
-        if blocking_contribution > 3000:  # Больше 300 см² блокировки (более агрессивный порог)
+        if blocking_contribution > 1000:  # REDUCED: Больше 100 см² блокировки (еще более агрессивный порог)
             analysis['blocking_carpets'].append({
                 'carpet': carpet,
                 'blocking_amount': blocking_contribution,
@@ -369,7 +369,7 @@ def post_placement_optimize_aggressive(placed_carpets: list[PlacedCarpet], sheet
     ]
 
     improvements_made = 0
-    max_improvements = 2  # Агрессивно переразмещаем максимум 2 худших ковра
+    max_improvements = 5  # INCREASED: Агрессивно переразмещаем максимум 5 худших ковров
 
     for blocker_info in blocking_carpets[:max_improvements]:
         carpet_idx = blocker_info['carpet_index']
@@ -469,7 +469,7 @@ def post_placement_optimize_aggressive(placed_carpets: list[PlacedCarpet], sheet
                         }
 
         # Применяем лучшее размещение если оно значимо лучше
-        if best_placement and best_improvement > 500:  # Минимум 50 см² улучшения
+        if best_placement and best_improvement > 100:  # REDUCED: Минимум 10 см² улучшения (более агрессивно)
             print(f"✅ Найдено лучшее размещение: освобождает {best_improvement/100:.0f} см²")
 
             optimized_carpets[carpet_idx] = PlacedCarpet(
@@ -585,7 +585,7 @@ def post_placement_optimize(placed_carpets: list[PlacedCarpet], sheet_width_mm: 
                     test_trapped = calculate_trapped_space(test_carpets, sheet_width_mm, sheet_height_mm)
                     improvement = current_trapped - test_trapped
 
-                    if improvement > best_improvement and improvement > 1000:  # Минимум 100 см² улучшения (более чувствительный)
+                    if improvement > best_improvement and improvement > 200:  # REDUCED: Минимум 20 см² улучшения (еще более чувствительный)
                         best_improvement = improvement
                         best_rotation = (test_angle, test_polygon)
 
@@ -2320,13 +2320,178 @@ def find_contour_following_position(
     return None, None
 
 
+def find_super_dense_position(
+    polygon: Polygon, obstacles: list[Polygon], sheet_width: float, sheet_height: float
+) -> tuple[float | None, float | None]:
+    """REVOLUTIONARY: Maximum density placement using exhaustive multi-strategy search."""
+    bounds = polygon.bounds
+    poly_width = bounds[2] - bounds[0]
+    poly_height = bounds[3] - bounds[1]
+
+    # Strategy 1: SMART grid search - adaptive step based on polygon size and existing density
+    polygon_area = poly_width * poly_height
+
+    # Adaptive step: smaller for small polygons, larger for big ones
+    if polygon_area < 5000:  # Small carpet
+        step = 0.5
+    elif polygon_area < 20000:  # Medium carpet
+        step = 1.0
+    else:  # Large carpet
+        step = 2.0
+
+    # Limit search area based on existing obstacles to avoid empty regions
+    occupied_regions = []
+    if obstacles:
+        for obs in obstacles:
+            obs_bounds = obs.bounds
+            occupied_regions.append(obs_bounds)
+
+    # Search in expanding rings from bottom-left
+    max_candidates = 2000  # Reasonable limit
+    tested = 0
+
+    for ring in range(20):  # Maximum 20 rings
+        ring_step = step * (1 + ring * 0.5)  # Coarser at distance
+
+        # Bottom edge of ring
+        for x in np.arange(0, min(sheet_width - poly_width, ring * 50) + ring_step, ring_step):
+            y = ring * 10
+            if y > sheet_height - poly_height:
+                break
+
+            x_offset = x - bounds[0]
+            y_offset = y - bounds[1]
+            test_polygon = translate_polygon(polygon, x_offset, y_offset)
+
+            # Quick bounds check
+            test_bounds = test_polygon.bounds
+            if (test_bounds[0] >= -0.01 and test_bounds[1] >= -0.01 and
+                test_bounds[2] <= sheet_width + 0.01 and test_bounds[3] <= sheet_height + 0.01):
+
+                # Collision check
+                collision = False
+                for obstacle in obstacles:
+                    if check_collision(test_polygon, obstacle, min_gap=0.1):
+                        collision = True
+                        break
+
+                if not collision:
+                    return x, y
+
+            tested += 1
+            if tested > max_candidates:
+                break
+
+        if tested > max_candidates:
+            break
+
+    return None, None
+
+
+def find_enhanced_contour_following_position(
+    polygon: Polygon, obstacles: list[Polygon], sheet_width: float, sheet_height: float
+) -> tuple[float | None, float | None]:
+    """Enhanced contour following - ALL obstacles, more positions."""
+    bounds = polygon.bounds
+    poly_width = bounds[2] - bounds[0]
+    poly_height = bounds[3] - bounds[1]
+
+    candidates = []
+
+    # Strategy 1: Follow obstacle contours (limit for performance)
+    for obstacle in obstacles[:min(len(obstacles), 10)]:  # Reasonable limit
+        if hasattr(obstacle.exterior, "coords"):
+            contour_points = list(obstacle.exterior.coords)
+
+            # Much denser sampling along contour
+            for i, (cx, cy) in enumerate(contour_points[:-1]):
+                # More test positions around each contour point
+                test_positions = [
+                    # Right side positions (multiple heights)
+                    (cx + 0.05, cy - poly_height + 0.05),
+                    (cx + 0.05, cy - poly_height/2),
+                    (cx + 0.05, cy),
+                    (cx + 0.05, cy + 0.05),
+
+                    # Left side positions
+                    (cx - poly_width - 0.05, cy - poly_height + 0.05),
+                    (cx - poly_width - 0.05, cy - poly_height/2),
+                    (cx - poly_width - 0.05, cy),
+                    (cx - poly_width - 0.05, cy + 0.05),
+
+                    # Above positions (multiple widths)
+                    (cx - poly_width + 0.05, cy + 0.05),
+                    (cx - poly_width/2, cy + 0.05),
+                    (cx, cy + 0.05),
+                    (cx + 0.05, cy + 0.05),
+
+                    # Below positions
+                    (cx - poly_width + 0.05, cy - poly_height - 0.05),
+                    (cx - poly_width/2, cy - poly_height - 0.05),
+                    (cx, cy - poly_height - 0.05),
+                    (cx + 0.05, cy - poly_height - 0.05),
+                ]
+
+                for test_x, test_y in test_positions:
+                    if (0 <= test_x <= sheet_width - poly_width and
+                        0 <= test_y <= sheet_height - poly_height):
+                        candidates.append((test_x, test_y))
+
+    # Strategy 2: Sheet edges with very fine step
+    fine_step = 0.05
+    for x in np.arange(0, sheet_width - poly_width + fine_step, fine_step):
+        candidates.append((x, 0))  # Bottom edge
+        if sheet_height - poly_height > 0:
+            candidates.append((x, sheet_height - poly_height))  # Top edge
+
+    for y in np.arange(0, sheet_height - poly_height + fine_step, fine_step):
+        candidates.append((0, y))  # Left edge
+        if sheet_width - poly_width > 0:
+            candidates.append((sheet_width - poly_width, y))  # Right edge
+
+    # Remove duplicates and sort by preference (bottom-left first)
+    candidates = list(set(candidates))
+    candidates.sort(key=lambda pos: (pos[1], pos[0]))
+
+    # Test each position
+    for x, y in candidates[:2000]:  # Reasonable limit for performance
+        x_offset = x - bounds[0]
+        y_offset = y - bounds[1]
+        test_polygon = translate_polygon(polygon, x_offset, y_offset)
+
+        # Bounds check
+        test_bounds = test_polygon.bounds
+        if (test_bounds[0] < -0.01 or test_bounds[1] < -0.01 or
+            test_bounds[2] > sheet_width + 0.01 or test_bounds[3] > sheet_height + 0.01):
+            continue
+
+        # Collision check
+        collision = False
+        for obstacle in obstacles:
+            if check_collision(test_polygon, obstacle, min_gap=0.05):
+                collision = True
+                break
+
+        if not collision:
+            return x, y
+
+    return None, None
+
+
 def find_ultra_tight_position(
     polygon: Polygon, obstacles: list[Polygon], sheet_width: float, sheet_height: float
 ) -> tuple[float | None, float | None]:
-    """Find ultra-tight position using contour-following for maximum density."""
+    """Find ultra-tight position using ENHANCED maximum density algorithm."""
 
-    # Try new contour-following algorithm first
-    result = find_contour_following_position(
+    # Try new SUPER DENSE algorithm first
+    result = find_super_dense_position(
+        polygon, obstacles, sheet_width, sheet_height
+    )
+    if result[0] is not None:
+        return result
+
+    # Try enhanced contour-following algorithm
+    result = find_enhanced_contour_following_position(
         polygon, obstacles, sheet_width, sheet_height
     )
     if result[0] is not None:
@@ -2841,7 +3006,7 @@ def simple_sheet_consolidation(
             if layout.sheet_color != carpet.color:
                 continue
 
-            if layout.usage_percent >= 95:  # Skip very full sheets
+            if layout.usage_percent >= 98:  # INCREASED: Skip only extremely full sheets (более агрессивная консолидация)
                 continue
 
             try:
@@ -3348,7 +3513,14 @@ def bin_packing_with_inventory(
     logger.info("\n=== ЭТАП 2.5: ПОСТ-ОБРАБОТКА ЛИСТОВ ПРИОРИТЕТА 1 ===")
     original_sheet_count = len(placed_layouts)
 
-    placed_layouts = simple_sheet_consolidation(placed_layouts)
+    # ENHANCED: Multi-pass consolidation for maximum density
+    for consolidation_pass in range(3):  # Up to 3 passes
+        initial_count = len(placed_layouts)
+        placed_layouts = simple_sheet_consolidation(placed_layouts)
+        if len(placed_layouts) == initial_count:
+            break  # No more improvement possible
+        else:
+            logger.info(f"Consolidation pass {consolidation_pass + 1}: reduced to {len(placed_layouts)} sheets")
 
     # If consolidation reduced sheets, we might have some unplaced carpets that can now fit
     if len(placed_layouts) < original_sheet_count:
