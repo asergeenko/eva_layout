@@ -4279,19 +4279,21 @@ def place_priority2(
     placed_layouts: list[PlacedSheet],
     all_unplaced: list[UnplacedCarpet],
 ) -> tuple[list[PlacedSheet], list[UnplacedCarpet]]:
-    for layout_idx, layout in enumerate(placed_layouts):
+    # Sort layouts by increasing usage percent to fill emptier sheets first
+    sorted_layouts = sorted(placed_layouts, key=lambda l: l.usage_percent)
+
+    for layout in sorted_layouts:
         if not remaining_priority2:
             break
-        if (
-            layout.usage_percent
-            >= 85  # MUCH lower threshold for priority 2 - use more space!
-        ):  # More aggressive filling - try harder to use existing sheets
+        if layout.usage_percent >= 99:  # Skip almost full sheets
             continue
 
-        # Try to place carpets of matching color
-        matching_carpets = [
-            c for c in remaining_priority2 if c.color == layout.sheet_color
-        ]
+        # Get and sort matching carpets by decreasing area
+        matching_carpets = sorted(
+            [c for c in remaining_priority2 if c.color == layout.sheet_color],
+            key=lambda c: c.polygon.area,
+            reverse=True,
+        )
         if not matching_carpets:
             logger.info(
                 f"Лист #{layout.sheet_number}: нет совпадающих ковров приоритета 2 по цвету {layout.sheet_color}"
@@ -4303,225 +4305,55 @@ def place_priority2(
         )
 
         try:
-            # Try multiple attempts with different carpet orderings for better fit (like priority 1)
-            best_placed = []
-            best_remaining = matching_carpets
-            remaining_carpet_map = {
-                UnplacedCarpet.from_carpet(c): c for c in matching_carpets
-            }
+            additional_placed = []
+            current_placed = list(layout.placed_polygons)  # Copy current placements
 
-            for attempt in range(3):  # Enhanced attempts for priority 2 as well
-                if attempt == 1:
-                    # Enhanced big-to-small strategy (good even for priority 2)
-                    def get_foundation_score_p2(carpet: Carpet):
-                        bounds = carpet.polygon.bounds
-                        area = carpet.polygon.area
-                        width = bounds[2] - bounds[0]
-                        return area * 1000 + width
-
-                    test_carpets = sorted(
-                        matching_carpets, key=get_foundation_score_p2, reverse=True
-                    )
-                elif attempt == 2:
-                    # Small-to-large strategy (excellent for filling remaining gaps)
-                    test_carpets = sorted(
-                        matching_carpets, key=lambda c: c.polygon.area
-                    )
+            for carpet in matching_carpets:
+                # Try simple placement for each carpet individually
+                placed = try_simple_placement(carpet, current_placed, layout.sheet_size)
+                if placed:
+                    additional_placed.append(placed)
+                    current_placed.append(placed)  # Update current for next placements
+                    logger.info(f"  ✅ Ковер {carpet.filename} размещен успешно")
                 else:
-                    # Default order
-                    test_carpets = matching_carpets
-
-                # Use EXACTLY the same algorithm as for priority 1
-                additional_placed, remaining_unplaced = bin_packing_with_existing(
-                    test_carpets,
-                    layout.placed_polygons,
-                    layout.sheet_size,
-                    verbose=False,
-                )
-
-                # Keep the best result
-                if len(additional_placed) > len(best_placed):
-                    logger.info(
-                        f"  Попытка {attempt}: размещено {len(additional_placed)} ковров (лучший результат)"
-                    )
-                    best_placed = additional_placed
-                else:
-                    logger.info(
-                        f"  Попытка {attempt}: размещено {len(additional_placed)} ковров"
-                    )
-                    best_remaining = [
-                        remaining_carpet_map.get(
-                            UnplacedCarpet(
-                                rt.polygon, rt.filename, rt.color, rt.order_id
-                            ),
-                            next(
-                                (
-                                    c
-                                    for c in matching_carpets
-                                    if (
-                                        c.polygon,
-                                        c.filename,
-                                        c.color,
-                                        c.order_id,
-                                    )
-                                    == (
-                                        rt.polygon,
-                                        rt.filename,
-                                        rt.color,
-                                        rt.order_id,
-                                    )
-                                ),
-                                None,
-                            ),
-                        )
-                        for rt in remaining_unplaced
-                        if remaining_carpet_map.get(
-                            UnplacedCarpet(
-                                rt.polygon, rt.filename, rt.color, rt.order_id
-                            )
-                        )
-                        is not None
-                    ]
-                    best_remaining = [c for c in best_remaining if c is not None]
-
-            # Use the best result
-            additional_placed = best_placed
-            remaining_unplaced = [UnplacedCarpet.from_carpet(c) for c in best_remaining]
-
-            logger.info(
-                f"Лучший результат для листа #{layout.sheet_number}: {len(additional_placed)} размещено из {len(matching_carpets)}"
-            )
-
-            # If standard algorithm fails, try placing each carpet individually
-            if not additional_placed and matching_carpets:
-                logger.info(
-                    "Стандартный алгоритм не сработал, пробуем размещение по одному ковру"
-                )
-
-                individual_placed = []
-                for i, carpet in enumerate(matching_carpets):
-                    logger.info(f"Пробуем разместить ковер {i + 1}: {carpet.filename}")
-                    try:
-                        # Try simple placement without complex optimization
-                        simple_placed = try_simple_placement(
-                            carpet,
-                            layout.placed_polygons + individual_placed,
-                            layout.sheet_size,
-                        )
-
-                        if simple_placed:
-                            single_placed = [simple_placed]
-                        else:
-                            single_placed = []
-                        if single_placed:
-                            individual_placed.extend(single_placed)
-                            logger.info(
-                                f"  ✅ Ковер {carpet.filename} размещен успешно"
-                            )
-                        else:
-                            logger.info(f"  ❌ Ковер {carpet.filename} не размещен")
-                    except Exception as e:
-                        logger.warning(
-                            f"  ❌ Ошибка размещения ковра {carpet.filename}: {e}"
-                        )
-
-                if individual_placed:
-                    additional_placed = individual_placed
-                    # Calculate remaining unplaced
-                    placed_filenames = {p.filename for p in individual_placed}
-                    remaining_unplaced = [
-                        UnplacedCarpet.from_carpet(c)
-                        for c in matching_carpets
-                        if c.filename not in placed_filenames
-                    ]
-                    logger.info(
-                        f"Индивидуальное размещение: {len(individual_placed)} ковров из {len(matching_carpets)}"
-                    )
+                    logger.info(f"  ❌ Ковер {carpet.filename} не размещен")
 
             if additional_placed:
-                # SMART: Skip overlap check if sheet has plenty of free space (low usage)
-                current_usage = layout.usage_percent
+                # Strict overlap check to ensure no significant overlaps
+                has_overlap = False
+                for new in additional_placed:
+                    for existing in layout.placed_polygons:
+                        if new.polygon.intersects(existing.polygon):
+                            inter = new.polygon.intersection(existing.polygon)
+                            if inter.area > 1:  # Tolerate tiny floating-point overlaps
+                                has_overlap = True
+                                logger.warning(
+                                    f"Перекрытие при размещении приоритета 2: {inter.area:.1f} мм² на листе #{layout.sheet_number}"
+                                )
+                                break
+                    if has_overlap:
+                        break
 
-                if current_usage < 30:
-                    # If sheet has reasonable space, trust bin_packing_with_existing more
-                    logger.info(
-                        f"Лист #{layout.sheet_number} заполнен всего на {current_usage:.1f}% - пропускаем проверку перекрытий для приоритета 2"
+                if not has_overlap:
+                    # Update the layout
+                    layout.placed_polygons.extend(additional_placed)
+                    layout.usage_percent = calculate_usage_percent(
+                        layout.placed_polygons, layout.sheet_size
                     )
-                    accept_placement = True
-                else:
-                    # Check for major overlaps only on fuller sheets
-                    all_existing_polygons = [p.polygon for p in layout.placed_polygons]
-                    new_polygons = [p.polygon for p in additional_placed]
-
-                    has_major_overlap = False
-                    for i, new_poly in enumerate(new_polygons):
-                        for j, existing_poly in enumerate(all_existing_polygons):
-                            if new_poly.intersects(existing_poly):
-                                try:
-                                    intersection = new_poly.intersection(existing_poly)
-                                    intersection_area = (
-                                        intersection.area
-                                        if hasattr(intersection, "area")
-                                        else 0
-                                    )
-                                    new_poly_area = new_poly.area
-
-                                    # Very permissive threshold for priority 2 (60%)
-                                    if (
-                                        intersection_area > 0
-                                        and intersection_area / new_poly_area > 0.60
-                                    ):
-                                        logger.warning(
-                                            f"Крупное перекрытие при размещении приоритета 2: {intersection_area / new_poly_area * 100:.1f}% от полигона {i} на листе #{layout.sheet_number}"
-                                        )
-                                        has_major_overlap = True
-                                        break
-                                    else:
-                                        logger.debug(
-                                            f"Допустимое перекрытие: {intersection_area / new_poly_area * 100:.1f}% от полигона {i} - разрешено"
-                                        )
-                                except Exception as e:
-                                    logger.debug(f"Ошибка при расчете пересечения: {e}")
-                                    continue
-                        if has_major_overlap:
-                            break
-
-                    accept_placement = not has_major_overlap
-
-                if accept_placement:
-                    # Update layout
-                    placed_layouts[layout_idx].placed_polygons.extend(additional_placed)
-                    placed_layouts[layout_idx].usage_percent = calculate_usage_percent(
-                        placed_layouts[layout_idx].placed_polygons,
-                        layout.sheet_size,
-                    )
-                    # Update remaining - ROBUST approach using carpet object comparison
-                    # Create set of successfully placed carpet identifiers
-                    placed_carpet_ids = set()
-                    for placed_carpet in additional_placed:
-                        # Create a matching Carpet object for comparison
-                        carpet_id = (
-                            placed_carpet.filename,
-                            placed_carpet.color,
-                            placed_carpet.order_id,
-                        )
-                        placed_carpet_ids.add(carpet_id)
-
-                    # Remove carpets from remaining_priority2 that were successfully placed
+                    # Remove placed carpets from remaining_priority2
+                    placed_ids = set((p.filename, p.color, p.order_id) for p in additional_placed)
                     remaining_priority2 = [
                         c
                         for c in remaining_priority2
-                        if (c.filename, c.color, c.order_id) not in placed_carpet_ids
+                        if (c.filename, c.color, c.order_id) not in placed_ids
                     ]
-                    new_remaining_count = len(remaining_priority2)
                     logger.info(
-                        f"    Дозаполнен лист #{layout.sheet_number}: +{len(additional_placed)} приоритет2, осталось {new_remaining_count}"
+                        f"    Дозаполнен лист #{layout.sheet_number}: +{len(additional_placed)} приоритет2, осталось {len(remaining_priority2)}"
                     )
                 else:
                     logger.warning(
-                        f"Отклонено размещение приоритета 2 из-за крупных перекрытий на листе #{layout.sheet_number}"
+                        f"Отклонено размещение приоритета 2 из-за перекрытий на листе #{layout.sheet_number}"
                     )
-                    additional_placed = []  # Reset to prevent further processing
         except Exception as e:
             logger.debug(f"Не удалось дозаполнить лист приоритетом 2: {e}")
             continue
