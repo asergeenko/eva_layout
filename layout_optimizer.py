@@ -820,8 +820,8 @@ def bin_packing_with_existing(
     # Convert sheet size from cm to mm to match DXF polygon units
     sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
 
-    placed = []
-    unplaced = []
+    placed:list[PlacedCarpet] = []
+    unplaced:list[UnplacedCarpet] = []
 
     # Start with existing placed polygons as obstacles
     obstacles = [placed_tuple.polygon for placed_tuple in existing_placed]
@@ -844,9 +844,6 @@ def bin_packing_with_existing(
 
     for i, carpet in enumerate(sorted_polygons):
         polygon = carpet.polygon
-        file_name = carpet.filename
-        color = carpet.color
-        order_id = carpet.order_id
 
         placed_successfully = False
 
@@ -856,7 +853,7 @@ def bin_packing_with_existing(
         poly_height = bounds[3] - bounds[1]
 
         if poly_width > sheet_width_mm or poly_height > sheet_height_mm:
-            unplaced.append((polygon, file_name, color, order_id))
+            unplaced.append(UnplacedCarpet.from_carpet(carpet))
             continue
 
         # REVOLUTIONARY: Try all rotations with TETRIS PRIORITY (bottom-left first)
@@ -994,13 +991,13 @@ def bin_packing_with_existing(
         if best_placement:
             placed.append(
                 PlacedCarpet(
-                    best_placement["polygon"],
-                    best_placement["x_offset"],
-                    best_placement["y_offset"],
-                    best_placement["angle"],
-                    file_name,
-                    color,
-                    order_id,
+                    best_placement["polygon"], # type: ignore
+                    best_placement["x_offset"], # type: ignore
+                    best_placement["y_offset"], # type: ignore
+                    best_placement["angle"], # type: ignore
+                    carpet.filename,
+                    carpet.color,
+                    carpet.order_id,
                     carpet.carpet_id,
                     carpet.priority,
                 )
@@ -1026,7 +1023,7 @@ def bin_packing_with_existing(
 
                     # КРИТИЧНО: Ультра-строгая проверка коллизий
                     safe = True
-                    for i in range(len(improved_placed)):
+                    for i, _ in enumerate(improved_placed):
                         for j in range(i + 1, len(improved_placed)):
                             if check_collision(
                                 improved_placed[i].polygon,
@@ -3182,7 +3179,7 @@ def try_simple_placement(
     ]
 
     for strategy in placement_strategies:
-        step = strategy["step"]
+        step:int = strategy["step"]
         rotations = strategy["rotations"]
 
         # Try different rotations
@@ -3334,7 +3331,7 @@ def bin_packing_with_inventory(
         "Подготовка ковров к раскладке...",
     )
 
-    placed_layouts: list[PlacedSheet] = []
+    placed_sheets: list[PlacedSheet] = []
     all_unplaced: list[UnplacedCarpet] = []
     sheet_inventory = [sheet.copy() for sheet in available_sheets]
     sheet_counter = 0
@@ -3360,7 +3357,7 @@ def bin_packing_with_inventory(
     # Early return if nothing to place
     if not priority1_carpets and not priority2_carpets:
         logger.info("Нет полигонов для размещения")
-        return placed_layouts, all_unplaced
+        return placed_sheets, all_unplaced
 
     # STEP 2: Place priority 1 items (Excel orders + manual priority 1) with new sheets allowed
     logger.info(
@@ -3370,7 +3367,7 @@ def bin_packing_with_inventory(
     # Group priority 1 carpets by color for efficient processing
     remaining_priority1: list[Carpet] = list(priority1_carpets)
 
-    for layout_idx, layout in enumerate(placed_layouts):
+    for layout_idx, layout in enumerate(placed_sheets):
         if not remaining_priority1:
             break
         if (
@@ -3395,21 +3392,18 @@ def bin_packing_with_inventory(
 
             if additional_placed:
                 # Update layout
-                placed_layouts[layout_idx].placed_polygons.extend(additional_placed)
-                placed_layouts[layout_idx].usage_percent = calculate_usage_percent(
-                    placed_layouts[layout_idx].placed_polygons, layout.sheet_size
+                placed_sheets[layout_idx].placed_polygons.extend(additional_placed)
+                placed_sheets[layout_idx].usage_percent = calculate_usage_percent(
+                    placed_sheets[layout_idx].placed_polygons, layout.sheet_size
                 )
 
                 # Update remaining
                 remaining_carpet_map = {
                     UnplacedCarpet.from_carpet(c): c for c in matching_carpets
                 }
-                newly_remaining = set()
-                for remaining_carpet in remaining_unplaced:
-                    if remaining_carpet in remaining_carpet_map:
-                        newly_remaining.add(remaining_carpet_map[remaining_carpet])
+                newly_remaining = set(remaining_carpet_map[remaining_carpet] for remaining_carpet in remaining_unplaced if remaining_carpet in remaining_carpet_map)
 
-                # Remove placed carpets from remaining list - FIXED: Use Carpet objects directly
+                # Remove placed carpets from remaining list
                 placed_carpet_set = set(
                     c for c in matching_carpets if c not in newly_remaining
                 )
@@ -3436,13 +3430,13 @@ def bin_packing_with_inventory(
         remaining_carpets = list(color_carpets)
 
         # AGGRESSIVE RETRY: Try to place remaining carpets on ALL existing sheets before creating new ones
-        if remaining_carpets and placed_layouts:
+        if remaining_carpets and placed_sheets:
             logger.info(
                 f"Попытка агрессивного дозаполнения существующих листов для {len(remaining_carpets)} ковров {color}"
             )
 
             # Try each existing sheet again with more relaxed criteria
-            for layout_idx, layout in enumerate(placed_layouts):
+            for layout_idx, layout in enumerate(placed_sheets):
                 if not remaining_carpets:
                     break
 
@@ -3588,13 +3582,13 @@ def bin_packing_with_inventory(
                         # Only accept if no overlaps detected
                         if not has_overlap:
                             # Update layout
-                            placed_layouts[layout_idx].placed_polygons.extend(
+                            placed_sheets[layout_idx].placed_polygons.extend(
                                 best_placed
                             )
-                            placed_layouts[
+                            placed_sheets[
                                 layout_idx
                             ].usage_percent = calculate_usage_percent(
-                                placed_layouts[layout_idx].placed_polygons,
+                                placed_sheets[layout_idx].placed_polygons,
                                 layout.sheet_size,
                             )
                         else:
@@ -3654,7 +3648,7 @@ def bin_packing_with_inventory(
                         if carpet not in remaining
                     )
                 )
-                placed_layouts.append(new_layout)
+                placed_sheets.append(new_layout)
 
                 remaining_carpets = remaining
                 logger.info(
@@ -3671,7 +3665,7 @@ def bin_packing_with_inventory(
                         priority1_max_progress,
                         int(
                             priority1_max_progress
-                            * len(placed_layouts)
+                            * len(placed_sheets)
                             / (len(carpets))
                         ),
                     )
@@ -3696,8 +3690,8 @@ def bin_packing_with_inventory(
     )
 
     remaining_priority2: list[Carpet] = list(priority2_carpets)
-    placed_layouts, all_unplaced = place_priority2(
-        remaining_priority2, placed_layouts, all_unplaced, progress_callback
+    placed_sheets, all_unplaced = place_priority2(
+        remaining_priority2, placed_sheets, all_unplaced, progress_callback
     )
 
     # STEP 4: Sort sheets by color (group black together, then grey)
@@ -3707,7 +3701,7 @@ def bin_packing_with_inventory(
     black_sheets = []
     grey_sheets = []
 
-    for layout in placed_layouts:
+    for layout in placed_sheets:
         if layout.sheet_color == "чёрный":
             black_sheets.append(layout)
         else:
@@ -3722,26 +3716,26 @@ def bin_packing_with_inventory(
         final_layouts.append(layout)
         sheet_number += 1
 
-    placed_layouts = final_layouts
+    placed_sheets = final_layouts
 
     logger.info(
-        f"Перегруппировка завершена: {len(black_sheets)} черных + {len(grey_sheets)} серых = {len(placed_layouts)} листов"
+        f"Перегруппировка завершена: {len(black_sheets)} черных + {len(grey_sheets)} серых = {len(placed_sheets)} листов"
     )
 
     # Final logging and progress
     logger.info("\n=== ИТОГИ РАЗМЕЩЕНИЯ ===")
-    logger.info(f"Всего листов создано: {len(placed_layouts)}")
+    logger.info(f"Всего листов создано: {len(placed_sheets)}")
     logger.info(f"Неразмещенных полигонов: {len(all_unplaced)}")
 
     if verbose:
         st.info(
-            f"Размещение завершено: {len(placed_layouts)} листов, {len(all_unplaced)} не размещено"
+            f"Размещение завершено: {len(placed_sheets)} листов, {len(all_unplaced)} не размещено"
         )
 
     if progress_callback:
-        progress_callback(100, f"Завершено: {len(placed_layouts)} листов создано")
+        progress_callback(100, f"Завершено: {len(placed_sheets)} листов создано")
 
-    return placed_layouts, all_unplaced
+    return placed_sheets, all_unplaced
 
 
 def calculate_usage_percent(
