@@ -12,23 +12,23 @@ class Carpet:
     order_id: str = "unknown"
     priority: int = 1
     carpet_id: int = field(default_factory=lambda: Carpet._get_next_id())
-    
+
     # Class variable for tracking IDs
     _id_counter: ClassVar[int] = 0
-    
+
     @classmethod
     def _get_next_id(cls) -> int:
         cls._id_counter += 1
         return cls._id_counter
-    
+
     def __eq__(self, other):
         if not isinstance(other, Carpet):
             return False
         return self.carpet_id == other.carpet_id
-    
+
     def __hash__(self):
         return hash(self.carpet_id)
-    
+
     def __repr__(self):
         return f"Carpet(id={self.carpet_id}, filename='{self.filename}', color='{self.color}', order_id='{self.order_id}', priority={self.priority})"
 
@@ -43,10 +43,12 @@ class PlacedCarpet:
     color: str = ""
     order_id: str = ""
     carpet_id: int = 0  # Will be set properly by factory methods
-    priority: int = 1   # Include priority for consistency
-    
+    priority: int = 1  # Include priority for consistency
+
     @classmethod
-    def from_carpet(cls, carpet: Carpet, x_offset: float = 0, y_offset: float = 0, angle: int = 0) -> 'PlacedCarpet':
+    def from_carpet(
+        cls, carpet: Carpet, x_offset: float = 0, y_offset: float = 0, angle: int = 0
+    ) -> "PlacedCarpet":
         """Create PlacedCarpet from Carpet with placement information."""
         return cls(
             polygon=carpet.polygon,
@@ -57,11 +59,17 @@ class PlacedCarpet:
             color=carpet.color,
             order_id=carpet.order_id,
             carpet_id=carpet.carpet_id,
-            priority=carpet.priority
+            priority=carpet.priority,
         )
-    
+
     @classmethod
-    def from_unplaced_carpet(cls, unplaced: 'UnplacedCarpet', x_offset: float = 0, y_offset: float = 0, angle: int = 0) -> 'PlacedCarpet':
+    def from_unplaced_carpet(
+        cls,
+        unplaced: "UnplacedCarpet",
+        x_offset: float = 0,
+        y_offset: float = 0,
+        angle: int = 0,
+    ) -> "PlacedCarpet":
         """Create PlacedCarpet from UnplacedCarpet with placement information."""
         return cls(
             polygon=unplaced.polygon,
@@ -72,17 +80,17 @@ class PlacedCarpet:
             color=unplaced.color,
             order_id=unplaced.order_id,
             carpet_id=unplaced.carpet_id,
-            priority=unplaced.priority
+            priority=unplaced.priority,
         )
-    
+
     def __eq__(self, other):
         if not isinstance(other, PlacedCarpet):
             return False
         return self.carpet_id == other.carpet_id
-    
+
     def __hash__(self):
         return hash(self.carpet_id)
-    
+
     def __repr__(self):
         return f"PlacedCarpet(id={self.carpet_id}, filename='{self.filename}', pos=({self.x_offset:.1f}, {self.y_offset:.1f}), angle={self.angle}°)"
 
@@ -94,10 +102,10 @@ class UnplacedCarpet:
     color: str = ""
     order_id: str = ""
     carpet_id: int = 0  # Will be set properly by factory methods
-    priority: int = 1   # Include priority for proper diagnostics
-    
+    priority: int = 1  # Include priority for proper diagnostics
+
     @classmethod
-    def from_carpet(cls, carpet: Carpet) -> 'UnplacedCarpet':
+    def from_carpet(cls, carpet: Carpet) -> "UnplacedCarpet":
         """Create UnplacedCarpet from Carpet."""
         return cls(
             polygon=carpet.polygon,
@@ -105,11 +113,11 @@ class UnplacedCarpet:
             color=carpet.color,
             order_id=carpet.order_id,
             carpet_id=carpet.carpet_id,
-            priority=carpet.priority
+            priority=carpet.priority,
         )
-    
+
     @classmethod
-    def from_placed_carpet(cls, placed: PlacedCarpet) -> 'UnplacedCarpet':
+    def from_placed_carpet(cls, placed: PlacedCarpet) -> "UnplacedCarpet":
         """Create UnplacedCarpet from PlacedCarpet."""
         return cls(
             polygon=placed.polygon,
@@ -117,17 +125,17 @@ class UnplacedCarpet:
             color=placed.color,
             order_id=placed.order_id,
             carpet_id=placed.carpet_id,
-            priority=placed.priority
+            priority=placed.priority,
         )
-    
+
     def __eq__(self, other):
         if not isinstance(other, UnplacedCarpet):
             return False
         return self.carpet_id == other.carpet_id
-    
+
     def __hash__(self):
         return hash(self.carpet_id)
-    
+
     def __repr__(self):
         return f"UnplacedCarpet(id={self.carpet_id}, filename='{self.filename}', color='{self.color}', order_id='{self.order_id}')"
 

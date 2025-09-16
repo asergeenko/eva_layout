@@ -6,7 +6,6 @@
 
 import sys
 import os
-import glob
 from pathlib import Path
 
 # Добавляем путь к модулям проекта
@@ -19,8 +18,11 @@ from plot import plot_layout
 import logging
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
+
 
 def test_optimized_algorithm():
     """Тестирует новый оптимизированный алгоритм на данных из tmp_test."""
@@ -47,10 +49,12 @@ def test_optimized_algorithm():
                     filename=dxf_file.name,
                     color="чёрный",  # Все одного цвета для упрощения
                     order_id=f"order_{dxf_file.stem}",
-                    priority=1
+                    priority=1,
                 )
                 carpets.append(carpet)
-                logger.info(f"Загружен ковер {dxf_file.name}, площадь: {carpet.polygon.area:.0f}")
+                logger.info(
+                    f"Загружен ковер {dxf_file.name}, площадь: {carpet.polygon.area:.0f}"
+                )
         except Exception as e:
             logger.warning(f"Не удалось загрузить {dxf_file}: {e}")
 
@@ -70,7 +74,7 @@ def test_optimized_algorithm():
             "height": 200,
             "color": "чёрный",
             "count": 10,
-            "used": 0
+            "used": 0,
         }
     ]
 
@@ -79,13 +83,11 @@ def test_optimized_algorithm():
     try:
         # Запускаем новый оптимизированный алгоритм
         placed_layouts, unplaced_carpets = bin_packing_with_inventory(
-            carpets=carpets,
-            available_sheets=available_sheets,
-            verbose=True
+            carpets=carpets, available_sheets=available_sheets, verbose=True
         )
 
         # Выводим результаты
-        logger.info(f"\n=== РЕЗУЛЬТАТЫ ===")
+        logger.info("\n=== РЕЗУЛЬТАТЫ ===")
         logger.info(f"Использовано листов: {len(placed_layouts)}")
         logger.info(f"Неразмещенных ковров: {len(unplaced_carpets)}")
 
@@ -109,7 +111,7 @@ def test_optimized_algorithm():
             for i, layout in enumerate(placed_layouts):
                 plot_filename = output_dir / f"optimized_sheet_{i+1}.png"
                 plot_result = plot_layout(layout.placed_polygons, layout.sheet_size)
-                with open(plot_filename, 'wb') as f:
+                with open(plot_filename, "wb") as f:
                     f.write(plot_result.getvalue())
             logger.info(f"Результаты сохранены в {output_dir}")
 
@@ -121,14 +123,18 @@ def test_optimized_algorithm():
             if len(placed_layouts) < 6:
                 logger.info("🎉 УЛУЧШЕНИЕ! Используется меньше листов!")
             elif len(placed_layouts) == 6:
-                logger.info("Количество листов не изменилось, но плотность могла улучшиться")
+                logger.info(
+                    "Количество листов не изменилось, но плотность могла улучшиться"
+                )
             else:
                 logger.warning("Возможна проблема - используется больше листов")
 
     except Exception as e:
         logger.error(f"Ошибка при выполнении алгоритма: {e}")
         import traceback
+
         traceback.print_exc()
+
 
 if __name__ == "__main__":
     test_optimized_algorithm()

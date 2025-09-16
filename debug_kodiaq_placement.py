@@ -7,6 +7,7 @@ from dxf_utils import parse_dxf
 from carpet import Carpet
 from plot import plot_layout
 
+
 def debug_kodiaq_placement():
     # Load the same DXF files used in the test
     dxf_folder = "dxf_samples/SKODA KODIAQ"
@@ -27,7 +28,7 @@ def debug_kodiaq_placement():
                     filename=filename,
                     color="белый",  # Изменено для соответствия цвету листов
                     order_id="test_order",
-                    priority=1
+                    priority=1,
                 )
                 all_carpets.append(carpet)
                 print(f"Loaded {filename}: area={poly.area:.0f}, bounds={poly.bounds}")
@@ -47,13 +48,13 @@ def debug_kodiaq_placement():
     available_sheets = []
     for i in range(20):
         sheet = {
-            'width': 1400,  # 140cm in mm
-            'height': 2000,  # 200cm in mm
-            'color': 'белый',
-            'name': f'Лист_{i+1}',  # Исправлено: переименовано в name
-            'sheet_type': f'Лист_{i+1}',
-            'count': 1,  # Исправлено: добавлено поле count
-            'used': 0    # Исправлено: добавлено поле used
+            "width": 1400,  # 140cm in mm
+            "height": 2000,  # 200cm in mm
+            "color": "белый",
+            "name": f"Лист_{i+1}",  # Исправлено: переименовано в name
+            "sheet_type": f"Лист_{i+1}",
+            "count": 1,  # Исправлено: добавлено поле count
+            "used": 0,  # Исправлено: добавлено поле used
         }
         available_sheets.append(sheet)
 
@@ -62,19 +63,17 @@ def debug_kodiaq_placement():
     # Run bin packing
     print("\nRunning bin packing...")
     placed_sheets, unplaced_carpets = bin_packing_with_inventory(
-        carpets_to_place,
-        available_sheets,
-        verbose=True
+        carpets_to_place, available_sheets, verbose=True
     )
 
-    print(f"\nResults:")
+    print("\nResults:")
     print(f"Placed sheets: {len(placed_sheets)}")
     print(f"Unplaced carpets: {len(unplaced_carpets)}")
 
     # Debug the first sheet (which should be kodiaq1.png)
     if placed_sheets:
         first_sheet = placed_sheets[0]
-        print(f"\nFirst sheet details:")
+        print("\nFirst sheet details:")
         print(f"Sheet size: {first_sheet.sheet_size}")
         print(f"Usage: {first_sheet.usage_percent:.1f}%")
         print(f"Placed carpets: {len(first_sheet.placed_polygons)}")
@@ -82,27 +81,32 @@ def debug_kodiaq_placement():
         # Check for problems in placements
         for i, placed_carpet in enumerate(first_sheet.placed_polygons):
             print(f"Carpet {i}: {placed_carpet.filename}")
-            print(f"  Position: ({placed_carpet.x_offset:.1f}, {placed_carpet.y_offset:.1f})")
+            print(
+                f"  Position: ({placed_carpet.x_offset:.1f}, {placed_carpet.y_offset:.1f})"
+            )
             print(f"  Angle: {placed_carpet.angle}°")
             print(f"  Polygon bounds: {placed_carpet.polygon.bounds}")
 
             # Check if polygon is at origin (indicates missing transformation)
             bounds = placed_carpet.polygon.bounds
             if abs(bounds[0]) < 1 and abs(bounds[1]) < 1:
-                print(f"  ⚠️  WARNING: Carpet {placed_carpet.filename} appears to be at origin!")
-                print(f"     This suggests transformation was not applied properly")
+                print(
+                    f"  ⚠️  WARNING: Carpet {placed_carpet.filename} appears to be at origin!"
+                )
+                print("     This suggests transformation was not applied properly")
 
         # Generate plot for debugging
-        print(f"\nGenerating debug plot...")
-        os.makedirs('tmp_test', exist_ok=True)
+        print("\nGenerating debug plot...")
+        os.makedirs("tmp_test", exist_ok=True)
         plot_layout(
             first_sheet.placed_polygons,
             first_sheet.sheet_size[0],
             first_sheet.sheet_size[1],
-            f"tmp_test/debug_kodiaq1.png",
-            f"Отладка раскроя на листе {first_sheet.sheet_size[0]/10:.0f} x {first_sheet.sheet_size[1]/10:.0f} см"
+            "tmp_test/debug_kodiaq1.png",
+            f"Отладка раскроя на листе {first_sheet.sheet_size[0]/10:.0f} x {first_sheet.sheet_size[1]/10:.0f} см",
         )
-        print(f"Debug plot saved to tmp_test/debug_kodiaq1.png")
+        print("Debug plot saved to tmp_test/debug_kodiaq1.png")
+
 
 if __name__ == "__main__":
     debug_kodiaq_placement()

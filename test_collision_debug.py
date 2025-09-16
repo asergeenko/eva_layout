@@ -3,12 +3,15 @@
 from shapely.geometry import Polygon
 from layout_optimizer import check_collision, translate_polygon
 
+
 def test_collision_at_origin():
     """Test collision detection when both polygons are at origin."""
 
     # Create two overlapping rectangles at origin
     rect1 = Polygon([(0, 0), (200, 0), (200, 100), (0, 100)])  # First rectangle
-    rect2 = Polygon([(0, 0), (100, 0), (100, 50), (0, 50)])   # Second smaller rectangle, overlapping
+    rect2 = Polygon(
+        [(0, 0), (100, 0), (100, 50), (0, 50)]
+    )  # Second smaller rectangle, overlapping
 
     print(f"Rectangle 1 bounds: {rect1.bounds}")
     print(f"Rectangle 2 bounds: {rect2.bounds}")
@@ -22,7 +25,9 @@ def test_collision_at_origin():
         return False
 
     # Test with gap
-    rect3 = Polygon([(210, 0), (310, 0), (310, 50), (210, 50)])  # Rectangle to the right
+    rect3 = Polygon(
+        [(210, 0), (310, 0), (310, 50), (210, 50)]
+    )  # Rectangle to the right
     print(f"Rectangle 3 bounds: {rect3.bounds}")
 
     collision2 = check_collision(rect1, rect3, min_gap=0.1)
@@ -43,6 +48,7 @@ def test_collision_at_origin():
 
     print("✅ All collision tests passed")
     return True
+
 
 def test_placement_at_origin_with_obstacles():
     """Test placement algorithm when obstacles are at origin."""
@@ -80,11 +86,12 @@ def test_placement_at_origin_with_obstacles():
 
     collision = check_collision(translated, obstacle, min_gap=0.1)
     if collision:
-        print(f"❌ ERROR: Found position causes collision!")
+        print("❌ ERROR: Found position causes collision!")
         return False
 
-    print(f"✅ Found valid position without collision")
+    print("✅ Found valid position without collision")
     return True
+
 
 if __name__ == "__main__":
     print("Testing collision detection...")

@@ -2,7 +2,7 @@
 
 from shapely.geometry import Polygon
 from layout_optimizer import simple_sheet_consolidation, PlacedSheet, PlacedCarpet
-from carpet import Carpet
+
 
 def create_test_sheet(sheet_number, polygons, sheet_size=(140, 200)):
     """Create a test sheet with given polygons."""
@@ -10,12 +10,14 @@ def create_test_sheet(sheet_number, polygons, sheet_size=(140, 200)):
     for i, (poly, filename) in enumerate(polygons):
         placed_carpet = PlacedCarpet(
             polygon=poly,
-            x_offset=0, y_offset=0, angle=0,
+            x_offset=0,
+            y_offset=0,
+            angle=0,
             filename=filename,
             color="белый",
             order_id="test",
             carpet_id=i,
-            priority=1
+            priority=1,
         )
         placed_polygons.append(placed_carpet)
 
@@ -26,9 +28,10 @@ def create_test_sheet(sheet_number, polygons, sheet_size=(140, 200)):
         sheet_color="белый",
         orders_on_sheet=["test"],
         sheet_type={"name": f"test_sheet_{sheet_number}"},
-        sheet_number=sheet_number
+        sheet_number=sheet_number,
     )
     return sheet
+
 
 def test_consolidation_fix():
     """Test that consolidation doesn't create duplicate carpets."""
@@ -43,7 +46,7 @@ def test_consolidation_fix():
 
     sheets = [sheet1, sheet2]
 
-    print(f"Before consolidation:")
+    print("Before consolidation:")
     print(f"Sheet 1: {len(sheet1.placed_polygons)} carpets")
     print(f"Sheet 2: {len(sheet2.placed_polygons)} carpets")
     print(f"Total carpets: {sum(len(s.placed_polygons) for s in sheets)}")
@@ -51,7 +54,7 @@ def test_consolidation_fix():
     # Run consolidation
     result_sheets = simple_sheet_consolidation(sheets)
 
-    print(f"\nAfter consolidation:")
+    print("\nAfter consolidation:")
     total_carpets_after = sum(len(s.placed_polygons) for s in result_sheets)
     print(f"Number of sheets: {len(result_sheets)}")
     print(f"Total carpets: {total_carpets_after}")
@@ -75,6 +78,7 @@ def test_consolidation_fix():
 
     print("✅ Consolidation test passed - no duplicates")
     return True
+
 
 if __name__ == "__main__":
     success = test_consolidation_fix()

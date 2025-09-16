@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 
-from pathlib import Path
 from dxf_utils import parse_dxf_complete
 from carpet import Carpet
-from layout_optimizer import find_bottom_left_position, rotate_polygon, translate_polygon, check_collision
-from shapely.geometry import Polygon
+from layout_optimizer import (
+    find_bottom_left_position,
+    rotate_polygon,
+    translate_polygon,
+)
+
 
 def debug_bin_packing_step_by_step():
     """Полное воспроизведение логики bin_packing для понимания проблемы"""
@@ -12,17 +15,19 @@ def debug_bin_packing_step_by_step():
     # Загружаем первые два ковра
     carpets = []
     for i in range(1, 3):
-        dxf_path = f'dxf_samples/HYUNDAI SOLARIS 1/{i}.dxf'
+        dxf_path = f"dxf_samples/HYUNDAI SOLARIS 1/{i}.dxf"
         polygon_data = parse_dxf_complete(dxf_path, verbose=False)
         if polygon_data and polygon_data.get("combined_polygon"):
-            carpet = Carpet(polygon_data["combined_polygon"], f"{i}.dxf", "чёрный", f"group_{i}", 1)
+            carpet = Carpet(
+                polygon_data["combined_polygon"], f"{i}.dxf", "чёрный", f"group_{i}", 1
+            )
             carpets.append(carpet)
 
     if len(carpets) < 2:
         print("Недостаточно ковров")
         return
 
-    print(f"Тестируем размещение 2 ковров:")
+    print("Тестируем размещение 2 ковров:")
     print(f"1.dxf: площадь {carpets[0].polygon.area:.0f} мм²")
     print(f"2.dxf: площадь {carpets[1].polygon.area:.0f} мм²")
 
@@ -43,7 +48,9 @@ def debug_bin_packing_step_by_step():
         bounds = polygon.bounds
         width = bounds[2] - bounds[0]
         height = bounds[3] - bounds[1]
-        aspect_ratio = max(width / height, height / width) if min(width, height) > 0 else 1
+        aspect_ratio = (
+            max(width / height, height / width) if min(width, height) > 0 else 1
+        )
         compactness = area / (width * height) if width * height > 0 else 0
         perimeter_approx = 2 * (width + height)
         return (
@@ -70,7 +77,7 @@ def debug_bin_packing_step_by_step():
         print(f"Размеры: {poly_width:.1f} x {poly_height:.1f} мм")
 
         if poly_width > sheet_width_mm or poly_height > sheet_height_mm:
-            print(f"❌ Слишком большой для листа")
+            print("❌ Слишком большой для листа")
             unplaced.append(carpet)
             continue
 
@@ -83,7 +90,9 @@ def debug_bin_packing_step_by_step():
         for angle in rotation_angles:
             print(f"\n--- Тестируем поворот {angle}° ---")
 
-            rotated = rotate_polygon(carpet.polygon, angle) if angle != 0 else carpet.polygon
+            rotated = (
+                rotate_polygon(carpet.polygon, angle) if angle != 0 else carpet.polygon
+            )
             rotated_bounds = rotated.bounds
             rotated_width = rotated_bounds[2] - rotated_bounds[0]
             rotated_height = rotated_bounds[3] - rotated_bounds[1]
@@ -92,11 +101,11 @@ def debug_bin_packing_step_by_step():
 
             # Проверяем поместится ли
             if rotated_width > sheet_width_mm or rotated_height > sheet_height_mm:
-                print(f"❌ Не помещается в лист")
+                print("❌ Не помещается в лист")
                 continue
 
             # Ищем позицию
-            print(f"Ищем позицию для повёрнутого полигона...")
+            print("Ищем позицию для повёрнутого полигона...")
             best_x, best_y = find_bottom_left_position(
                 rotated, placed, sheet_width_mm, sheet_height_mm
             )
@@ -109,7 +118,9 @@ def debug_bin_packing_step_by_step():
 
                 # Бонусы за форму (как в bin_packing)
                 shape_bonus = 0
-                aspect_ratio = rotated_width / rotated_height if rotated_height > 0 else 1
+                aspect_ratio = (
+                    rotated_width / rotated_height if rotated_height > 0 else 1
+                )
 
                 if aspect_ratio > 1.05:
                     width_bonus = min(2000, int((aspect_ratio - 1) * 2000))
@@ -120,7 +131,9 @@ def debug_bin_packing_step_by_step():
                         shape_bonus -= 2000
 
                 total_score = position_score + shape_bonus
-                print(f"Счёт: position={position_score}, shape={shape_bonus}, total={total_score}")
+                print(
+                    f"Счёт: position={position_score}, shape={shape_bonus}, total={total_score}"
+                )
 
                 if total_score < best_score:
                     best_score = total_score
@@ -132,17 +145,18 @@ def debug_bin_packing_step_by_step():
                         "x_offset": best_x - rotated_bounds[0],
                         "y_offset": best_y - rotated_bounds[1],
                         "angle": angle,
-                        "position": (best_x, best_y)
+                        "position": (best_x, best_y),
                     }
-                    print(f"🎯 Новый лучший вариант!")
+                    print("🎯 Новый лучший вариант!")
                 else:
-                    print(f"Не лучше текущего варианта")
+                    print("Не лучше текущего варианта")
             else:
-                print(f"❌ Позиция не найдена")
+                print("❌ Позиция не найдена")
 
         # Применяем лучшее размещение
         if best_placement:
             from carpet import PlacedCarpet
+
             placed_carpet = PlacedCarpet(
                 best_placement["polygon"],
                 best_placement["x_offset"],
@@ -170,7 +184,7 @@ def debug_bin_packing_step_by_step():
     print(f"Не размещено: {len(unplaced)} ковров")
 
     if len(placed) < len(carpets):
-        print(f"❌ ПРОБЛЕМА: не все ковры размещены!")
+        print("❌ ПРОБЛЕМА: не все ковры размещены!")
 
         if len(placed) >= 1:
             first_bounds = placed[0].polygon.bounds
@@ -178,7 +192,10 @@ def debug_bin_packing_step_by_step():
 
             remaining_width = sheet_width_mm - (first_bounds[2] - first_bounds[0])
             remaining_height = sheet_height_mm - (first_bounds[3] - first_bounds[1])
-            print(f"Оставшееся место: {remaining_width:.1f} x {remaining_height:.1f} мм")
+            print(
+                f"Оставшееся место: {remaining_width:.1f} x {remaining_height:.1f} мм"
+            )
+
 
 if __name__ == "__main__":
     debug_bin_packing_step_by_step()

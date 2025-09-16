@@ -16,14 +16,16 @@ carpets = [
 print(f"Carpet areas: {rect1.area}, {rect2.area}")
 
 # Большой лист для размещения
-available_sheets = [{
-    "name": "Test Sheet",
-    "width": 140,
-    "height": 200,
-    "color": "black",
-    "count": 1,
-    "used": 0
-}]
+available_sheets = [
+    {
+        "name": "Test Sheet",
+        "width": 140,
+        "height": 200,
+        "color": "black",
+        "count": 1,
+        "used": 0,
+    }
+]
 
 # Площадь листа: 140*10 * 200*10 = 2,800,000 мм²
 # Площадь двух ковров: 2500 + 2500 = 5000 мм²
@@ -41,7 +43,7 @@ placed_layouts, unplaced = bin_packing_with_inventory(
     verbose=True,
 )
 
-print(f"\nResults:")
+print("\nResults:")
 print(f"Sheets used: {len(placed_layouts)}")
 print(f"Unplaced: {len(unplaced)}")
 
@@ -49,11 +51,11 @@ if placed_layouts:
     layout = placed_layouts[0]
     print(f"Sheet utilization: {layout.usage_percent:.1f}%")
     print(f"Carpets on sheet: {len(layout.placed_polygons)}")
-    
+
     # Проверим позиции ковров
     for i, carpet in enumerate(layout.placed_polygons):
         print(f"  Carpet {i+1}: pos=({carpet.x_offset:.1f}, {carpet.y_offset:.1f})")
-        
+
     # Если утилизация > 1%, значит ковры накладываются друг на друга
     if layout.usage_percent > 1:
         print("❌ ПРОБЛЕМА: Утилизация > 1% указывает на наложение ковров!")

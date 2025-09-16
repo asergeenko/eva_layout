@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 
-from pathlib import Path
 from dxf_utils import parse_dxf_complete
 from carpet import Carpet
 from layout_optimizer import rotate_polygon, translate_polygon, check_collision
-from shapely.geometry import Polygon
+
 
 def debug_collision_function():
     """Точная отладка функции check_collision"""
@@ -12,16 +11,20 @@ def debug_collision_function():
     # Загружаем ковры
     carpets = []
     for i in range(1, 3):
-        dxf_path = f'dxf_samples/HYUNDAI SOLARIS 1/{i}.dxf'
+        dxf_path = f"dxf_samples/HYUNDAI SOLARIS 1/{i}.dxf"
         polygon_data = parse_dxf_complete(dxf_path, verbose=False)
         if polygon_data and polygon_data.get("combined_polygon"):
-            carpet = Carpet(polygon_data["combined_polygon"], f"{i}.dxf", "чёрный", f"group_{i}", 1)
+            carpet = Carpet(
+                polygon_data["combined_polygon"], f"{i}.dxf", "чёрный", f"group_{i}", 1
+            )
             carpets.append(carpet)
 
     # Первый ковёр: повёрнут на 90° и размещён в (0, 0)
     first_rotated = rotate_polygon(carpets[0].polygon, 90)
     first_bounds = first_rotated.bounds
-    first_translated = translate_polygon(first_rotated, 0 - first_bounds[0], 0 - first_bounds[1])
+    first_translated = translate_polygon(
+        first_rotated, 0 - first_bounds[0], 0 - first_bounds[1]
+    )
 
     # Второй ковёр в позиции (0, 900)
     second_polygon = carpets[1].polygon
@@ -30,37 +33,37 @@ def debug_collision_function():
     y_offset = 900 - second_bounds[1]
     second_translated = translate_polygon(second_polygon, x_offset, y_offset)
 
-    print(f"Первый полигон:")
+    print("Первый полигон:")
     print(f"  valid: {first_translated.is_valid}")
     print(f"  simple: {first_translated.is_simple}")
     print(f"  bounds: {first_translated.bounds}")
 
-    print(f"\nВторой полигон:")
+    print("\nВторой полигон:")
     print(f"  valid: {second_translated.is_valid}")
     print(f"  simple: {second_translated.is_simple}")
     print(f"  bounds: {second_translated.bounds}")
 
     # Пошаговая отладка check_collision
-    print(f"\nПошаговая отладка check_collision:")
+    print("\nПошаговая отладка check_collision:")
 
     # 1. Проверка валидности
     valid_check = first_translated.is_valid and second_translated.is_valid
     print(f"1. Валидность полигонов: {valid_check}")
     if not valid_check:
-        print(f"❌ ПРОБЛЕМА: Один из полигонов невалиден!")
+        print("❌ ПРОБЛЕМА: Один из полигонов невалиден!")
         return
 
     # 2. Проверка пересечения
     intersects = first_translated.intersects(second_translated)
     print(f"2. Пересечение полигонов: {intersects}")
     if intersects:
-        print(f"❌ Полигоны пересекаются - коллизия True")
+        print("❌ Полигоны пересекаются - коллизия True")
         return
 
     # 3. Вычисление расстояний между bounding box'ами
     bounds1 = first_translated.bounds
     bounds2 = second_translated.bounds
-    print(f"3. Bounding boxes:")
+    print("3. Bounding boxes:")
     print(f"   Первый: {bounds1}")
     print(f"   Второй: {bounds2}")
 
@@ -74,18 +77,18 @@ def debug_collision_function():
     safety_margin = 50.0
     threshold = min_gap + safety_margin
 
-    print(f"4. Проверка раннего выхода:")
+    print("4. Проверка раннего выхода:")
     print(f"   min_gap: {min_gap} мм")
     print(f"   safety_margin: {safety_margin} мм")
     print(f"   threshold: {threshold} мм")
     print(f"   bbox_min_distance > threshold: {bbox_min_distance > threshold}")
 
     if bbox_min_distance > threshold:
-        print(f"✅ Ранний выход - полигоны далеко, коллизии нет")
+        print("✅ Ранний выход - полигоны далеко, коллизии нет")
         return
 
     # 5. Геометрическое расстояние
-    print(f"5. Геометрическое расстояние:")
+    print("5. Геометрическое расстояние:")
     try:
         geometric_distance = first_translated.distance(second_translated)
         print(f"   geometric_distance: {geometric_distance:.3f} мм")
@@ -94,12 +97,13 @@ def debug_collision_function():
         print(f"   Итоговый результат коллизии: {collision_result}")
     except Exception as e:
         print(f"❌ Ошибка при вычислении расстояния: {e}")
-        print(f"   Возвращаем True по умолчанию")
+        print("   Возвращаем True по умолчанию")
 
     # Сравним с фактическим вызовом функции
-    print(f"\n6. Фактический вызов check_collision:")
+    print("\n6. Фактический вызов check_collision:")
     actual_result = check_collision(first_translated, second_translated, min_gap=2.0)
     print(f"   Результат: {actual_result}")
+
 
 if __name__ == "__main__":
     debug_collision_function()

@@ -5,11 +5,12 @@ from dxf_utils import parse_dxf_complete
 from layout_optimizer import Carpet, bin_packing_with_existing
 from carpet import PlacedCarpet
 
+
 def test_carpet_8_tetris_improvement():
     """Специфичный тест для ковра 8.dxf - проверяем что новая тетрисовость работает."""
 
     # Загружаем ковер 8.dxf
-    dxf_file = Path('dxf_samples/SKODA KODIAQ/8.dxf')
+    dxf_file = Path("dxf_samples/SKODA KODIAQ/8.dxf")
     if not dxf_file.exists():
         print(f"❌ File not found: {dxf_file}")
         return
@@ -23,13 +24,16 @@ def test_carpet_8_tetris_improvement():
         base_polygon = polygon_data["combined_polygon"]
         carpet = Carpet(base_polygon, "8.dxf", "чёрный", "test", 1)
 
-        print(f"📊 Testing carpet 8.dxf tetris behavior")
+        print("📊 Testing carpet 8.dxf tetris behavior")
         print(f"Area: {base_polygon.area/10000:.1f} cm²")
         print()
 
         # Создаем простые препятствия для имитации уже размещенных ковров
         from shapely import affinity
-        obstacle_polygon = affinity.translate(base_polygon.buffer(0), xoff=300, yoff=300)
+
+        obstacle_polygon = affinity.translate(
+            base_polygon.buffer(0), xoff=300, yoff=300
+        )
         existing_placed = [
             PlacedCarpet.from_carpet(
                 Carpet(obstacle_polygon, "obstacle1.dxf", "чёрный", "test", 1), 0, 0, 0
@@ -44,12 +48,12 @@ def test_carpet_8_tetris_improvement():
             [carpet],
             existing_placed,
             sheet_size,
-            verbose=True  # Включаем детальное логирование
+            verbose=True,  # Включаем детальное логирование
         )
 
         if additional_placed:
             placed = additional_placed[0]
-            print(f"\n✅ РЕЗУЛЬТАТ РАЗМЕЩЕНИЯ:")
+            print("\n✅ РЕЗУЛЬТАТ РАЗМЕЩЕНИЯ:")
             print(f"Angle: {placed.angle}°")
             print(f"Position: ({placed.x_offset:.1f}, {placed.y_offset:.1f})")
             print(f"Final bounds: {placed.polygon.bounds}")
@@ -71,9 +75,13 @@ def test_carpet_8_tetris_improvement():
             # Проверим доступность пространства снизу
             bottom_y = bounds[1]
             if bottom_y > 50:  # Больше 50мм от низа
-                print(f"⚠️  Carpet is {bottom_y:.0f}mm from bottom - some space below may be trapped")
+                print(
+                    f"⚠️  Carpet is {bottom_y:.0f}mm from bottom - some space below may be trapped"
+                )
             else:
-                print(f"✅ Carpet is close to bottom ({bottom_y:.0f}mm) - good tetris placement")
+                print(
+                    f"✅ Carpet is close to bottom ({bottom_y:.0f}mm) - good tetris placement"
+                )
 
         else:
             print("❌ Failed to place carpet")
@@ -83,6 +91,7 @@ def test_carpet_8_tetris_improvement():
     except Exception as e:
         print(f"❌ Error: {e}")
         return [], []
+
 
 if __name__ == "__main__":
     test_carpet_8_tetris_improvement()

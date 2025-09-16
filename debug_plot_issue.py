@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 
 import sys
-sys.path.append('.')
+
+sys.path.append(".")
 
 from shapely.geometry import Polygon
 from carpet import PlacedCarpet
 from layout_optimizer import apply_placement_transform
 from plot import plot_layout
-import matplotlib.pyplot as plt
 import os
+
 
 def test_plot_issue():
     """Test if the plot function correctly handles PlacedCarpet with transform info"""
@@ -24,7 +25,7 @@ def test_plot_issue():
         y_offset=300,
         angle=90,
         filename="test_wrong.dxf",
-        color="черный"
+        color="черный",
     )
 
     # Test Case 2: PlacedCarpet with already transformed polygon (CORRECT way)
@@ -35,7 +36,7 @@ def test_plot_issue():
         y_offset=300,
         angle=90,
         filename="test_correct.dxf",
-        color="черный"
+        color="черный",
     )
 
     print(f"Wrong PlacedCarpet polygon bounds: {placed_wrong.polygon.bounds}")
@@ -46,7 +47,7 @@ def test_plot_issue():
     sheet_height = 700
 
     # Test wrong case
-    os.makedirs('tmp_test', exist_ok=True)
+    os.makedirs("tmp_test", exist_ok=True)
 
     print("\n=== Testing WRONG PlacedCarpet (original polygon) ===")
     plot_layout(
@@ -54,7 +55,7 @@ def test_plot_issue():
         sheet_width,
         sheet_height,
         "tmp_test/plot_test_wrong.png",
-        "Wrong: Original polygon + offset info"
+        "Wrong: Original polygon + offset info",
     )
     print("Plot saved: tmp_test/plot_test_wrong.png")
 
@@ -64,7 +65,7 @@ def test_plot_issue():
         sheet_width,
         sheet_height,
         "tmp_test/plot_test_correct.png",
-        "Correct: Already transformed polygon"
+        "Correct: Already transformed polygon",
     )
     print("Plot saved: tmp_test/plot_test_correct.png")
 
@@ -82,6 +83,7 @@ def test_plot_issue():
 
     if placed_correct.polygon.bounds != original_polygon.bounds:
         print("✅ CORRECT case: polygon is properly transformed")
+
 
 def test_current_plot_behavior():
     """Test how plot_layout currently behaves"""
@@ -101,6 +103,7 @@ def test_current_plot_behavior():
     print("- Does NOT apply x_offset, y_offset transformations")
     print("- Only uses 'angle' in the label text")
     print("- This means PlacedCarpet.polygon MUST be already transformed")
+
 
 if __name__ == "__main__":
     test_plot_issue()

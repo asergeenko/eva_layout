@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 
-from pathlib import Path
 from dxf_utils import parse_dxf_complete
 from carpet import Carpet
-from layout_optimizer import check_collision, find_bottom_left_position, translate_polygon, rotate_polygon
-from shapely.geometry import Polygon
-import matplotlib.pyplot as plt
+from layout_optimizer import (
+    check_collision,
+    find_bottom_left_position,
+    translate_polygon,
+    rotate_polygon,
+)
+
 
 def test_collision_detection():
     """Test collision detection between first carpet and remaining carpets"""
@@ -13,10 +16,12 @@ def test_collision_detection():
     # Load all carpets
     carpets = []
     for i in range(1, 6):
-        dxf_path = f'dxf_samples/HYUNDAI SOLARIS 1/{i}.dxf'
+        dxf_path = f"dxf_samples/HYUNDAI SOLARIS 1/{i}.dxf"
         polygon_data = parse_dxf_complete(dxf_path, verbose=False)
         if polygon_data and polygon_data.get("combined_polygon"):
-            carpet = Carpet(polygon_data["combined_polygon"], f"{i}.dxf", "чёрный", f"group_{i}", 1)
+            carpet = Carpet(
+                polygon_data["combined_polygon"], f"{i}.dxf", "чёрный", f"group_{i}", 1
+            )
             carpets.append(carpet)
 
     if len(carpets) < 2:
@@ -51,8 +56,12 @@ def test_collision_detection():
     print(f"\nSheet bounds: (0, 0, {sheet_width_mm}, {sheet_height_mm})")
 
     # Check if the first carpet is correctly within sheet bounds
-    if (final_bounds[0] < 0 or final_bounds[1] < 0 or
-        final_bounds[2] > sheet_width_mm or final_bounds[3] > sheet_height_mm):
+    if (
+        final_bounds[0] < 0
+        or final_bounds[1] < 0
+        or final_bounds[2] > sheet_width_mm
+        or final_bounds[3] > sheet_height_mm
+    ):
         print("❌ FIRST CARPET IS OUTSIDE SHEET BOUNDS!")
     else:
         print("✅ First carpet is within sheet bounds")
@@ -68,20 +77,23 @@ def test_collision_detection():
 
     # Create a placed carpet for collision testing
     from carpet import PlacedCarpet
+
     placed_first = PlacedCarpet(
         placed_polygon, x_offset, y_offset, 90, "1.dxf", "чёрный", "group_1", 1, 1
     )
 
     # Test collision detection with each remaining carpet
-    print(f"\n" + "="*60)
+    print("\n" + "=" * 60)
     print("COLLISION TESTING")
-    print("="*60)
+    print("=" * 60)
 
     for i, other_carpet in enumerate(carpets[1:], 2):
         print(f"\nTesting {other_carpet.filename}:")
 
         # Test direct collision (should be False since they're in different areas)
-        direct_collision = check_collision(placed_polygon, other_carpet.polygon, min_gap=2.0)
+        direct_collision = check_collision(
+            placed_polygon, other_carpet.polygon, min_gap=2.0
+        )
         print(f"  Direct collision with raw polygon: {direct_collision}")
 
         # Test if we can find a placement position for the other carpet
@@ -96,7 +108,9 @@ def test_collision_detection():
             other_bounds = other_carpet.polygon.bounds
             other_x_offset = best_x - other_bounds[0]
             other_y_offset = best_y - other_bounds[1]
-            other_placed = translate_polygon(other_carpet.polygon, other_x_offset, other_y_offset)
+            other_placed = translate_polygon(
+                other_carpet.polygon, other_x_offset, other_y_offset
+            )
 
             # Final collision check
             final_collision = check_collision(placed_polygon, other_placed, min_gap=2.0)
@@ -111,20 +125,32 @@ def test_collision_detection():
                 max_y = max(final_bounds[3], other_final_bounds[3])
 
                 if max_x <= sheet_width_mm and max_y <= sheet_height_mm:
-                    print(f"  ✅ Both carpets would fit together on sheet!")
-                    print(f"  Combined bounds would be: (0, 0, {max_x:.1f}, {max_y:.1f})")
-                    utilization = ((final_bounds[2]-final_bounds[0])*(final_bounds[3]-final_bounds[1]) +
-                                 (other_final_bounds[2]-other_final_bounds[0])*(other_final_bounds[3]-other_final_bounds[1])) / (sheet_width_mm * sheet_height_mm) * 100
+                    print("  ✅ Both carpets would fit together on sheet!")
+                    print(
+                        f"  Combined bounds would be: (0, 0, {max_x:.1f}, {max_y:.1f})"
+                    )
+                    utilization = (
+                        (
+                            (final_bounds[2] - final_bounds[0])
+                            * (final_bounds[3] - final_bounds[1])
+                            + (other_final_bounds[2] - other_final_bounds[0])
+                            * (other_final_bounds[3] - other_final_bounds[1])
+                        )
+                        / (sheet_width_mm * sheet_height_mm)
+                        * 100
+                    )
                     print(f"  Combined utilization would be: {utilization:.1f}%")
                 else:
-                    print(f"  ❌ Combined bounds would exceed sheet: max_x={max_x:.1f}, max_y={max_y:.1f}")
+                    print(
+                        f"  ❌ Combined bounds would exceed sheet: max_x={max_x:.1f}, max_y={max_y:.1f}"
+                    )
             else:
-                print(f"  ❌ Final collision detected even though position was found")
+                print("  ❌ Final collision detected even though position was found")
         else:
-            print(f"  ❌ No position found by find_bottom_left_position")
+            print("  ❌ No position found by find_bottom_left_position")
 
             # Let's try manual positioning to see what's happening
-            print(f"  Trying manual positioning...")
+            print("  Trying manual positioning...")
 
             # Try simple positions
             other_bounds = other_carpet.polygon.bounds
@@ -135,17 +161,27 @@ def test_collision_detection():
             try_x = 50.0  # 50mm from left edge
             try_y = 50.0  # 50mm from bottom edge
 
-            if try_x + other_width < final_bounds[0] and try_y + other_height < sheet_height_mm:
+            if (
+                try_x + other_width < final_bounds[0]
+                and try_y + other_height < sheet_height_mm
+            ):
                 try_x_offset = try_x - other_bounds[0]
                 try_y_offset = try_y - other_bounds[1]
-                try_placed = translate_polygon(other_carpet.polygon, try_x_offset, try_y_offset)
+                try_placed = translate_polygon(
+                    other_carpet.polygon, try_x_offset, try_y_offset
+                )
 
-                manual_collision = check_collision(placed_polygon, try_placed, min_gap=2.0)
-                print(f"  Manual test at ({try_x}, {try_y}): collision={manual_collision}")
+                manual_collision = check_collision(
+                    placed_polygon, try_placed, min_gap=2.0
+                )
+                print(
+                    f"  Manual test at ({try_x}, {try_y}): collision={manual_collision}"
+                )
 
                 if not manual_collision:
                     try_bounds = try_placed.bounds
                     print(f"  Manual placement bounds: {try_bounds}")
+
 
 if __name__ == "__main__":
     test_collision_detection()

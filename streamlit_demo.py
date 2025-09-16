@@ -54,10 +54,12 @@ DEFAULT_SHEET_TYPES = [
 ]
 OUTPUT_FOLDER = "output_layouts"
 
+
 def deselect(orders_to_show, start_idx):
     for i in range(len(orders_to_show)):
         st.session_state[f"order_{start_idx + i}"] = False
     st.rerun()
+
 
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
@@ -1011,9 +1013,7 @@ if st.button("🚀 Оптимизировать раскрой"):
                 int((i / total_layouts) * 100) if total_layouts > 0 else 100
             )
             results_progress.progress(progress_value)
-            results_status.text(
-                f"Создание файла {i + 1}/{total_layouts}"
-            )
+            results_status.text(f"Создание файла {i + 1}/{total_layouts}")
 
             # Save and visualize layout with new naming format: length_width_number_color.dxf
             sheet_width = int(layout.sheet_size[0])

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
-import os
 import sys
 from shapely.geometry import Polygon
 from layout_optimizer import find_contour_following_position, check_collision
+
 
 def test_placement_fix():
     """Test that the placement algorithm correctly handles existing obstacles."""
@@ -14,7 +14,9 @@ def test_placement_fix():
 
     # Create obstacles (simulating already placed carpets)
     obstacle1 = Polygon([(0, 0), (200, 0), (200, 100), (0, 100)])  # Rectangle at origin
-    obstacle2 = Polygon([(300, 0), (500, 0), (500, 150), (300, 150)])  # Another rectangle
+    obstacle2 = Polygon(
+        [(300, 0), (500, 0), (500, 150), (300, 150)]
+    )  # Another rectangle
     obstacles = [obstacle1, obstacle2]
 
     # Create a new polygon to place
@@ -37,6 +39,7 @@ def test_placement_fix():
 
     # Verify this position doesn't overlap with obstacles
     from layout_optimizer import translate_polygon
+
     x_offset = result_x - new_polygon.bounds[0]
     y_offset = result_y - new_polygon.bounds[1]
     translated_polygon = translate_polygon(new_polygon, x_offset, y_offset)
@@ -57,6 +60,7 @@ def test_placement_fix():
         return True
 
     return False
+
 
 if __name__ == "__main__":
     success = test_placement_fix()

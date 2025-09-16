@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 
 import sys
-sys.path.append('.')
+
+sys.path.append(".")
 import os
 from shapely.geometry import Polygon
 from carpet import PlacedCarpet
 from plot import plot_layout
+
 
 def test_plot_fix():
     """Test if the plot fix correctly handles PlacedCarpet with incorrect polygon positioning"""
@@ -21,11 +23,13 @@ def test_plot_fix():
         y_offset=400,
         angle=0,
         filename="8_копия_17.dxf",  # Same as in the original problem
-        color="черный"
+        color="черный",
     )
 
     print(f"Problematic carpet polygon bounds: {problematic_carpet.polygon.bounds}")
-    print(f"Problematic carpet offsets: x={problematic_carpet.x_offset}, y={problematic_carpet.y_offset}")
+    print(
+        f"Problematic carpet offsets: x={problematic_carpet.x_offset}, y={problematic_carpet.y_offset}"
+    )
 
     # Create another correct carpet for comparison
     correct_polygon = Polygon([(500, 600), (600, 600), (600, 700), (500, 700)])
@@ -35,14 +39,14 @@ def test_plot_fix():
         y_offset=600,
         angle=0,
         filename="correct.dxf",
-        color="черный"
+        color="черный",
     )
 
     # Test the plot
     sheet_width = 1400  # 140cm
     sheet_height = 2000  # 200cm
 
-    os.makedirs('tmp_test', exist_ok=True)
+    os.makedirs("tmp_test", exist_ok=True)
 
     print("\nTesting plot with fix...")
     plot_layout(
@@ -50,7 +54,7 @@ def test_plot_fix():
         sheet_width,
         sheet_height,
         "tmp_test/test_fix.png",
-        "Test: Fixed plot should position carpet correctly"
+        "Test: Fixed plot should position carpet correctly",
     )
     print("Plot saved: tmp_test/test_fix.png")
 
@@ -58,6 +62,7 @@ def test_plot_fix():
     print("- Problematic carpet (8_копия_17) should be moved from origin to (300, 400)")
     print("- Correct carpet should remain at (500, 600)")
     print("- No overlapping at origin")
+
 
 if __name__ == "__main__":
     test_plot_fix()
