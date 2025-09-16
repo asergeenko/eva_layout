@@ -54,16 +54,21 @@ DEFAULT_SHEET_TYPES = [
 ]
 OUTPUT_FOLDER = "output_layouts"
 
+
 def deselect(orders_to_show, start_idx):
     for i in range(len(orders_to_show)):
         st.session_state[f"order_{start_idx + i}"] = False
     st.rerun()
 
+
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 # Streamlit App
 # Display logo at the very top
-st.set_page_config(layout="wide")
+st.set_page_config(
+    layout="wide",
+    page_title="Wondercraft - Раскрой ковров",
+)
 
 # Add "Clear All" button at the top
 col_logo, col_clear = st.columns([4, 1])
@@ -72,7 +77,7 @@ with col_logo:
     try:
         st.image("logo.png", width=600, use_container_width=False)
     except FileNotFoundError:
-        st.title("🎯 EVA Layout Optimizer")
+        st.title("Wondercraft - Раскрой ковров")
 
 with col_clear:
     st.write("")  # Add some spacing
@@ -950,22 +955,16 @@ if st.button("🚀 Оптимизировать раскрой"):
         try:
             # Actual processing with progress tracking
             st.info("🔄 Запуск процесса оптимизации...")
-            optimization_progress = st.progress(10)
+            optimization_progress = st.progress(5)
             optimization_status = st.empty()
 
             logger.info(
                 f"Входные параметры: {len(carpets)} полигонов, {len(st.session_state.available_sheets)} типов листов"
             )
 
-            # logger.info("ПОЛИГОНЫ ПЕРЕД ОТПРАВКОЙ В bin_packing_with_inventory:")
-            # for i, carpet in enumerate(carpets):
-            #    logger.info(
-            #        f"  Полигон {i}: файл={carpet.filename}, order_id={carpet.order_id}"
-            #    )
-
             # Progress callback function with more detailed updates
             def update_progress(percent, status_text):
-                adjusted_percent = 10 + (percent * 0.9)  # Scale to 10%-100% range
+                adjusted_percent = 5 + (percent * 0.95)  # Scale to 10%-100% range
                 optimization_progress.progress(min(95, int(adjusted_percent)))
                 optimization_status.text(f"🔄 {status_text}")
 
@@ -1011,9 +1010,7 @@ if st.button("🚀 Оптимизировать раскрой"):
                 int((i / total_layouts) * 100) if total_layouts > 0 else 100
             )
             results_progress.progress(progress_value)
-            results_status.text(
-                f"Создание файла {i + 1}/{total_layouts}"
-            )
+            results_status.text(f"Создание файла {i + 1}/{total_layouts}")
 
             # Save and visualize layout with new naming format: length_width_number_color.dxf
             sheet_width = int(layout.sheet_size[0])
