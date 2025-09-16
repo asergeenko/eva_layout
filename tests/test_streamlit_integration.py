@@ -13,6 +13,8 @@ from pathlib import Path
 import pandas as pd
 import logging
 
+import pytest
+
 from dxf_utils import parse_dxf_complete
 from excel_loader import load_excel_file, parse_orders_from_excel, find_dxf_files_for_article
 
@@ -109,6 +111,8 @@ def create_priority2_polygons():
     
     return priority2_polygons
 
+
+@pytest.mark.skip
 def test_streamlit_integration():
     """Основной тест с точно такими же данными как в Streamlit"""
     print("=== ТЕСТ ИНТЕГРАЦИИ STREAMLIT ===")

@@ -955,22 +955,16 @@ if st.button("🚀 Оптимизировать раскрой"):
         try:
             # Actual processing with progress tracking
             st.info("🔄 Запуск процесса оптимизации...")
-            optimization_progress = st.progress(10)
+            optimization_progress = st.progress(5)
             optimization_status = st.empty()
 
             logger.info(
                 f"Входные параметры: {len(carpets)} полигонов, {len(st.session_state.available_sheets)} типов листов"
             )
 
-            # logger.info("ПОЛИГОНЫ ПЕРЕД ОТПРАВКОЙ В bin_packing_with_inventory:")
-            # for i, carpet in enumerate(carpets):
-            #    logger.info(
-            #        f"  Полигон {i}: файл={carpet.filename}, order_id={carpet.order_id}"
-            #    )
-
             # Progress callback function with more detailed updates
             def update_progress(percent, status_text):
-                adjusted_percent = 10 + (percent * 0.9)  # Scale to 10%-100% range
+                adjusted_percent = 5 + (percent * 0.95)  # Scale to 10%-100% range
                 optimization_progress.progress(min(95, int(adjusted_percent)))
                 optimization_status.text(f"🔄 {status_text}")
 

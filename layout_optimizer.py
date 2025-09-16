@@ -820,8 +820,8 @@ def bin_packing_with_existing(
     # Convert sheet size from cm to mm to match DXF polygon units
     sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
 
-    placed:list[PlacedCarpet] = []
-    unplaced:list[UnplacedCarpet] = []
+    placed: list[PlacedCarpet] = []
+    unplaced: list[UnplacedCarpet] = []
 
     # Start with existing placed polygons as obstacles
     obstacles = [placed_tuple.polygon for placed_tuple in existing_placed]
@@ -991,10 +991,10 @@ def bin_packing_with_existing(
         if best_placement:
             placed.append(
                 PlacedCarpet(
-                    best_placement["polygon"], # type: ignore
-                    best_placement["x_offset"], # type: ignore
-                    best_placement["y_offset"], # type: ignore
-                    best_placement["angle"], # type: ignore
+                    best_placement["polygon"],  # type: ignore
+                    best_placement["x_offset"],  # type: ignore
+                    best_placement["y_offset"],  # type: ignore
+                    best_placement["angle"],  # type: ignore
                     carpet.filename,
                     carpet.color,
                     carpet.order_id,
@@ -1394,13 +1394,9 @@ def bin_packing(
     polygons: list[Carpet],
     sheet_size: tuple[float, float],
     verbose: bool = True,
-    max_processing_time: float = 60.0,  # Reduced to 1 minute timeout
     progress_callback=None,  # Callback function for progress updates
 ) -> tuple[list[PlacedCarpet], list[UnplacedCarpet]]:
     """Optimize placement of complex polygons on a sheet with ultra-dense/polygonal/improved algorithms."""
-    import time
-
-    start_time = time.time()
 
     # Convert sheet size from cm to mm to match DXF polygon units
     sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
@@ -1439,12 +1435,7 @@ def bin_packing(
             + (1 - compactness) * area * 0.2
             + perimeter_approx * 0.05
         )
-
-        # CRITICAL: Priority 1 gets huge boost to ensure they are placed first
-        # This prevents underfilled sheets when mixing priority 1 and 2 carpets
-        priority_boost = 1000000 if carpet.priority == 1 else 0
-
-        return priority_boost + geometry_score
+        return geometry_score
 
     sorted_polygons = sorted(polygons, key=get_polygon_priority, reverse=True)
 
@@ -1455,17 +1446,6 @@ def bin_packing(
         st.info("✨ Сортировка полигонов по площади (сначала крупные)")
 
     for i, carpet in enumerate(sorted_polygons):
-        # Check timeout
-        if time.time() - start_time > max_processing_time:
-            if verbose:
-                st.warning(
-                    f"⏰ Превышено время обработки ({max_processing_time}s), остальные полигоны добавлены в неразмещенные"
-                )
-            unplaced.extend(
-                UnplacedCarpet.from_carpet(carpet) for carpet in sorted_polygons[i:]
-            )
-            break
-
         placed_successfully = False
 
         # Check if polygon is too large for the sheet
@@ -3179,7 +3159,7 @@ def try_simple_placement(
     ]
 
     for strategy in placement_strategies:
-        step:int = strategy["step"]
+        step: int = strategy["step"]
         rotations = strategy["rotations"]
 
         # Try different rotations
@@ -3325,11 +3305,11 @@ def bin_packing_with_inventory(
     logger.info(
         "=== НАЧАЛО bin_packing_with_inventory (АЛГОРИТМ МАКСИМАЛЬНОЙ ПЛОТНОСТИ) ==="
     )
-
-    progress_callback(
-        10,
-        "Подготовка ковров к раскладке...",
-    )
+    if progress_callback:
+        progress_callback(
+            5,
+            "Подготовка ковров к раскладке...",
+        )
 
     placed_sheets: list[PlacedSheet] = []
     all_unplaced: list[UnplacedCarpet] = []
@@ -3401,7 +3381,11 @@ def bin_packing_with_inventory(
                 remaining_carpet_map = {
                     UnplacedCarpet.from_carpet(c): c for c in matching_carpets
                 }
-                newly_remaining = set(remaining_carpet_map[remaining_carpet] for remaining_carpet in remaining_unplaced if remaining_carpet in remaining_carpet_map)
+                newly_remaining = set(
+                    remaining_carpet_map[remaining_carpet]
+                    for remaining_carpet in remaining_unplaced
+                    if remaining_carpet in remaining_carpet_map
+                )
 
                 # Remove placed carpets from remaining list
                 placed_carpet_set = set(
@@ -3664,9 +3648,7 @@ def bin_packing_with_inventory(
                     progress = min(
                         priority1_max_progress,
                         int(
-                            priority1_max_progress
-                            * len(placed_sheets)
-                            / (len(carpets))
+                            priority1_max_progress * len(placed_sheets) / (len(carpets))
                         ),
                     )
                     progress_callback(
