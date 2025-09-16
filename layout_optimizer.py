@@ -873,11 +873,37 @@ def bin_packing_with_existing(
             )
 
             if best_x is not None and best_y is not None:
-                # TETRIS STRATEGY: Prioritize orientations that create more space
+                # TRUE TETRIS STRATEGY: Minimize global maximum height, not individual positions!
 
-                # IMPROVED TETRIS: Position is KING - height matters most!
-                # Y-coordinate gets much higher weight (1000 vs 1) to prioritize bottom placement
-                position_score = best_y * 1000 + best_x
+                # Calculate what the maximum height would be after placing this carpet
+                dx_to_target = best_x - rotated_bounds[0]
+                dy_to_target = best_y - rotated_bounds[1]
+                test_translated = translate_polygon(rotated, dx_to_target, dy_to_target)
+
+                all_test_placed = existing_placed + placed + [PlacedCarpet(
+                    polygon=test_translated,
+                    x_offset=dx_to_target,
+                    y_offset=dy_to_target,
+                    angle=angle,
+                    filename="test",
+                    color="test",
+                    order_id="test",
+                    carpet_id=0,
+                    priority=1
+                )]
+
+                # Find maximum height after this placement - THIS IS THE KEY TETRIS METRIC!
+                max_height_after = max(c.polygon.bounds[3] for c in all_test_placed) if all_test_placed else 0
+
+                # PRIMARY SCORE: Heavily penalize orientations that increase maximum height
+                # This is the core of true Tetris behavior
+                global_height_score = max_height_after * 10000  # Much higher weight than individual position
+
+                # SECONDARY SCORE: X position for tie-breaking (prefer left placement)
+                x_position_score = best_x
+
+                # Combined position score prioritizes global compactness
+                position_score = global_height_score + x_position_score
 
                 # УЛУЧШЕННЫЙ ТЕТРИС: Более чувствительная оценка aspect ratio
                 shape_bonus = 0
@@ -902,42 +928,16 @@ def bin_packing_with_existing(
                     height_penalty = min(300, int((1 - aspect_ratio) * 300))  # Reduced from 1000
                     shape_bonus += height_penalty
 
-                # 🎯 МАКСИМИЗАЦИЯ ВЕРХНЕГО ПРОСТРАНСТВА: Стратегия для existing carpets
-                # Симулируем размещение с учетом существующих ковров
-                dx_to_target = best_x - rotated_bounds[0]
-                dy_to_target = best_y - rotated_bounds[1]
-                test_translated = translate_polygon(rotated, dx_to_target, dy_to_target)
-
-                all_test_placed = existing_placed + placed + [PlacedCarpet(
-                    polygon=test_translated,
-                    x_offset=dx_to_target,
-                    y_offset=dy_to_target,
-                    angle=angle,
-                    filename="test",
-                    color="test",
-                    order_id="test",
-                    carpet_id=0,
-                    priority=1
-                )]
-
-                # Находим максимальную высоту после размещения
-                max_height_after = max(c.polygon.bounds[3] for c in all_test_placed) if all_test_placed else 0
-
-                # Вычисляем площадь свободного пространства сверху
-                free_top_area = sheet_width_mm * (sheet_height_mm - max_height_after)
-
-                # МЕГА-БОНУС за максимизацию верхнего пространства
-                if free_top_area > 50000:  # Больше 500 см² свободного места сверху
-                    tetris_super_bonus = min(12000, int(free_top_area / 120))
-                    shape_bonus -= tetris_super_bonus
-
-                # Бонус за размещение в нижней части листа
-                height_from_bottom = best_y
-                if height_from_bottom < sheet_height_mm * 0.4:  # В нижних 40% листа
-                    low_placement_bonus = int((sheet_height_mm * 0.4 - height_from_bottom) * 3)
-                    shape_bonus -= low_placement_bonus
+                # The global height score already handles the key Tetris metric above
+                # Additional bonuses are now minimal since position_score dominates
 
                 total_score = position_score + shape_bonus
+
+                # DEBUG: Log scoring for each orientation
+                if verbose:
+                    print(f"  Angle {angle}°: pos=({best_x:.1f},{best_y:.1f}), "
+                          f"pos_score={position_score:.0f}, shape_bonus={shape_bonus:.0f}, "
+                          f"total={total_score:.0f}, aspect_ratio={aspect_ratio:.2f}")
 
                 if total_score < best_priority:
                     best_priority = total_score
@@ -1454,11 +1454,37 @@ def bin_packing(
             )
 
             if best_x is not None and best_y is not None:
-                # TETRIS STRATEGY: Prioritize orientations that create more space
+                # TRUE TETRIS STRATEGY: Minimize global maximum height, not individual positions!
 
-                # IMPROVED TETRIS: Position is KING - height matters most!
-                # Y-coordinate gets much higher weight (1000 vs 1) to prioritize bottom placement
-                position_score = best_y * 1000 + best_x
+                # Calculate what the maximum height would be after placing this carpet
+                dx_to_target = best_x - rotated_bounds[0]
+                dy_to_target = best_y - rotated_bounds[1]
+                test_translated = translate_polygon(rotated, dx_to_target, dy_to_target)
+
+                all_test_placed = placed + [PlacedCarpet(
+                    polygon=test_translated,
+                    x_offset=dx_to_target,
+                    y_offset=dy_to_target,
+                    angle=angle,
+                    filename="test",
+                    color="test",
+                    order_id="test",
+                    carpet_id=0,
+                    priority=1
+                )]
+
+                # Find maximum height after this placement - THIS IS THE KEY TETRIS METRIC!
+                max_height_after = max(c.polygon.bounds[3] for c in all_test_placed) if all_test_placed else 0
+
+                # PRIMARY SCORE: Heavily penalize orientations that increase maximum height
+                # This is the core of true Tetris behavior
+                global_height_score = max_height_after * 10000  # Much higher weight than individual position
+
+                # SECONDARY SCORE: X position for tie-breaking (prefer left placement)
+                x_position_score = best_x
+
+                # Combined position score prioritizes global compactness
+                position_score = global_height_score + x_position_score
 
                 # УЛУЧШЕННЫЙ ТЕТРИС: Более чувствительная оценка aspect ratio
                 shape_bonus = 0
@@ -1503,22 +1529,8 @@ def bin_packing(
                     priority=1
                 )]
 
-                # Находим максимальную высоту после размещения
-                max_height_after = max(c.polygon.bounds[3] for c in test_placed) if test_placed else 0
-
-                # Вычисляем площадь свободного пространства сверху
-                free_top_area = sheet_width_mm * (sheet_height_mm - max_height_after)
-
-                # МЕГА-БОНУС за максимизацию верхнего пространства
-                if free_top_area > 100000:  # Больше 1000 см² свободного места сверху
-                    tetris_super_bonus = min(15000, int(free_top_area / 150))  # До -15000 очков!
-                    shape_bonus -= tetris_super_bonus
-
-                # Дополнительный бонус за низкое размещение (ближе к низу)
-                height_from_bottom = best_y
-                if height_from_bottom < sheet_height_mm * 0.3:  # В нижних 30% листа
-                    low_placement_bonus = int((sheet_height_mm * 0.3 - height_from_bottom) * 5)
-                    shape_bonus -= low_placement_bonus
+                # The global height score already handles the key Tetris metric above
+                # Additional bonuses are now minimal since position_score dominates
 
                 total_score = position_score + shape_bonus
 
@@ -2656,18 +2668,31 @@ def smart_bin_packing(
     if not carpets:
         return [], []
     
-    # Smart sorting: prioritize area and width for better packing
-    def get_smart_score(carpet: Carpet):
+    # ENHANCED BIG-TO-SMALL STRATEGY: Large carpets first, then progressively smaller
+    # This creates better foundation for Tetris-style falling behavior
+    def get_enhanced_smart_score(carpet: Carpet):
         bounds = carpet.polygon.bounds
         area = carpet.polygon.area
         width = bounds[2] - bounds[0]
         height = bounds[3] - bounds[1]
-        
-        # Combined score: large area + good aspect ratio
-        aspect_penalty = abs(width - height) / max(width, height) if max(width, height) > 0 else 0
-        return area * (1.0 + 0.2 * aspect_penalty)  # Slightly prefer more regular shapes
-    
-    smart_sorted = sorted(carpets, key=get_smart_score, reverse=True)
+
+        # PRIMARY: Area is the most important factor (bigger first)
+        area_score = area * 1000000  # Scale up area significantly
+
+        # SECONDARY: Prefer shapes that are easier to place around (wider is better for foundation)
+        width_bonus = width * 1000  # Bonus for width (good for bottom layer)
+
+        # TERTIARY: Slight penalty for very tall narrow shapes (harder to fill around)
+        aspect_ratio = width / height if height > 0 else 1
+        if aspect_ratio < 0.3:  # Very tall narrow shapes
+            narrow_penalty = 50000  # Small penalty
+        else:
+            narrow_penalty = 0
+
+        return area_score + width_bonus - narrow_penalty
+
+    # Sort by enhanced strategy: largest areas with good foundation potential first
+    smart_sorted = sorted(carpets, key=get_enhanced_smart_score, reverse=True)
     
     # Use enhanced bin packing with tighter gap settings
     placed, unplaced = bin_packing(smart_sorted, sheet_size, verbose=verbose)
@@ -3110,16 +3135,28 @@ def bin_packing_with_inventory(
                         for c in matching_carpets
                     }
 
-                    for attempt in range(3):  # Try up to 3 different orderings
+                    for attempt in range(4):  # Try 4 different enhanced orderings
                         if attempt == 1:
-                            # Try reverse order
-                            test_carpets = list(reversed(matching_carpets))
+                            # Enhanced big-to-small strategy (best for foundation)
+                            def get_foundation_score(carpet: Carpet):
+                                bounds = carpet.polygon.bounds
+                                area = carpet.polygon.area
+                                width = bounds[2] - bounds[0]
+                                return area * 1000 + width  # Prioritize large + wide shapes
+                            test_carpets = sorted(matching_carpets, key=get_foundation_score, reverse=True)
                         elif attempt == 2:
-                            # Try sorted by area (smallest first for gaps)
-                            test_carpets = sorted(
-                                matching_carpets, key=lambda c: c.polygon.area
-                            )
+                            # Small-to-large strategy (good for filling gaps)
+                            test_carpets = sorted(matching_carpets, key=lambda c: c.polygon.area)
+                        elif attempt == 3:
+                            # Width-prioritized sorting (good for horizontal filling)
+                            def get_width_score(carpet: Carpet):
+                                bounds = carpet.polygon.bounds
+                                width = bounds[2] - bounds[0]
+                                area = carpet.polygon.area
+                                return width * 1000 + area  # Width first, then area
+                            test_carpets = sorted(matching_carpets, key=get_width_score, reverse=True)
                         else:
+                            # Default order (original)
                             test_carpets = matching_carpets
 
                         additional_placed, remaining_unplaced = (
@@ -3402,21 +3439,20 @@ def bin_packing_with_inventory(
                 for c in matching_carpets
             }
 
-            for attempt in range(1):  # Single attempt like priority 1
+            for attempt in range(3):  # Enhanced attempts for priority 2 as well
                 if attempt == 1:
-                    # Try reverse order
-                    test_carpets = list(reversed(matching_carpets))
+                    # Enhanced big-to-small strategy (good even for priority 2)
+                    def get_foundation_score_p2(carpet: Carpet):
+                        bounds = carpet.polygon.bounds
+                        area = carpet.polygon.area
+                        width = bounds[2] - bounds[0]
+                        return area * 1000 + width
+                    test_carpets = sorted(matching_carpets, key=get_foundation_score_p2, reverse=True)
                 elif attempt == 2:
-                    # Try sorted by area (smallest first for gaps)
-                    test_carpets = sorted(
-                        matching_carpets, key=lambda c: c.polygon.area
-                    )
-                elif attempt == 3:
-                    # Try sorted by area (largest first)
-                    test_carpets = sorted(
-                        matching_carpets, key=lambda c: c.polygon.area, reverse=True
-                    )
+                    # Small-to-large strategy (excellent for filling remaining gaps)
+                    test_carpets = sorted(matching_carpets, key=lambda c: c.polygon.area)
                 else:
+                    # Default order
                     test_carpets = matching_carpets
 
                 # Use EXACTLY the same algorithm as for priority 1
