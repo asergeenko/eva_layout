@@ -875,31 +875,32 @@ def bin_packing_with_existing(
             if best_x is not None and best_y is not None:
                 # TETRIS STRATEGY: Prioritize orientations that create more space
 
-                # Base position score (prefer bottom-left)
-                position_score = best_y * 10 + best_x * 100
+                # IMPROVED TETRIS: Position is KING - height matters most!
+                # Y-coordinate gets much higher weight (1000 vs 1) to prioritize bottom placement
+                position_score = best_y * 1000 + best_x
 
                 # УЛУЧШЕННЫЙ ТЕТРИС: Более чувствительная оценка aspect ratio
                 shape_bonus = 0
                 aspect_ratio = rotated_width / rotated_height if rotated_height > 0 else 1
 
-                # Bonus for longest side horizontal (along bottom/top edges)
-                if aspect_ratio > 1.05:  # Даже слегка широкие получают бонус
-                    # Прогрессивный бонус в зависимости от степени "широкости"
-                    width_bonus = min(2000, int((aspect_ratio - 1) * 2000))
+                # REDUCED bonus for horizontal orientations - don't override good positions
+                if aspect_ratio > 1.05:
+                    # Much smaller bonus for width - max 500 instead of 2000
+                    width_bonus = min(500, int((aspect_ratio - 1) * 500))
                     shape_bonus -= width_bonus
 
-                    # Extra bonus if touching bottom edge (creating clean horizontal line)
+                    # Extra bonus if touching bottom edge (still important for tetris)
                     if best_y < 5:  # Within 5mm of bottom
-                        shape_bonus -= 3000  # Увеличенный бонус за касание низа
+                        shape_bonus -= 2000  # Reduced from 3000
 
-                    # Extra bonus if touching left edge (creating clean vertical line)
+                    # Extra bonus if touching left edge (less important than bottom)
                     if best_x < 5:  # Within 5mm of left
-                        shape_bonus -= 2000  # Увеличенный бонус за касание левого края
+                        shape_bonus -= 1000  # Reduced from 2000
 
-                # Penalty for tall orientations (мы хотим горизонтальные)
-                elif aspect_ratio < 0.95:  # Высокие получают штраф
-                    height_penalty = min(1000, int((1 - aspect_ratio) * 1000))
-                    shape_bonus += height_penalty  # Штраф вместо бонуса
+                # REDUCED penalty for tall orientations - don't punish good positions too much
+                elif aspect_ratio < 0.95:
+                    height_penalty = min(300, int((1 - aspect_ratio) * 300))  # Reduced from 1000
+                    shape_bonus += height_penalty
 
                 # 🎯 МАКСИМИЗАЦИЯ ВЕРХНЕГО ПРОСТРАНСТВА: Стратегия для existing carpets
                 # Симулируем размещение с учетом существующих ковров
@@ -1455,31 +1456,32 @@ def bin_packing(
             if best_x is not None and best_y is not None:
                 # TETRIS STRATEGY: Prioritize orientations that create more space
 
-                # Base position score (prefer bottom-left)
-                position_score = best_y * 10 + best_x * 100
+                # IMPROVED TETRIS: Position is KING - height matters most!
+                # Y-coordinate gets much higher weight (1000 vs 1) to prioritize bottom placement
+                position_score = best_y * 1000 + best_x
 
                 # УЛУЧШЕННЫЙ ТЕТРИС: Более чувствительная оценка aspect ratio
                 shape_bonus = 0
                 aspect_ratio = rotated_width / rotated_height if rotated_height > 0 else 1
 
-                # Bonus for longest side horizontal (along bottom/top edges)
-                if aspect_ratio > 1.05:  # Даже слегка широкие получают бонус
-                    # Прогрессивный бонус в зависимости от степени "широкости"
-                    width_bonus = min(2000, int((aspect_ratio - 1) * 2000))
+                # REDUCED bonus for horizontal orientations - don't override good positions
+                if aspect_ratio > 1.05:
+                    # Much smaller bonus for width - max 500 instead of 2000
+                    width_bonus = min(500, int((aspect_ratio - 1) * 500))
                     shape_bonus -= width_bonus
 
-                    # Extra bonus if touching bottom edge (creating clean horizontal line)
+                    # Extra bonus if touching bottom edge (still important for tetris)
                     if best_y < 5:  # Within 5mm of bottom
-                        shape_bonus -= 3000  # Увеличенный бонус за касание низа
+                        shape_bonus -= 2000  # Reduced from 3000
 
-                    # Extra bonus if touching left edge (creating clean vertical line)
+                    # Extra bonus if touching left edge (less important than bottom)
                     if best_x < 5:  # Within 5mm of left
-                        shape_bonus -= 2000  # Увеличенный бонус за касание левого края
+                        shape_bonus -= 1000  # Reduced from 2000
 
-                # Penalty for tall orientations (мы хотим горизонтальные)
-                elif aspect_ratio < 0.95:  # Высокие получают штраф
-                    height_penalty = min(1000, int((1 - aspect_ratio) * 1000))
-                    shape_bonus += height_penalty  # Штраф вместо бонуса
+                # REDUCED penalty for tall orientations - don't punish good positions too much
+                elif aspect_ratio < 0.95:
+                    height_penalty = min(300, int((1 - aspect_ratio) * 300))  # Reduced from 1000
+                    shape_bonus += height_penalty
 
                 # 🎯 МАКСИМИЗАЦИЯ ВЕРХНЕГО ПРОСТРАНСТВА: Ключевая Тетрис-стратегия
                 # Предпочитаем ориентации которые максимизируют непрерывное свободное пространство сверху
@@ -2287,6 +2289,12 @@ def find_contour_following_position(
         y_offset = y - bounds[1]
         test_polygon = translate_polygon(polygon, x_offset, y_offset)
 
+        # CRITICAL FIX: Check sheet boundaries first
+        test_bounds = test_polygon.bounds
+        if (test_bounds[0] < -0.1 or test_bounds[1] < -0.1 or
+            test_bounds[2] > sheet_width + 0.1 or test_bounds[3] > sheet_height + 0.1):
+            continue
+
         # Use our new TRUE GEOMETRIC collision check (no bounding box constraints!)
         collision = False
         for obstacle in obstacles:
@@ -2346,6 +2354,12 @@ def find_ultra_tight_position(
         x_offset = x - bounds[0]
         y_offset = y - bounds[1]
         test_polygon = translate_polygon(polygon, x_offset, y_offset)
+
+        # CRITICAL FIX: Check sheet boundaries first
+        test_bounds = test_polygon.bounds
+        if (test_bounds[0] < -0.1 or test_bounds[1] < -0.1 or
+            test_bounds[2] > sheet_width + 0.1 or test_bounds[3] > sheet_height + 0.1):
+            continue
 
         collision = False
         for obstacle in obstacles:
@@ -2450,7 +2464,7 @@ def find_bottom_left_position_with_obstacles(
         # OPTIMIZATION: Early exit on first collision
         collision = False
         for obstacle in obstacles:
-            if check_collision(test_polygon, obstacle):
+            if check_collision(test_polygon, obstacle, min_gap=0.1):
                 collision = True
                 break
 
@@ -2790,20 +2804,21 @@ def simple_sheet_consolidation(
             placed_carpet.filename,
             placed_carpet.color,
             placed_carpet.order_id,
-            priority=1
+            priority=placed_carpet.priority  # Сохраняем оригинальный приоритет
         )
         carpets_to_move.append(carpet)
     
     # Try to fit these carpets on existing sheets
-    successfully_moved = 0
+    successfully_moved_carpets = []
     for carpet in carpets_to_move:
+        moved = False
         for layout_idx, layout in enumerate(remaining_sheets):
             if layout.sheet_color != carpet.color:
                 continue
-                
+
             if layout.usage_percent >= 95:  # Skip very full sheets
                 continue
-            
+
             try:
                 additional_placed, remaining_unplaced = bin_packing_with_existing(
                     [carpet],
@@ -2811,28 +2826,50 @@ def simple_sheet_consolidation(
                     layout.sheet_size,
                     verbose=False,
                 )
-                
+
                 if additional_placed:
                     # Successfully moved!
                     remaining_sheets[layout_idx].placed_polygons.extend(additional_placed)
                     remaining_sheets[layout_idx].usage_percent = calculate_usage_percent(
                         remaining_sheets[layout_idx].placed_polygons, layout.sheet_size
                     )
-                    successfully_moved += 1
-                    logger.info(f"Moved carpet {carpet.filename} to sheet #{layout.sheet_number}")
+                    successfully_moved_carpets.append(carpet)
+                    logger.info(f"Moved carpet {carpet.filename} (ID: {carpet.carpet_id}) to sheet #{layout.sheet_number}")
+                    moved = True
                     break
-                    
+
             except Exception as e:
                 continue
+
+        # Continue trying other carpets even if this one can't be moved
+        # This allows maximum consolidation
     
-    if successfully_moved == len(carpets_to_move):
+    if len(successfully_moved_carpets) == len(carpets_to_move):
         # All carpets moved successfully - remove last sheet
-        logger.info(f"Successfully consolidated last sheet - moved {successfully_moved} carpets")
+        logger.info(f"Successfully consolidated last sheet - moved {len(successfully_moved_carpets)} carpets")
         return remaining_sheets
     else:
-        # Some carpets couldn't be moved - keep original layout
-        logger.info(f"Partial consolidation: moved {successfully_moved}/{len(carpets_to_move)} carpets")
-        return placed_layouts
+        # Some carpets couldn't be moved - need to create proper updated layout
+        # Remove successfully moved carpets from last sheet by carpet_id
+        successfully_moved_ids = {carpet.carpet_id for carpet in successfully_moved_carpets}
+
+        # Create updated last sheet without successfully moved carpets
+        updated_last_sheet_polygons = [
+            placed for placed in last_sheet.placed_polygons
+            if placed.carpet_id not in successfully_moved_ids
+        ]
+
+        # Update last sheet
+        last_sheet.placed_polygons = updated_last_sheet_polygons
+        last_sheet.usage_percent = calculate_usage_percent(
+            last_sheet.placed_polygons, last_sheet.sheet_size
+        )
+
+        # Combine remaining sheets with updated last sheet
+        result_sheets = remaining_sheets + [last_sheet]
+
+        logger.info(f"Partial consolidation: moved {len(successfully_moved_carpets)}/{len(carpets_to_move)} carpets")
+        return result_sheets
 
 def try_simple_placement(carpet: Carpet, existing_placed: list[PlacedCarpet], sheet_size: tuple[float, float]) -> PlacedCarpet | None:
     """ULTRA-AGGRESSIVE placement for priority 2 carpets - use EVERY available space."""
@@ -3270,6 +3307,67 @@ def bin_packing_with_inventory(
                 sheet_counter -= 1
                 break
 
+    # STEP 2.5: Post-process priority 1 layouts - consolidate sheets
+    logger.info("\n=== ЭТАП 2.5: ПОСТ-ОБРАБОТКА ЛИСТОВ ПРИОРИТЕТА 1 ===")
+    original_sheet_count = len(placed_layouts)
+
+    placed_layouts = simple_sheet_consolidation(placed_layouts)
+
+    # If consolidation reduced sheets, we might have some unplaced carpets that can now fit
+    if len(placed_layouts) < original_sheet_count:
+        logger.info(f"Consolidation reduced sheets from {original_sheet_count} to {len(placed_layouts)}")
+
+        # Try to place any remaining unplaced carpets on the optimized sheets
+        remaining_unplaced = []
+        for unplaced_carpet in all_unplaced:
+            placed_successfully = False
+
+            for layout_idx, layout in enumerate(placed_layouts):
+                if layout.sheet_color != unplaced_carpet.color:
+                    continue
+
+                if layout.usage_percent >= 98:  # Skip very full sheets
+                    continue
+
+                try:
+                    # Try to add this carpet to existing sheet
+                    test_carpet = Carpet(
+                        unplaced_carpet.polygon,
+                        unplaced_carpet.filename,
+                        unplaced_carpet.color,
+                        unplaced_carpet.order_id,
+                        priority=1
+                    )
+
+                    additional_placed, remaining_unplaced_test = bin_packing_with_existing(
+                        [test_carpet],
+                        layout.placed_polygons,
+                        layout.sheet_size,
+                        verbose=False,
+                    )
+
+                    if additional_placed:
+                        # Successfully placed!
+                        placed_layouts[layout_idx].placed_polygons.extend(additional_placed)
+                        placed_layouts[layout_idx].usage_percent = calculate_usage_percent(
+                            placed_layouts[layout_idx].placed_polygons, layout.sheet_size
+                        )
+                        placed_successfully = True
+                        logger.info(f"Placed previously unplaced carpet {unplaced_carpet.filename} on optimized sheet #{layout.sheet_number}")
+                        break
+
+                except Exception as e:
+                    logger.debug(f"Failed to place unplaced carpet on optimized sheet: {e}")
+                    continue
+
+            if not placed_successfully:
+                remaining_unplaced.append(unplaced_carpet)
+
+        all_unplaced = remaining_unplaced
+        logger.info(f"After optimization: {len(all_unplaced)} carpets remain unplaced")
+    else:
+        logger.info("No sheet count reduction achieved through consolidation")
+
     # STEP 3: Place priority 2 on remaining space only (no new sheets)
     logger.info(
         f"\n=== ЭТАП 3: РАЗМЕЩЕНИЕ {len(priority2_carpets)} ПРИОРИТЕТ2 НА СВОБОДНОМ МЕСТЕ ==="
@@ -3531,70 +3629,6 @@ def bin_packing_with_inventory(
         f"Перегруппировка завершена: {len(black_sheets)} черных + {len(grey_sheets)} серых = {len(placed_layouts)} листов"
     )
 
-    # STEP 8: Post-processing optimization
-    logger.info("\n=== ЭТАП 8: ПОСТ-ОБРАБОТКА ЛИСТОВ ===")
-    original_sheet_count = len(placed_layouts)
-    
-    # Use simple consolidation instead of aggressive to prevent overlaps
-    if len(placed_layouts) > 4:  # Only if we exceed target
-        placed_layouts = simple_sheet_consolidation(placed_layouts)
-    else:
-        logger.info("Already at target sheet count (≤4), skipping consolidation")
-    
-    # If consolidation reduced sheets, we might have some unplaced carpets that can now fit
-    if len(placed_layouts) < original_sheet_count:
-        logger.info(f"Consolidation reduced sheets from {original_sheet_count} to {len(placed_layouts)}")
-        
-        # Try to place any remaining unplaced carpets on the optimized sheets
-        remaining_unplaced = []
-        for unplaced_carpet in all_unplaced:
-            placed_successfully = False
-            
-            for layout_idx, layout in enumerate(placed_layouts):
-                if layout.sheet_color != unplaced_carpet.color:
-                    continue
-                    
-                if layout.usage_percent >= 98:  # Skip very full sheets
-                    continue
-                
-                try:
-                    # Try to add this carpet to existing sheet
-                    test_carpet = Carpet(
-                        unplaced_carpet.polygon,
-                        unplaced_carpet.filename,
-                        unplaced_carpet.color,
-                        unplaced_carpet.order_id,
-                        priority=1
-                    )
-                    
-                    additional_placed, remaining_unplaced_test = bin_packing_with_existing(
-                        [test_carpet],
-                        layout.placed_polygons,
-                        layout.sheet_size,
-                        verbose=False,
-                    )
-                    
-                    if additional_placed:
-                        # Successfully placed!
-                        placed_layouts[layout_idx].placed_polygons.extend(additional_placed)
-                        placed_layouts[layout_idx].usage_percent = calculate_usage_percent(
-                            placed_layouts[layout_idx].placed_polygons, layout.sheet_size
-                        )
-                        placed_successfully = True
-                        logger.info(f"Placed previously unplaced carpet {unplaced_carpet.filename} on optimized sheet #{layout.sheet_number}")
-                        break
-                        
-                except Exception as e:
-                    logger.debug(f"Failed to place unplaced carpet on optimized sheet: {e}")
-                    continue
-            
-            if not placed_successfully:
-                remaining_unplaced.append(unplaced_carpet)
-        
-        all_unplaced = remaining_unplaced
-        logger.info(f"After optimization: {len(all_unplaced)} carpets remain unplaced")
-    else:
-        logger.info("No sheet count reduction achieved through consolidation")
 
     # Final logging and progress
     logger.info("\n=== ИТОГИ РАЗМЕЩЕНИЯ ===")
