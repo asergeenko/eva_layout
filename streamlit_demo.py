@@ -65,7 +65,10 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 # Streamlit App
 # Display logo at the very top
-st.set_page_config(layout="wide")
+st.set_page_config(
+    layout="wide",
+    page_title="Wondercraft - Раскрой ковров",
+)
 
 # Add "Clear All" button at the top
 col_logo, col_clear = st.columns([4, 1])
@@ -74,7 +77,7 @@ with col_logo:
     try:
         st.image("logo.png", width=600, use_container_width=False)
     except FileNotFoundError:
-        st.title("🎯 EVA Layout Optimizer")
+        st.title("Wondercraft - Раскрой ковров")
 
 with col_clear:
     st.write("")  # Add some spacing

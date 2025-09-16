@@ -3158,228 +3158,6 @@ def smart_bin_packing(
     return placed, unplaced
 
 
-def consolidate_sheets_aggressive(
-    placed_layouts: list[PlacedSheet],
-) -> list[PlacedSheet]:
-    """Aggressive sheet consolidation - try multiple strategies to reduce sheet count."""
-    if len(placed_layouts) <= 1:
-        return placed_layouts
-
-    logger.info(f"Starting aggressive consolidation of {len(placed_layouts)} sheets")
-
-    # Group sheets by color
-    sheets_by_color = {}
-    for layout in placed_layouts:
-        color = layout.sheet_color
-        if color not in sheets_by_color:
-            sheets_by_color[color] = []
-        sheets_by_color[color].append(layout)
-
-    optimized_layouts = []
-
-    for color, color_sheets in sheets_by_color.items():
-        if len(color_sheets) <= 1:
-            optimized_layouts.extend(color_sheets)
-            continue
-
-        logger.info(f"Consolidating {len(color_sheets)} sheets of color {color}")
-
-        # Sort sheets by usage (least filled first, so we try to empty them)
-        color_sheets.sort(key=lambda s: s.usage_percent)
-
-        # Try to move carpets from the least filled sheets to more filled ones
-        consolidated_sheets = []
-
-        for target_sheet in color_sheets:
-            if not target_sheet.placed_polygons:  # Skip empty sheets
-                continue
-
-            # Convert placed carpets back to Carpet objects
-            target_carpets = []
-            for placed_carpet in target_sheet.placed_polygons:
-                carpet = Carpet(
-                    placed_carpet.polygon,
-                    placed_carpet.filename,
-                    placed_carpet.color,
-                    placed_carpet.order_id,
-                    priority=1,
-                )
-                target_carpets.append(carpet)
-
-            # Try to fit these carpets on existing consolidated sheets
-            placed_successfully = False
-
-            for existing_sheet_idx, existing_sheet in enumerate(consolidated_sheets):
-                if existing_sheet.usage_percent >= 95:  # Skip very full sheets
-                    continue
-
-                try:
-                    # Try to add all carpets from target sheet to existing sheet
-                    additional_placed, remaining_unplaced = bin_packing_with_existing(
-                        target_carpets,
-                        existing_sheet.placed_polygons,
-                        existing_sheet.sheet_size,
-                        verbose=False,
-                    )
-
-                    if len(remaining_unplaced) == 0:  # All carpets fit!
-                        # CRITICAL: Verify no overlaps before accepting consolidation
-                        existing_polygons = [
-                            p.polygon for p in existing_sheet.placed_polygons
-                        ]
-                        new_polygons = [p.polygon for p in additional_placed]
-
-                        has_overlap = False
-                        for new_poly in new_polygons:
-                            for existing_poly in existing_polygons:
-                                if check_collision(
-                                    new_poly, existing_poly, min_gap=0.05
-                                ):
-                                    logger.error(
-                                        "Overlap detected during consolidation - rejecting"
-                                    )
-                                    has_overlap = True
-                                    break
-                            if has_overlap:
-                                break
-
-                        if not has_overlap:
-                            consolidated_sheets[
-                                existing_sheet_idx
-                            ].placed_polygons.extend(additional_placed)
-                            consolidated_sheets[
-                                existing_sheet_idx
-                            ].usage_percent = calculate_usage_percent(
-                                consolidated_sheets[existing_sheet_idx].placed_polygons,
-                                existing_sheet.sheet_size,
-                            )
-                            placed_successfully = True
-                            logger.info(
-                                f"Consolidated entire sheet into sheet #{existing_sheet.sheet_number}"
-                            )
-                            break
-                        else:
-                            logger.warning("Consolidation rejected due to overlaps")
-
-                except Exception as e:
-                    logger.debug(f"Failed to consolidate sheet: {e}")
-                    continue
-
-            if not placed_successfully:
-                # Couldn't consolidate - keep as separate sheet
-                consolidated_sheets.append(target_sheet)
-
-        optimized_layouts.extend(consolidated_sheets)
-
-    # Renumber sheets
-    for i, layout in enumerate(optimized_layouts):
-        layout.sheet_number = i + 1
-
-    logger.info(
-        f"Consolidation complete: {len(placed_layouts)} → {len(optimized_layouts)} sheets"
-    )
-    return optimized_layouts
-
-
-def simple_sheet_consolidation(placed_layouts: list[PlacedSheet]) -> list[PlacedSheet]:
-    """Simple sheet consolidation - try to move carpets from last sheet to previous ones."""
-    if len(placed_layouts) <= 1:
-        return placed_layouts
-
-    logger.info("Attempting simple sheet consolidation")
-
-    # Try to consolidate the last sheet (often the least filled)
-    last_sheet = placed_layouts[-1]
-    remaining_sheets = placed_layouts[:-1]
-
-    carpets_to_move = []
-    for placed_carpet in last_sheet.placed_polygons:
-        carpet = Carpet(
-            placed_carpet.polygon,
-            placed_carpet.filename,
-            placed_carpet.color,
-            placed_carpet.order_id,
-            priority=placed_carpet.priority,  # Сохраняем оригинальный приоритет
-        )
-        carpets_to_move.append(carpet)
-
-    # Try to fit these carpets on existing sheets
-    successfully_moved_carpets = []
-    for carpet in carpets_to_move:
-        for layout_idx, layout in enumerate(remaining_sheets):
-            if layout.sheet_color != carpet.color:
-                continue
-
-            if (
-                layout.usage_percent >= 98
-            ):  # INCREASED: Skip only extremely full sheets (более агрессивная консолидация)
-                continue
-
-            try:
-                additional_placed, remaining_unplaced = bin_packing_with_existing(
-                    [carpet],
-                    layout.placed_polygons,
-                    layout.sheet_size,
-                    verbose=False,
-                )
-
-                if additional_placed:
-                    # Successfully moved!
-                    remaining_sheets[layout_idx].placed_polygons.extend(
-                        additional_placed
-                    )
-                    remaining_sheets[
-                        layout_idx
-                    ].usage_percent = calculate_usage_percent(
-                        remaining_sheets[layout_idx].placed_polygons, layout.sheet_size
-                    )
-                    successfully_moved_carpets.append(carpet)
-                    logger.info(
-                        f"Moved carpet {carpet.filename} (ID: {carpet.carpet_id}) to sheet #{layout.sheet_number}"
-                    )
-                    break
-
-            except Exception:
-                continue
-
-        # Continue trying other carpets even if this one can't be moved
-        # This allows maximum consolidation
-
-    if len(successfully_moved_carpets) == len(carpets_to_move):
-        # All carpets moved successfully - remove last sheet
-        logger.info(
-            f"Successfully consolidated last sheet - moved {len(successfully_moved_carpets)} carpets"
-        )
-        return remaining_sheets
-    else:
-        # Some carpets couldn't be moved - need to create proper updated layout
-        # Remove successfully moved carpets from last sheet by carpet_id
-        successfully_moved_ids = {
-            carpet.carpet_id for carpet in successfully_moved_carpets
-        }
-
-        # Create updated last sheet without successfully moved carpets
-        updated_last_sheet_polygons = [
-            placed
-            for placed in last_sheet.placed_polygons
-            if placed.carpet_id not in successfully_moved_ids
-        ]
-
-        # Update last sheet
-        last_sheet.placed_polygons = updated_last_sheet_polygons
-        last_sheet.usage_percent = calculate_usage_percent(
-            last_sheet.placed_polygons, last_sheet.sheet_size
-        )
-
-        # Combine remaining sheets with updated last sheet
-        result_sheets = remaining_sheets + [last_sheet]
-
-        logger.info(
-            f"Partial consolidation: moved {len(successfully_moved_carpets)}/{len(carpets_to_move)} carpets"
-        )
-        return result_sheets
-
-
 def try_simple_placement(
     carpet: Carpet, existing_placed: list[PlacedCarpet], sheet_size: tuple[float, float]
 ) -> PlacedCarpet | None:
@@ -3550,8 +3328,10 @@ def bin_packing_with_inventory(
     logger.info(
         "=== НАЧАЛО bin_packing_with_inventory (АЛГОРИТМ МАКСИМАЛЬНОЙ ПЛОТНОСТИ) ==="
     )
-    logger.info(
-        f"Входные параметры: {len(carpets)} полигонов, {len(available_sheets)} типов листов"
+
+    progress_callback(
+        10,
+        "Подготовка ковров к раскладке...",
     )
 
     placed_layouts: list[PlacedSheet] = []
@@ -3570,6 +3350,8 @@ def bin_packing_with_inventory(
         else:
             # All Excel orders (ZAKAZ_*) and priority 1 items go together
             priority1_carpets.append(carpet)
+
+    priority1_max_progress = 70 if priority2_carpets else 100
 
     logger.info(
         f"Группировка завершена: {len(priority1_carpets)} приоритет 1 + Excel, {len(priority2_carpets)} приоритет 2"
@@ -3886,8 +3668,12 @@ def bin_packing_with_inventory(
 
                 if progress_callback:
                     progress = min(
-                        90,
-                        int(90 * len(placed_layouts) / (len(carpets))),
+                        priority1_max_progress,
+                        int(
+                            priority1_max_progress
+                            * len(placed_layouts)
+                            / (len(carpets))
+                        ),
                     )
                     progress_callback(
                         progress,
@@ -3911,7 +3697,7 @@ def bin_packing_with_inventory(
 
     remaining_priority2: list[Carpet] = list(priority2_carpets)
     placed_layouts, all_unplaced = place_priority2(
-        remaining_priority2, placed_layouts, all_unplaced
+        remaining_priority2, placed_layouts, all_unplaced, progress_callback
     )
 
     # STEP 4: Sort sheets by color (group black together, then grey)
@@ -4278,9 +4064,13 @@ def place_priority2(
     remaining_priority2: list[Carpet],
     placed_layouts: list[PlacedSheet],
     all_unplaced: list[UnplacedCarpet],
+    progress_callback=None,  # Callback function for progress updates
 ) -> tuple[list[PlacedSheet], list[UnplacedCarpet]]:
     # Sort layouts by increasing usage percent to fill emptier sheets first
     sorted_layouts = sorted(placed_layouts, key=lambda l: l.usage_percent)
+
+    total_priority2_placed = 0
+    total_priority2_carpets = len(remaining_priority2)
 
     for layout in sorted_layouts:
         if not remaining_priority2:
@@ -4313,8 +4103,17 @@ def place_priority2(
                 placed = try_simple_placement(carpet, current_placed, layout.sheet_size)
                 if placed:
                     additional_placed.append(placed)
+                    total_priority2_placed += 1
                     current_placed.append(placed)  # Update current for next placements
                     logger.info(f"  ✅ Ковер {carpet.filename} размещен успешно")
+                    if progress_callback:
+                        progress = 70 + int(
+                            100 * total_priority2_placed / total_priority2_carpets * 0.3
+                        )
+                        progress_callback(
+                            progress,
+                            f"Размещение ковров приоритета 2: {total_priority2_placed}/{len(remaining_priority2)}",
+                        )
                 else:
                     logger.info(f"  ❌ Ковер {carpet.filename} не размещен")
 
@@ -4341,7 +4140,9 @@ def place_priority2(
                         layout.placed_polygons, layout.sheet_size
                     )
                     # Remove placed carpets from remaining_priority2
-                    placed_ids = set((p.filename, p.color, p.order_id) for p in additional_placed)
+                    placed_ids = set(
+                        (p.filename, p.color, p.order_id) for p in additional_placed
+                    )
                     remaining_priority2 = [
                         c
                         for c in remaining_priority2
