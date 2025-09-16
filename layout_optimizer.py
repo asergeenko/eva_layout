@@ -3328,6 +3328,8 @@ def bin_packing_with_inventory(
             # All Excel orders (ZAKAZ_*) and priority 1 items go together
             priority1_carpets.append(carpet)
 
+    num_priority2_total = len(priority2_carpets)
+
     priority1_max_progress = 70 if priority2_carpets else 100
 
     logger.info(
@@ -3673,7 +3675,11 @@ def bin_packing_with_inventory(
 
     remaining_priority2: list[Carpet] = list(priority2_carpets)
     placed_sheets, all_unplaced = place_priority2(
-        remaining_priority2, placed_sheets, all_unplaced, progress_callback
+        num_priority2_total,
+        remaining_priority2,
+        placed_sheets,
+        all_unplaced,
+        progress_callback,
     )
 
     # STEP 4: Sort sheets by color (group black together, then grey)
@@ -4037,6 +4043,7 @@ def tighten_layout(
 
 
 def place_priority2(
+    num_priority2_total: int,
     remaining_priority2: list[Carpet],
     placed_layouts: list[PlacedSheet],
     all_unplaced: list[UnplacedCarpet],
@@ -4046,7 +4053,6 @@ def place_priority2(
     sorted_layouts = sorted(placed_layouts, key=lambda l: l.usage_percent)
 
     total_priority2_placed = 0
-    total_priority2_carpets = len(remaining_priority2)
 
     for layout in sorted_layouts:
         if not remaining_priority2:
@@ -4084,11 +4090,11 @@ def place_priority2(
                     logger.info(f"  ✅ Ковер {carpet.filename} размещен успешно")
                     if progress_callback:
                         progress = 70 + int(
-                            100 * total_priority2_placed / total_priority2_carpets * 0.3
+                            100 * total_priority2_placed / num_priority2_total * 0.3
                         )
                         progress_callback(
                             progress,
-                            f"Размещение ковров приоритета 2: {total_priority2_placed}/{len(remaining_priority2)}",
+                            f"Размещение ковров приоритета 2: {total_priority2_placed}/{num_priority2_total}",
                         )
                 else:
                     logger.info(f"  ❌ Ковер {carpet.filename} не размещен")
