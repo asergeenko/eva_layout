@@ -22,21 +22,19 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 # Глобальные кэши для оптимизации поворотов ковров
-_rotation_cache: Dict[int, Dict[int, Polygon]] = {}  # carpet_id -> {angle: rotated_polygon}
+_rotation_cache: Dict[Carpet, Dict[int, Polygon]] = {}  # carpet_id -> {angle: rotated_polygon}
 
 def get_cached_rotation(carpet: Carpet, angle: int) -> Polygon:
     """Получить кэшированный поворот полигона или вычислить новый."""
-    carpet_id = carpet.carpet_id
+    if carpet not in _rotation_cache:
+        _rotation_cache[carpet] = {}
 
-    if carpet_id not in _rotation_cache:
-        _rotation_cache[carpet_id] = {}
-
-    if angle not in _rotation_cache[carpet_id]:
+    if angle not in _rotation_cache[carpet]:
         # Вычисляем поворот от оригинального полигона ковра
         rotated = rotate_polygon(carpet.polygon, angle) if angle != 0 else carpet.polygon
-        _rotation_cache[carpet_id][angle] = rotated
+        _rotation_cache[carpet][angle] = rotated
 
-    return _rotation_cache[carpet_id][angle]
+    return _rotation_cache[carpet][angle]
 
 def clear_optimization_caches():
     """Очистить все кэши оптимизации."""
@@ -3352,6 +3350,8 @@ def bin_packing_with_inventory(
             5,
             "Подготовка ковров к раскладке...",
         )
+
+    clear_optimization_caches()
 
     placed_sheets: list[PlacedSheet] = []
     all_unplaced: list[UnplacedCarpet] = []
