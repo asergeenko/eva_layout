@@ -26,6 +26,9 @@ _rotation_cache: Dict[
 ] = {}  # carpet_id -> {angle: rotated_polygon}
 _original_polygons: Dict[int, Polygon] = {}  # carpet_id -> original_polygon
 
+# Кэш для calculate_trapped_space - PERFORMANCE BOOST
+_trapped_space_cache: Dict[str, float] = {}  # layout_hash -> trapped_area
+
 
 def cache_original_polygons(carpets: list[Carpet]) -> None:
     """Кэшировать оригинальные полигоны ДО любых трансформаций."""
@@ -81,11 +84,27 @@ def get_cached_rotation(
     return _rotation_cache[carpet_id][angle]
 
 
+def generate_layout_cache_key(placed_carpets: list[PlacedCarpet]) -> str:
+    """Генерировать уникальный ключ для кэширования расчета заперного пространства."""
+    # Создаем хэш на основе позиций и углов всех ковров
+    carpet_data = []
+    for carpet in sorted(placed_carpets, key=lambda c: c.carpet_id):
+        # Округляем координаты до 1мм для стабильности хэша
+        x = round(carpet.x_offset, 1)
+        y = round(carpet.y_offset, 1)
+        angle = carpet.angle
+        carpet_data.append(f"{carpet.carpet_id}:{x},{y},{angle}")
+
+    layout_string = "|".join(carpet_data)
+    return str(hash(layout_string))
+
+
 def clear_optimization_caches():
     """Очистить все кэши оптимизации."""
-    global _rotation_cache, _original_polygons
+    global _rotation_cache, _original_polygons, _trapped_space_cache
     _rotation_cache.clear()
     _original_polygons.clear()
+    _trapped_space_cache.clear()
 
 
 def get_cache_stats() -> Dict[str, int]:
@@ -93,10 +112,12 @@ def get_cache_stats() -> Dict[str, int]:
     total_rotations = sum(len(rotations) for rotations in _rotation_cache.values())
     cached_carpets = len(_rotation_cache)
     original_polygons = len(_original_polygons)
+    trapped_space_entries = len(_trapped_space_cache)
     return {
         "cached_carpets": cached_carpets,
         "cached_rotations": total_rotations,
         "original_polygons": original_polygons,
+        "trapped_space_cache": trapped_space_entries,
     }
 
 
@@ -337,9 +358,15 @@ def calculate_trapped_space(
     """
     🔍 АНАЛИЗ ЗАПЕРНЫХ ЗОН: Вычисляет площадь пространства, заперного коврами.
     Заперное пространство = недоступно для будущих ковров из-за размещения текущих.
+    PERFORMANCE: Использует кэширование для ускорения.
     """
     if not placed_carpets:
         return 0
+
+    # PERFORMANCE: Проверяем кэш
+    cache_key = generate_layout_cache_key(placed_carpets)
+    if cache_key in _trapped_space_cache:
+        return _trapped_space_cache[cache_key]
 
     from shapely.geometry import box
     from shapely.ops import unary_union
@@ -396,6 +423,8 @@ def calculate_trapped_space(
             isolation_penalty = (distance_from_edges - 200) / 100
             trapped_area += poly.area * isolation_penalty * 0.1
 
+    # PERFORMANCE: Сохраняем результат в кэш
+    _trapped_space_cache[cache_key] = trapped_area
     return trapped_area
 
 
