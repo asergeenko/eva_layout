@@ -36,14 +36,14 @@ class Carpet:
 @dataclass(eq=False)
 class PlacedCarpet:
     polygon: Polygon
+    carpet_id: int
+    priority: int
     x_offset: float = 0
     y_offset: float = 0
     angle: int = 0
     filename: str = ""
     color: str = ""
     order_id: str = ""
-    carpet_id: int = 0  # Will be set properly by factory methods
-    priority: int = 1  # Include priority for consistency
 
     @classmethod
     def from_carpet(
@@ -98,11 +98,11 @@ class PlacedCarpet:
 @dataclass(eq=False)
 class UnplacedCarpet:
     polygon: Polygon
+    carpet_id: int
+    priority: int
     filename: str = ""
     color: str = ""
     order_id: str = ""
-    carpet_id: int = 0  # Will be set properly by factory methods
-    priority: int = 1  # Include priority for proper diagnostics
 
     @classmethod
     def from_carpet(cls, carpet: Carpet) -> "UnplacedCarpet":

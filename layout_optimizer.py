@@ -4,8 +4,7 @@
 __version__ = "1.5.0"
 
 import numpy as np
-import hashlib
-from typing import Dict, Tuple
+from typing import Dict
 
 from shapely.geometry import Polygon, Point
 import streamlit as st
@@ -22,32 +21,82 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 # Глобальные кэши для оптимизации поворотов ковров
-_rotation_cache: Dict[Carpet, Dict[int, Polygon]] = {}  # carpet_id -> {angle: rotated_polygon}
+_rotation_cache: Dict[
+    int, Dict[int, Polygon]
+] = {}  # carpet_id -> {angle: rotated_polygon}
+_original_polygons: Dict[int, Polygon] = {}  # carpet_id -> original_polygon
 
-def get_cached_rotation(carpet: Carpet, angle: int) -> Polygon:
-    """Получить кэшированный поворот полигона или вычислить новый."""
+
+def cache_original_polygons(carpets: list[Carpet]) -> None:
+    """Кэшировать оригинальные полигоны ДО любых трансформаций."""
+    logger.info(
+        f"🏁 Начинаем кэширование оригинальных полигонов для {len(carpets)} ковров"
+    )
+    for carpet in carpets:
+        carpet_id = carpet.carpet_id
+        if carpet_id not in _original_polygons:
+            # Создаем копию полигона, чтобы избежать проблем со ссылками
+            original_bounds = carpet.polygon.bounds
+            _original_polygons[carpet_id] = Polygon(carpet.polygon.exterior.coords)
+            logger.info(
+                f"💾 Сохранен оригинальный полигон для carpet={carpet}, filename={carpet.filename}, bounds={original_bounds}"
+            )
+        else:
+            logger.info(f"⚠️ Полигон для carpet={carpet} уже в кэше - пропускаем")
+
+    logger.info(
+        f"✅ Кэширование завершено, всего оригиналов в кэше: {len(_original_polygons)}"
+    )
+
+
+def get_original_polygon(carpet_id: int) -> Polygon | None:
+    if carpet_id in _original_polygons:
+        return _original_polygons[carpet_id]
+    return None
+
+
+def get_cached_rotation(
+    carpet: Carpet | PlacedCarpet | UnplacedCarpet, angle: int
+) -> Polygon:
+    """Получить кэшированный поворот полигона от ОРИГИНАЛЬНОЙ геометрии."""
+    # Проверяем, что у нас есть оригинальный полигон
+    carpet_id = carpet.carpet_id
+    if carpet_id not in _original_polygons:
+        # ОШИБКА: оригинальный полигон должен быть закэширован заранее!
+        logger.warning(f"❌ Оригинальный полигон для carpet={carpet} не найден в кэше!")
+        # Fallback: используем текущий полигон (может быть уже трансформированным)
+        _original_polygons[carpet_id] = Polygon(carpet.polygon.exterior.coords)
+
     if carpet not in _rotation_cache:
-        _rotation_cache[carpet] = {}
+        _rotation_cache[carpet_id] = {}
 
-    if angle not in _rotation_cache[carpet]:
-        # Вычисляем поворот от оригинального полигона ковра
-        rotated = rotate_polygon(carpet.polygon, angle) if angle != 0 else carpet.polygon
-        _rotation_cache[carpet][angle] = rotated
+    if angle not in _rotation_cache[carpet_id]:
+        # Вычисляем поворот от ОРИГИНАЛЬНОГО полигона
+        original_polygon = _original_polygons[carpet_id]
+        rotated = (
+            rotate_polygon(original_polygon, angle) if angle != 0 else original_polygon
+        )
+        _rotation_cache[carpet_id][angle] = rotated
 
-    return _rotation_cache[carpet][angle]
+    return _rotation_cache[carpet_id][angle]
+
 
 def clear_optimization_caches():
     """Очистить все кэши оптимизации."""
-    global _rotation_cache
+    global _rotation_cache, _original_polygons
     _rotation_cache.clear()
+    _original_polygons.clear()
+
 
 def get_cache_stats() -> Dict[str, int]:
     """Получить статистику использования кэшей."""
     total_rotations = sum(len(rotations) for rotations in _rotation_cache.values())
     cached_carpets = len(_rotation_cache)
+    original_polygons = len(_original_polygons)
     return {
-        'cached_carpets': cached_carpets,
-        'cached_rotations': total_rotations
+        "cached_carpets": cached_carpets,
+        "cached_rotations": total_rotations,
+        "original_polygons": original_polygons,
     }
 
 
@@ -61,6 +110,7 @@ __all__ = [
     "bin_packing_with_inventory",
     "calculate_usage_percent",
     "bin_packing",
+    "cache_original_polygons",
     "get_cached_rotation",
     "clear_optimization_caches",
     "get_cache_stats",
@@ -156,6 +206,7 @@ def apply_tetris_gravity(
         # Применяем улучшение если найдено
         if improvement_found and best_y < current_y - 3:  # Минимум 3мм улучшения
             y_offset_change = best_y - current_bounds[1]
+            # КРИТИЧЕСКИ ВАЖНО: создаем новый полигон, не изменяем исходный!
             carpet.polygon = translate_polygon(carpet.polygon, 0, y_offset_change)
             carpet.y_offset += y_offset_change
             movements_made += 1
@@ -458,7 +509,7 @@ def post_placement_optimize_aggressive(
         )
 
         # Восстанавливаем исходную форму ковра
-        original_polygon = rotate_polygon(current_carpet.polygon, -current_carpet.angle)
+        # original_polygon = rotate_polygon(current_carpet.polygon, -current_carpet.angle)
 
         # Получаем все остальные ковры как препятствия
         obstacles = [
@@ -473,11 +524,15 @@ def post_placement_optimize_aggressive(
 
         # АГРЕССИВНАЯ СТРАТЕГИЯ: Пробуем ВСЕ ориентации + ВСЕ позиции
         for test_angle in [0, 90, 180, 270]:
-            rotated_polygon = (
-                rotate_polygon(original_polygon, test_angle)
-                if test_angle != 0
-                else original_polygon
-            )
+            # rotated_polygon = (
+            #    rotate_polygon(original_polygon, test_angle)
+            #    if test_angle != 0
+            #    else original_polygon
+            # )
+            angle = test_angle - current_carpet.angle
+            if angle < 0:
+                angle += 360
+            rotated_polygon = get_cached_rotation(current_carpet, angle)
             rot_bounds = rotated_polygon.bounds
             rot_width = rot_bounds[2] - rot_bounds[0]
             rot_height = rot_bounds[3] - rot_bounds[1]
@@ -641,10 +696,14 @@ def post_placement_optimize(
                     continue
 
                 # Создаем тестовый ковер с новым углом
-                original_polygon = rotate_polygon(
-                    current_carpet.polygon, -current_carpet.angle
-                )  # Возвращаем к 0°
-                rotated_polygon = rotate_polygon(original_polygon, test_angle)
+                # original_polygon = rotate_polygon(
+                #    current_carpet.polygon, -current_carpet.angle
+                # )  # Возвращаем к 0°
+                # rotated_polygon = rotate_polygon(original_polygon, test_angle)
+                angle = test_angle - current_carpet.angle
+                if angle < 0:
+                    angle += 360
+                rotated_polygon = get_cached_rotation(current_carpet, angle)
 
                 # Пробуем разместить в той же позиции
                 bounds = rotated_polygon.bounds
@@ -772,7 +831,7 @@ def place_polygon_at_origin(polygon: Polygon) -> Polygon:
 
 
 def apply_placement_transform(
-    polygon: Polygon, x_offset: float, y_offset: float, rotation_angle: float
+    polygon: Polygon, x_offset: float, y_offset: float, rotation_angle: int
 ) -> Polygon:
     """Apply the same transformation sequence used in bin_packing.
 
@@ -937,8 +996,8 @@ def bin_packing_with_existing(
                             filename="test",
                             color="test",
                             order_id="test",
-                            carpet_id=0,
-                            priority=1,
+                            carpet_id=carpet.carpet_id,  # Используем реальный carpet_id вместо 0!
+                            priority=carpet.priority,
                         )
                     ]
                 )
@@ -1030,15 +1089,15 @@ def bin_packing_with_existing(
         if best_placement:
             placed.append(
                 PlacedCarpet(
-                    best_placement["polygon"],  # type: ignore
-                    best_placement["x_offset"],  # type: ignore
-                    best_placement["y_offset"],  # type: ignore
-                    best_placement["angle"],  # type: ignore
-                    carpet.filename,
-                    carpet.color,
-                    carpet.order_id,
-                    carpet.carpet_id,
-                    carpet.priority,
+                    polygon=best_placement["polygon"],  # type: ignore
+                    carpet_id=carpet.carpet_id,
+                    priority=carpet.priority,
+                    x_offset=best_placement["x_offset"],  # type: ignore
+                    y_offset=best_placement["y_offset"],  # type: ignore
+                    angle=best_placement["angle"],  # type: ignore
+                    filename=carpet.filename,
+                    color=carpet.color,
+                    order_id=carpet.order_id,
                 )
             )
 
@@ -1202,15 +1261,15 @@ def ultra_left_compaction(
         item = meta[i]
         new_placed.append(
             PlacedCarpet(
-                new_poly,
-                item.x_offset + dx_total,
-                item.y_offset + dy_total,
-                item.angle,
-                item.filename,
-                item.color,
-                item.order_id,
-                item.carpet_id,
-                item.priority,
+                polygon=new_poly,
+                carpet_id=item.carpet_id,
+                priority=item.priority,
+                x_offset=item.x_offset + dx_total,
+                y_offset=item.y_offset + dy_total,
+                angle=item.angle,
+                filename=item.filename,
+                color=item.color,
+                order_id=item.order_id,
             )
         )
 
@@ -1312,15 +1371,15 @@ def simple_compaction(
         item = meta[i]
         new_placed.append(
             PlacedCarpet(
-                new_poly,
-                item.x_offset + dx_total,
-                item.y_offset + dy_total,
-                item.angle,
-                item.filename,
-                item.color,
-                item.order_id,
-                item.carpet_id,
-                item.priority,
+                polygon=new_poly,
+                carpet_id=item.carpet_id,
+                priority=item.priority,
+                x_offset=item.x_offset + dx_total,
+                y_offset=item.y_offset + dy_total,
+                angle=item.angle,
+                filename=item.filename,
+                color=item.color,
+                order_id=item.order_id,
             )
         )
 
@@ -1414,15 +1473,15 @@ def fast_edge_snap(
 
         new_placed.append(
             PlacedCarpet(
-                new_poly,
-                new_x_off,
-                new_y_off,
-                item.angle,
-                item.filename,
-                item.color,
-                item.order_id,
-                item.carpet_id,
-                item.priority,
+                polygon=new_poly,
+                carpet_id=item.carpet_id,
+                priority=item.priority,
+                x_offset=new_x_off,
+                y_offset=new_y_off,
+                angle=item.angle,
+                filename=item.filename,
+                color=item.color,
+                order_id=item.order_id,
             )
         )
 
@@ -1530,19 +1589,22 @@ def bin_packing(
                 dy_to_target = best_y - rotated_bounds[1]
                 test_translated = translate_polygon(rotated, dx_to_target, dy_to_target)
 
-                all_test_placed = placed + [
-                    PlacedCarpet(
-                        polygon=test_translated,
-                        x_offset=dx_to_target,
-                        y_offset=dy_to_target,
-                        angle=angle,
-                        filename="test",
-                        color="test",
-                        order_id="test",
-                        carpet_id=0,
-                        priority=1,
-                    )
-                ]
+                all_test_placed = (
+                    placed
+                    + [
+                        PlacedCarpet(
+                            polygon=test_translated,
+                            carpet_id=carpet.carpet_id,  # Используем реальный carpet_id вместо 0!
+                            priority=carpet.priority,
+                            x_offset=dx_to_target,
+                            y_offset=dy_to_target,
+                            angle=angle,
+                            filename="test",
+                            color="test",
+                            order_id="test",
+                        )
+                    ]
+                )
 
                 # Find maximum height after this placement - THIS IS THE KEY TETRIS METRIC!
                 max_height_after = (
@@ -1631,15 +1693,15 @@ def bin_packing(
         if best_placement:
             placed.append(
                 PlacedCarpet(
-                    best_placement["polygon"],
-                    best_placement["x_offset"],
-                    best_placement["y_offset"],
-                    best_placement["angle"],
-                    carpet.filename,
-                    carpet.color,
-                    carpet.order_id,
-                    carpet.carpet_id,
-                    carpet.priority,
+                    polygon=best_placement["polygon"],
+                    carpet_id=carpet.carpet_id,
+                    priority=carpet.priority,
+                    x_offset=best_placement["x_offset"],
+                    y_offset=best_placement["y_offset"],
+                    angle=best_placement["angle"],
+                    filename=carpet.filename,
+                    color=carpet.color,
+                    order_id=carpet.order_id,
                 )
             )
 
@@ -1780,15 +1842,15 @@ def bin_packing(
                     if not collision:
                         placed.append(
                             PlacedCarpet(
-                                translated,
-                                x_offset,
-                                y_offset,
-                                0,
-                                carpet.filename,
-                                carpet.color,
-                                carpet.order_id,
-                                carpet.carpet_id,
-                                carpet.priority,
+                                polygon=translated,
+                                carpet_id=carpet.carpet_id,
+                                priority=carpet.priority,
+                                x_offset=x_offset,
+                                y_offset=y_offset,
+                                angle=0,
+                                filename=carpet.filename,
+                                color=carpet.color,
+                                order_id=carpet.order_id,
                             )
                         )
                         placed_successfully = True
@@ -1806,7 +1868,12 @@ def bin_packing(
                 st.warning(f"❌ Не удалось разместить полигон из {carpet.filename}")
             unplaced.append(
                 UnplacedCarpet(
-                    carpet.polygon, carpet.filename, carpet.color, carpet.order_id
+                    polygon=carpet.polygon,
+                    carpet_id=carpet.carpet_id,
+                    priority=carpet.priority,
+                    filename=carpet.filename,
+                    color=carpet.color,
+                    order_id=carpet.order_id,
                 )
             )
 
@@ -2014,14 +2081,14 @@ def move_carpet_down(
 
         return PlacedCarpet(
             polygon=new_polygon,
+            carpet_id=carpet.carpet_id,
+            priority=carpet.priority,
             x_offset=carpet.x_offset + dx_total,
             y_offset=carpet.y_offset + dy_total,
             angle=new_angle,
             filename=carpet.filename,
             color=carpet.color,
             order_id=carpet.order_id,
-            carpet_id=carpet.carpet_id,
-            priority=carpet.priority,
         )
 
     return carpet  # No significant improvement found
@@ -2151,14 +2218,14 @@ def move_carpet_left(
 
         return PlacedCarpet(
             polygon=new_polygon,
+            carpet_id=carpet.carpet_id,
+            priority=carpet.priority,
             x_offset=carpet.x_offset + dx_total,
             y_offset=carpet.y_offset + dy_total,
             angle=new_angle,
             filename=carpet.filename,
             color=carpet.color,
             order_id=carpet.order_id,
-            carpet_id=carpet.carpet_id,
-            priority=carpet.priority,
         )
 
     return carpet  # No significant improvement found
@@ -2261,14 +2328,14 @@ def move_carpet_down_aggressive(
 
         return PlacedCarpet(
             polygon=new_polygon,
+            carpet_id=carpet.carpet_id,
+            priority=carpet.priority,
             x_offset=carpet.x_offset + dx_total,
             y_offset=carpet.y_offset + dy_total,
             angle=new_angle,
             filename=carpet.filename,
             color=carpet.color,
             order_id=carpet.order_id,
-            carpet_id=carpet.carpet_id,
-            priority=carpet.priority,
         )
 
     return carpet
@@ -2369,14 +2436,14 @@ def move_carpet_left_aggressive(
 
         return PlacedCarpet(
             polygon=new_polygon,
+            carpet_id=carpet.carpet_id,
+            priority=carpet.priority,
             x_offset=carpet.x_offset + dx_total,
             y_offset=carpet.y_offset + dy_total,
             angle=new_angle,
             filename=carpet.filename,
             color=carpet.color,
             order_id=carpet.order_id,
-            carpet_id=carpet.carpet_id,
-            priority=carpet.priority,
         )
 
     return carpet
@@ -2444,14 +2511,14 @@ def move_carpet_right_to_edge(
 
         return PlacedCarpet(
             polygon=new_polygon,
+            carpet_id=carpet.carpet_id,
+            priority=carpet.priority,
             x_offset=carpet.x_offset + dx,
             y_offset=carpet.y_offset,
             angle=carpet.angle,
             filename=carpet.filename,
             color=carpet.color,
             order_id=carpet.order_id,
-            carpet_id=carpet.carpet_id,
-            priority=carpet.priority,
         )
 
     return carpet
@@ -3253,15 +3320,15 @@ def try_simple_placement(
                             # Create a simulated layout with this placement
                             test_placed_carpets = existing_placed + [
                                 PlacedCarpet(
-                                    positioned_polygon,
-                                    dx,
-                                    dy,
-                                    angle,
-                                    "temp.dxf",
-                                    "temp",
-                                    "temp",
-                                    0,
-                                    1,
+                                    polygon=positioned_polygon,
+                                    x_offset=dx,
+                                    y_offset=dy,
+                                    angle=angle,
+                                    filename=carpet.filename,
+                                    color=carpet.color,
+                                    order_id=carpet.order_id,
+                                    carpet_id=carpet.carpet_id,
+                                    priority=carpet.priority,
                                 )
                             ]
 
@@ -3314,15 +3381,15 @@ def try_simple_placement(
         actual_y_offset = final_bounds[1] - orig_bounds[1]
 
         return PlacedCarpet(
-            best_candidate["polygon"],
-            actual_x_offset,
-            actual_y_offset,
-            best_candidate["angle"],
-            carpet.filename,
-            carpet.color,
-            carpet.order_id,
-            carpet.carpet_id,
-            carpet.priority,
+            polygon=best_candidate["polygon"],
+            carpet_id=carpet.carpet_id,
+            priority=carpet.priority,
+            x_offset=actual_x_offset,
+            y_offset=actual_y_offset,
+            angle=best_candidate["angle"],
+            filename=carpet.filename,
+            color=carpet.color,
+            order_id=carpet.order_id,
         )
 
     return None  # No valid placement found
@@ -3352,6 +3419,9 @@ def bin_packing_with_inventory(
         )
 
     clear_optimization_caches()
+
+    # ВАЖНО: Кэшируем оригинальные полигоны ДО любых трансформаций
+    cache_original_polygons(carpets)
 
     placed_sheets: list[PlacedSheet] = []
     all_unplaced: list[UnplacedCarpet] = []
@@ -3534,7 +3604,12 @@ def bin_packing_with_inventory(
                             best_remaining = [
                                 remaining_carpet_map.get(
                                     UnplacedCarpet(
-                                        rt.polygon, rt.filename, rt.color, rt.order_id
+                                        polygon=rt.polygon,
+                                        carpet_id=rt.carpet_id,
+                                        priority=rt.priority,
+                                        filename=rt.filename,
+                                        color=rt.color,
+                                        order_id=rt.order_id,
                                     ),
                                     next(
                                         (
@@ -3559,7 +3634,12 @@ def bin_packing_with_inventory(
                                 for rt in remaining_unplaced
                                 if remaining_carpet_map.get(
                                     UnplacedCarpet(
-                                        rt.polygon, rt.filename, rt.color, rt.order_id
+                                        polygon=rt.polygon,
+                                        carpet_id=rt.carpet_id,
+                                        priority=rt.priority,
+                                        filename=rt.filename,
+                                        color=rt.color,
+                                        order_id=rt.order_id,
                                     ),
                                     next(
                                         (
@@ -3884,15 +3964,15 @@ def tighten_layout_with_obstacles(
 
         new_placed.append(
             PlacedCarpet(
-                new_poly,
-                new_x_off,
-                new_y_off,
-                item.angle,
-                item.filename,
-                item.color,
-                item.order_id,
-                item.carpet_id,
-                item.priority,
+                polygon=new_poly,
+                carpet_id=item.carpet_id,
+                priority=item.priority,
+                x_offset=new_x_off,
+                y_offset=new_y_off,
+                angle=item.angle,
+                filename=item.filename,
+                color=item.color,
+                order_id=item.order_id,
             )
         )
 
@@ -4069,15 +4149,15 @@ def tighten_layout(
 
         new_placed.append(
             PlacedCarpet(
-                new_poly,
-                new_x_off,
-                new_y_off,
-                item.angle,
-                item.filename,
-                item.color,
-                item.order_id,
-                item.carpet_id,
-                item.priority,
+                polygon=new_poly,
+                carpet_id=item.carpet_id,
+                priority=item.priority,
+                x_offset=new_x_off,
+                y_offset=new_y_off,
+                angle=item.angle,
+                filename=item.filename,
+                color=item.color,
+                order_id=item.order_id,
             )
         )
 
