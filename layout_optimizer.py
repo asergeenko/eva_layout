@@ -4,6 +4,8 @@
 __version__ = "1.5.0"
 
 import numpy as np
+import hashlib
+from typing import Dict, Tuple
 
 from shapely.geometry import Polygon, Point
 import streamlit as st
@@ -14,6 +16,41 @@ from geometry_utils import translate_polygon, rotate_polygon
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# КЭШИРОВАНИЕ ДЛЯ ОПТИМИЗАЦИИ ПРОИЗВОДИТЕЛЬНОСТИ
+# ============================================================================
+
+# Глобальные кэши для оптимизации поворотов ковров
+_rotation_cache: Dict[int, Dict[int, Polygon]] = {}  # carpet_id -> {angle: rotated_polygon}
+
+def get_cached_rotation(carpet: Carpet, angle: int) -> Polygon:
+    """Получить кэшированный поворот полигона или вычислить новый."""
+    carpet_id = carpet.carpet_id
+
+    if carpet_id not in _rotation_cache:
+        _rotation_cache[carpet_id] = {}
+
+    if angle not in _rotation_cache[carpet_id]:
+        # Вычисляем поворот от оригинального полигона ковра
+        rotated = rotate_polygon(carpet.polygon, angle) if angle != 0 else carpet.polygon
+        _rotation_cache[carpet_id][angle] = rotated
+
+    return _rotation_cache[carpet_id][angle]
+
+def clear_optimization_caches():
+    """Очистить все кэши оптимизации."""
+    global _rotation_cache
+    _rotation_cache.clear()
+
+def get_cache_stats() -> Dict[str, int]:
+    """Получить статистику использования кэшей."""
+    total_rotations = sum(len(rotations) for rotations in _rotation_cache.values())
+    cached_carpets = len(_rotation_cache)
+    return {
+        'cached_carpets': cached_carpets,
+        'cached_rotations': total_rotations
+    }
 
 
 logging.getLogger("ezdxf").setLevel(logging.ERROR)
@@ -26,6 +63,9 @@ __all__ = [
     "bin_packing_with_inventory",
     "calculate_usage_percent",
     "bin_packing",
+    "get_cached_rotation",
+    "clear_optimization_caches",
+    "get_cache_stats",
 ]
 
 
@@ -864,7 +904,8 @@ def bin_packing_with_existing(
         rotation_angles = [0, 90, 180, 270]
 
         for angle in rotation_angles:
-            rotated = rotate_polygon(polygon, angle) if angle != 0 else polygon
+            # ОПТИМИЗАЦИЯ: Используем кэш поворотов
+            rotated = get_cached_rotation(carpet, angle)
             rotated_bounds = rotated.bounds
             rotated_width = rotated_bounds[2] - rotated_bounds[0]
             rotated_height = rotated_bounds[3] - rotated_bounds[1]
@@ -1468,9 +1509,8 @@ def bin_packing(
         rotation_angles = [0, 90, 180, 270]
 
         for angle in rotation_angles:
-            rotated = (
-                rotate_polygon(carpet.polygon, angle) if angle != 0 else carpet.polygon
-            )
+            # ОПТИМИЗАЦИЯ: Используем кэш поворотов
+            rotated = get_cached_rotation(carpet, angle)
             rotated_bounds = rotated.bounds
             rotated_width = rotated_bounds[2] - rotated_bounds[0]
             rotated_height = rotated_bounds[3] - rotated_bounds[1]
@@ -1800,8 +1840,12 @@ def bin_packing(
 
     if verbose:
         usage_percent = calculate_usage_percent(placed, sheet_size)
+        cache_stats = get_cache_stats()
         st.info(
             f"🏁 Упаковка завершена: {len(placed)} размещено, {len(unplaced)} не размещено, использование: {usage_percent:.1f}%"
+        )
+        st.info(
+            f"📊 Кэш: {cache_stats['cached_carpets']} ковров, {cache_stats['cached_rotations']} поворотов в кэше"
         )
     return placed, unplaced
 
@@ -3165,10 +3209,8 @@ def try_simple_placement(
         # Try different rotations
         for angle in rotations:
             # Rotate polygon
-            if angle == 0:
-                rotated_polygon = carpet.polygon
-            else:
-                rotated_polygon = rotate_polygon(carpet.polygon, angle)
+            # ОПТИМИЗАЦИЯ: Используем кэш поворотов
+            rotated_polygon = get_cached_rotation(carpet, angle)
 
             bounds = rotated_polygon.bounds
             poly_width = bounds[2] - bounds[0]
