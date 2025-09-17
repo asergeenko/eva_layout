@@ -508,9 +508,6 @@ def post_placement_optimize_aggressive(
             f"🔄 Переразмещаем {current_carpet.filename} (блокирует {blocker_info['blocking_amount']/100:.0f} см²)"
         )
 
-        # Восстанавливаем исходную форму ковра
-        # original_polygon = rotate_polygon(current_carpet.polygon, -current_carpet.angle)
-
         # Получаем все остальные ковры как препятствия
         obstacles = [
             c.polygon for i, c in enumerate(optimized_carpets) if i != carpet_idx
@@ -524,11 +521,6 @@ def post_placement_optimize_aggressive(
 
         # АГРЕССИВНАЯ СТРАТЕГИЯ: Пробуем ВСЕ ориентации + ВСЕ позиции
         for test_angle in [0, 90, 180, 270]:
-            # rotated_polygon = (
-            #    rotate_polygon(original_polygon, test_angle)
-            #    if test_angle != 0
-            #    else original_polygon
-            # )
             angle = test_angle - current_carpet.angle
             if angle < 0:
                 angle += 360
@@ -554,14 +546,16 @@ def post_placement_optimize_aggressive(
                 test_positions.append((best_x, best_y))
 
             # Дополнительные стратегические позиции
-            step_x, step_y = max(50, rot_width // 4), max(50, rot_height // 4)
+            # ADAPTIVE: Умный шаг на основе размера ковра (50-150мм)
+            step_x = min(150, max(50, rot_width // 3))
+            step_y = min(150, max(50, rot_height // 3))
 
             for test_x in range(0, int(sheet_width_mm - rot_width), int(step_x)):
                 for test_y in range(0, int(sheet_height_mm - rot_height), int(step_y)):
                     test_positions.append((test_x, test_y))
-                    if len(test_positions) > 20:  # Ограничиваем количество тестов
+                    if len(test_positions) > 10:
                         break
-                if len(test_positions) > 20:
+                if len(test_positions) > 10:
                     break
 
             # Тестируем каждую позицию
