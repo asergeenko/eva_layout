@@ -4,11 +4,14 @@
 __version__ = "1.5.0"
 
 import numpy as np
-from typing import Dict
+from typing import Dict, List, Tuple
 
 from shapely.geometry import Polygon, Point
 import streamlit as st
 import logging
+
+# Spatial indexing for performance
+from shapely.strtree import STRtree
 
 from carpet import Carpet, PlacedCarpet, UnplacedCarpet, PlacedSheet
 from geometry_utils import translate_polygon, rotate_polygon
@@ -28,6 +31,50 @@ _original_polygons: Dict[int, Polygon] = {}  # carpet_id -> original_polygon
 
 # Кэш для calculate_trapped_space - PERFORMANCE BOOST
 _trapped_space_cache: Dict[str, float] = {}  # layout_hash -> trapped_area
+
+
+class SpatialIndex:
+    """Пространственный индекс на основе Shapely STRtree для быстрой проверки коллизий."""
+
+    def __init__(self):
+        self.carpets: List[PlacedCarpet] = []
+        self.tree: STRtree = None
+
+    def clear(self):
+        """Очистить индекс."""
+        self.carpets = []
+        self.tree = None
+
+    def build_from_carpets(self, placed_carpets: List[PlacedCarpet]):
+        """Построить STRtree из списка размещенных ковров."""
+        self.carpets = placed_carpets.copy()
+        if self.carpets:
+            polygons = [carpet.polygon for carpet in self.carpets]
+            self.tree = STRtree(polygons)
+        else:
+            self.tree = None
+
+    def get_potential_collisions(self, test_polygon: Polygon, exclude_carpet_id: int = None) -> List[PlacedCarpet]:
+        """Получить список ковров, потенциально пересекающихся с тестовым полигоном."""
+        if not self.tree or not self.carpets:
+            return []
+
+        # Быстрый поиск кандидатов через STRtree
+        potential_polygons = list(self.tree.query(test_polygon))
+
+        # Находим соответствующие ковры
+        potential_carpets = []
+        for carpet in self.carpets:
+            if exclude_carpet_id and carpet.carpet_id == exclude_carpet_id:
+                continue
+            if carpet.polygon in potential_polygons:
+                potential_carpets.append(carpet)
+
+        return potential_carpets
+
+
+# Глобальный пространственный индекс
+_spatial_index = SpatialIndex()
 
 
 def cache_original_polygons(carpets: list[Carpet]) -> None:
@@ -101,10 +148,11 @@ def generate_layout_cache_key(placed_carpets: list[PlacedCarpet]) -> str:
 
 def clear_optimization_caches():
     """Очистить все кэши оптимизации."""
-    global _rotation_cache, _original_polygons, _trapped_space_cache
+    global _rotation_cache, _original_polygons, _trapped_space_cache, _spatial_index
     _rotation_cache.clear()
     _original_polygons.clear()
     _trapped_space_cache.clear()
+    _spatial_index.clear()
 
 
 def get_cache_stats() -> Dict[str, int]:
@@ -496,6 +544,9 @@ def post_placement_optimize_aggressive(
     if len(placed_carpets) < 2:
         return placed_carpets
 
+    # PERFORMANCE: Строим пространственный индекс для быстрой проверки коллизий
+    build_spatial_index_from_carpets(placed_carpets)
+
     # Анализируем проблемы
     blocking_analysis = analyze_placement_blocking(
         placed_carpets, sheet_width_mm, sheet_height_mm
@@ -594,14 +645,13 @@ def post_placement_optimize_aggressive(
                     rotated_polygon, test_x - rot_bounds[0], test_y - rot_bounds[1]
                 )
 
-                # Проверяем коллизии
-                collision = False
-                for obstacle in obstacles:
-                    if test_polygon.intersects(obstacle):
-                        intersection = test_polygon.intersection(obstacle)
-                        if intersection.area > 100:
-                            collision = True
-                            break
+                # PERFORMANCE: Используем пространственный индекс для проверки коллизий
+                collision = check_collision_with_placed_carpets(
+                    test_polygon,
+                    [c for i, c in enumerate(optimized_carpets) if i != carpet_idx],
+                    exclude_carpet_id=current_carpet.carpet_id,
+                    min_gap=10.0  # 10мм минимальный зазор
+                )
 
                 if not collision:
                     # Тестируем заперность с новым размещением
@@ -672,6 +722,9 @@ def post_placement_optimize(
     """
     if len(placed_carpets) < 2:
         return placed_carpets
+
+    # PERFORMANCE: Строим пространственный индекс для быстрой проверки коллизий
+    build_spatial_index_from_carpets(placed_carpets)
 
     # Анализируем текущую блокировку
     blocking_analysis = analyze_placement_blocking(
@@ -746,16 +799,13 @@ def post_placement_optimize(
                     rotated_polygon, test_x - bounds[0], test_y - bounds[1]
                 )
 
-                # Проверяем коллизии с другими коврами
-                collision = False
-                for j, other_carpet in enumerate(optimized_carpets):
-                    if j == carpet_idx:
-                        continue
-                    if test_polygon.intersects(other_carpet.polygon):
-                        intersection = test_polygon.intersection(other_carpet.polygon)
-                        if intersection.area > 100:
-                            collision = True
-                            break
+                # PERFORMANCE: Проверяем коллизии с пространственным индексом
+                collision = check_collision_with_placed_carpets(
+                    test_polygon,
+                    [c for i, c in enumerate(optimized_carpets) if i != carpet_idx],
+                    exclude_carpet_id=current_carpet.carpet_id,
+                    min_gap=10.0
+                )
 
                 if not collision:
                     # Тестируем заперность с новым поворотом
@@ -926,6 +976,36 @@ def check_collision_fast(
 def check_collision(polygon1: Polygon, polygon2: Polygon, min_gap: float = 0.1) -> bool:
     """Check if two polygons collide using TRUE GEOMETRIC distance with speed optimization."""
     return check_collision_fast(polygon1, polygon2, min_gap)
+
+
+def check_collision_with_placed_carpets(
+    test_polygon: Polygon,
+    placed_carpets: List[PlacedCarpet],
+    exclude_carpet_id: int = None,
+    min_gap: float = 0.1
+) -> bool:
+    """
+    PERFORMANCE: Проверка коллизий с использованием STRtree пространственного индекса.
+    Возвращает True если есть коллизия, False если все чисто.
+    """
+    if not placed_carpets:
+        return False
+
+    # Используем STRtree для быстрого поиска потенциальных коллизий
+    potential_carpets = _spatial_index.get_potential_collisions(test_polygon, exclude_carpet_id)
+
+    # Точная проверка только с потенциально пересекающимися коврами
+    for carpet in potential_carpets:
+        if check_collision_fast(test_polygon, carpet.polygon, min_gap):
+            return True
+
+    return False
+
+
+def build_spatial_index_from_carpets(placed_carpets: List[PlacedCarpet]):
+    """Построить STRtree пространственный индекс из размещенных ковров."""
+    global _spatial_index
+    _spatial_index.build_from_carpets(placed_carpets)
 
 
 # @profile
@@ -3284,9 +3364,7 @@ def try_simple_placement(
 
     # Try multiple approaches for maximum space utilization
     placement_strategies = [
-        # Strategy 1: Coarse grid first
-        {"step": 10, "rotations": [0, 90, 180, 270]},  # 10mm steps
-        # Strategy 2: Fine grid with all rotations
+        # Fine grid with all rotations
         {"step": 5, "rotations": [0, 90, 180, 270]},  # 5mm steps
     ]
 
@@ -3296,7 +3374,6 @@ def try_simple_placement(
 
         # Try different rotations
         for angle in rotations:
-            # Rotate polygon
             # ОПТИМИЗАЦИЯ: Используем кэш поворотов
             rotated_polygon = get_cached_rotation(carpet, angle)
 
