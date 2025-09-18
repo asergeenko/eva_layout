@@ -34,11 +34,13 @@ _rotation_cache: dict[
 ] = {}  # carpet_id -> {angle: rotated_polygon}
 _original_polygons: dict[int, Polygon] = {}  # carpet_id -> original_polygon
 
+
 def clear_optimization_caches():
     """Очистить все кэши оптимизации."""
     global _rotation_cache, _original_polygons, _trapped_space_cache, _spatial_index
     _rotation_cache.clear()
     _original_polygons.clear()
+
 
 def cache_original_polygons(carpets: list[Carpet]) -> None:
     """Кэшировать оригинальные полигоны ДО любых трансформаций."""
@@ -500,10 +502,10 @@ def post_placement_optimize_aggressive(
 
         # АГРЕССИВНАЯ СТРАТЕГИЯ: Пробуем ВСЕ ориентации + ВСЕ позиции
         for test_angle in [0, 90, 180, 270]:
-            #angle = test_angle - current_carpet.angle
-            #if angle < 0:
+            # angle = test_angle - current_carpet.angle
+            # if angle < 0:
             #    angle += 360
-            #rotated_polygon = get_cached_rotation(current_carpet, angle)
+            # rotated_polygon = get_cached_rotation(current_carpet, angle)
             rotated_polygon = (
                 rotate_polygon(original_polygon, test_angle)
                 if test_angle != 0
@@ -678,10 +680,10 @@ def post_placement_optimize(
                 rotated_polygon = rotate_polygon(original_polygon, test_angle)
 
                 # Создаем тестовый ковер с новым углом
-                #angle = test_angle - current_carpet.angle
-                #if angle < 0:
+                # angle = test_angle - current_carpet.angle
+                # if angle < 0:
                 #    angle += 360
-                #rotated_polygon = get_cached_rotation(current_carpet, angle)
+                # rotated_polygon = get_cached_rotation(current_carpet, angle)
 
                 # Пробуем разместить в той же позиции
                 bounds = rotated_polygon.bounds
@@ -1904,7 +1906,8 @@ def bin_packing(
     if total_carpet_count > 100:
         skipped_count = total_carpet_count - processed_count
         logger.info(
-            f"📊 Обработано {processed_count} из {total_carpet_count} ковров, пропущено {skipped_count}, размещено {len(placed)}, в unplaced {len(unplaced)}")
+            f"📊 Обработано {processed_count} из {total_carpet_count} ковров, пропущено {skipped_count}, размещено {len(placed)}, в unplaced {len(unplaced)}"
+        )
 
     # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
     if len(placed) <= 20:  # Optimize most reasonable sets
@@ -2251,7 +2254,6 @@ def move_carpet_left(
             filename=carpet.filename,
             color=carpet.color,
             order_id=carpet.order_id,
-
         )
 
     return carpet  # No significant improvement found
@@ -3287,7 +3289,10 @@ def try_simple_placement(
 
     # Try multiple approaches for maximum space utilization
     placement_strategies = [
-        {"step": 10, "rotations": [0, 90, 180, 270]},  # Увеличен шаг с 5 до 10мм для ускорения
+        {
+            "step": 10,
+            "rotations": [0, 90, 180, 270],
+        },  # Увеличен шаг с 5 до 10мм для ускорения
     ]
 
     # Cache rotation results to avoid repeated calculations
@@ -4198,7 +4203,8 @@ def place_priority2(
                 for new in additional_placed:
                     # Use any() for early exit
                     overlapping_polys = [
-                        existing for existing in existing_polygons
+                        existing
+                        for existing in existing_polygons
                         if new.polygon.intersects(existing)
                     ]
 
@@ -4206,7 +4212,7 @@ def place_priority2(
                         # Check actual intersection area only for intersecting polygons
                         for existing in overlapping_polys:
                             inter = new.polygon.intersection(existing)
-                            if hasattr(inter, 'area') and inter.area > 1:
+                            if hasattr(inter, "area") and inter.area > 1:
                                 has_overlap = True
                                 logger.warning(
                                     f"Перекрытие при размещении приоритета 2: {inter.area:.1f} мм² на листе #{layout.sheet_number}"
