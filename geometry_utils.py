@@ -1,7 +1,7 @@
 from shapely import Polygon, affinity
 
 
-def rotate_polygon(polygon: Polygon, angle: float) -> Polygon:
+def rotate_polygon(polygon: Polygon, angle: int) -> Polygon:
     """Rotate a polygon by a given angle (in degrees) around its centroid.
 
     Using centroid rotation for better stability and predictable results.

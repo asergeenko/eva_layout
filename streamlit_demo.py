@@ -832,7 +832,7 @@ if st.button("🚀 Оптимизировать раскрой"):
 
             # Use display_name if available (for manual files with copies), otherwise use file.name
             display_name = getattr(file, "display_name", file.name)
-            status_text.text(f"Парсим файл {idx + 1}/{len(dxf_files)}: {display_name}")
+            status_text.text(f"Загрузка полигонов из файла {idx + 1}/{len(dxf_files)}: {display_name}")
 
             file.seek(0)
             file_bytes = BytesIO(file.read())
