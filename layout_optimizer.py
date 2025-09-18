@@ -28,6 +28,71 @@ __all__ = [
     "bin_packing",
 ]
 
+# Глобальные кэши для оптимизации поворотов ковров
+_rotation_cache: dict[
+    int, dict[int, Polygon]
+] = {}  # carpet_id -> {angle: rotated_polygon}
+_original_polygons: dict[int, Polygon] = {}  # carpet_id -> original_polygon
+
+def clear_optimization_caches():
+    """Очистить все кэши оптимизации."""
+    global _rotation_cache, _original_polygons, _trapped_space_cache, _spatial_index
+    _rotation_cache.clear()
+    _original_polygons.clear()
+
+def cache_original_polygons(carpets: list[Carpet]) -> None:
+    """Кэшировать оригинальные полигоны ДО любых трансформаций."""
+    logger.info(
+        f"🏁 Начинаем кэширование оригинальных полигонов для {len(carpets)} ковров"
+    )
+    for carpet in carpets:
+        carpet_id = carpet.carpet_id
+        if carpet_id not in _original_polygons:
+            # Создаем копию полигона, чтобы избежать проблем со ссылками
+            original_bounds = carpet.polygon.bounds
+            _original_polygons[carpet_id] = Polygon(carpet.polygon.exterior.coords)
+            logger.info(
+                f"💾 Сохранен оригинальный полигон для carpet={carpet}, filename={carpet.filename}, bounds={original_bounds}"
+            )
+        else:
+            logger.info(f"⚠️ Полигон для carpet={carpet} уже в кэше - пропускаем")
+
+    logger.info(
+        f"✅ Кэширование завершено, всего оригиналов в кэше: {len(_original_polygons)}"
+    )
+
+
+def get_original_polygon(carpet_id: int) -> Polygon | None:
+    if carpet_id in _original_polygons:
+        return _original_polygons[carpet_id]
+    return None
+
+
+def get_cached_rotation(
+    carpet: Carpet | PlacedCarpet | UnplacedCarpet, angle: int
+) -> Polygon:
+    """Получить кэшированный поворот полигона от ОРИГИНАЛЬНОЙ геометрии."""
+    # Проверяем, что у нас есть оригинальный полигон
+    carpet_id = carpet.carpet_id
+    if carpet_id not in _original_polygons:
+        # ОШИБКА: оригинальный полигон должен быть закэширован заранее!
+        logger.warning(f"❌ Оригинальный полигон для carpet={carpet} не найден в кэше!")
+        # Fallback: используем текущий полигон (может быть уже трансформированным)
+        _original_polygons[carpet_id] = Polygon(carpet.polygon.exterior.coords)
+
+    if carpet not in _rotation_cache:
+        _rotation_cache[carpet_id] = {}
+
+    if angle not in _rotation_cache[carpet_id]:
+        # Вычисляем поворот от ОРИГИНАЛЬНОГО полигона
+        original_polygon = _original_polygons[carpet_id]
+        rotated = (
+            rotate_polygon(original_polygon, angle) if angle != 0 else original_polygon
+        )
+        _rotation_cache[carpet_id][angle] = rotated
+
+    return _rotation_cache[carpet_id][angle]
+
 
 def apply_tetris_gravity(
     placed_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float
@@ -419,9 +484,6 @@ def post_placement_optimize_aggressive(
             f"🔄 Переразмещаем {current_carpet.filename} (блокирует {blocker_info['blocking_amount']/100:.0f} см²)"
         )
 
-        # Восстанавливаем исходную форму ковра
-        original_polygon = rotate_polygon(current_carpet.polygon, -current_carpet.angle)
-
         # Получаем все остальные ковры как препятствия
         obstacles = [
             c.polygon for i, c in enumerate(optimized_carpets) if i != carpet_idx
@@ -435,11 +497,11 @@ def post_placement_optimize_aggressive(
 
         # АГРЕССИВНАЯ СТРАТЕГИЯ: Пробуем ВСЕ ориентации + ВСЕ позиции
         for test_angle in [0, 90, 180, 270]:
-            rotated_polygon = (
-                rotate_polygon(original_polygon, test_angle)
-                if test_angle != 0
-                else original_polygon
-            )
+            angle = test_angle - current_carpet.angle
+            if angle < 0:
+                angle += 360
+            rotated_polygon = get_cached_rotation(current_carpet, angle)
+
             rot_bounds = rotated_polygon.bounds
             rot_width = rot_bounds[2] - rot_bounds[0]
             rot_height = rot_bounds[3] - rot_bounds[1]
@@ -603,10 +665,10 @@ def post_placement_optimize(
                     continue
 
                 # Создаем тестовый ковер с новым углом
-                original_polygon = rotate_polygon(
-                    current_carpet.polygon, -current_carpet.angle
-                )  # Возвращаем к 0°
-                rotated_polygon = rotate_polygon(original_polygon, test_angle)
+                angle = test_angle - current_carpet.angle
+                if angle < 0:
+                    angle += 360
+                rotated_polygon = get_cached_rotation(current_carpet, angle)
 
                 # Пробуем разместить в той же позиции
                 bounds = rotated_polygon.bounds
@@ -734,7 +796,7 @@ def place_polygon_at_origin(polygon: Polygon) -> Polygon:
 
 
 def apply_placement_transform(
-    polygon: Polygon, x_offset: float, y_offset: float, rotation_angle: float
+    polygon: Polygon, x_offset: float, y_offset: float, rotation_angle: int
 ) -> Polygon:
     """Apply the same transformation sequence used in bin_packing.
 
@@ -864,7 +926,7 @@ def bin_packing_with_existing(
         rotation_angles = [0, 90, 180, 270]
 
         for angle in rotation_angles:
-            rotated = rotate_polygon(polygon, angle) if angle != 0 else polygon
+            rotated = get_cached_rotation(carpet, angle)
             rotated_bounds = rotated.bounds
             rotated_width = rotated_bounds[2] - rotated_bounds[0]
             rotated_height = rotated_bounds[3] - rotated_bounds[1]
@@ -892,14 +954,14 @@ def bin_packing_with_existing(
                     + [
                         PlacedCarpet(
                             polygon=test_translated,
+                            carpet_id=carpet.carpet_id,  # Используем реальный carpet_id вместо 0!
+                            priority=carpet.priority,
                             x_offset=dx_to_target,
                             y_offset=dy_to_target,
                             angle=angle,
-                            filename="test",
-                            color="test",
-                            order_id="test",
-                            carpet_id=0,
-                            priority=1,
+                            filename=carpet.filename,
+                            color=carpet.color,
+                            order_id=carpet.order_id,
                         )
                     ]
                 )
@@ -991,15 +1053,15 @@ def bin_packing_with_existing(
         if best_placement:
             placed.append(
                 PlacedCarpet(
-                    best_placement["polygon"],  # type: ignore
-                    best_placement["x_offset"],  # type: ignore
-                    best_placement["y_offset"],  # type: ignore
-                    best_placement["angle"],  # type: ignore
-                    carpet.filename,
-                    carpet.color,
-                    carpet.order_id,
-                    carpet.carpet_id,
-                    carpet.priority,
+                    polygon=best_placement["polygon"],
+                    carpet_id=carpet.carpet_id,
+                    priority=carpet.priority,
+                    x_offset=best_placement["x_offset"],
+                    y_offset=best_placement["y_offset"],
+                    angle=best_placement["angle"],
+                    filename=carpet.filename,
+                    color=carpet.color,
+                    order_id=carpet.order_id,
                 )
             )
 
@@ -1163,15 +1225,15 @@ def ultra_left_compaction(
         item = meta[i]
         new_placed.append(
             PlacedCarpet(
-                new_poly,
-                item.x_offset + dx_total,
-                item.y_offset + dy_total,
-                item.angle,
-                item.filename,
-                item.color,
-                item.order_id,
-                item.carpet_id,
-                item.priority,
+                polygon=new_poly,
+                carpet_id=item.carpet_id,
+                priority=item.priority,
+                x_offset=item.x_offset + dx_total,
+                y_offset=item.y_offset + dy_total,
+                angle=item.angle,
+                filename=item.filename,
+                color=item.color,
+                order_id=item.order_id,
             )
         )
 
@@ -1273,15 +1335,15 @@ def simple_compaction(
         item = meta[i]
         new_placed.append(
             PlacedCarpet(
-                new_poly,
-                item.x_offset + dx_total,
-                item.y_offset + dy_total,
-                item.angle,
-                item.filename,
-                item.color,
-                item.order_id,
-                item.carpet_id,
-                item.priority,
+                polygon=new_poly,
+                carpet_id=item.carpet_id,
+                priority=item.priority,
+                x_offset=item.x_offset + dx_total,
+                y_offset=item.y_offset + dy_total,
+                angle=item.angle,
+                filename=item.filename,
+                color=item.color,
+                order_id=item.order_id,
             )
         )
 
@@ -1375,15 +1437,15 @@ def fast_edge_snap(
 
         new_placed.append(
             PlacedCarpet(
-                new_poly,
-                new_x_off,
-                new_y_off,
-                item.angle,
-                item.filename,
-                item.color,
-                item.order_id,
-                item.carpet_id,
-                item.priority,
+                polygon=new_poly,
+                carpet_id=item.carpet_id,
+                priority=item.priority,
+                x_offset=new_x_off,
+                y_offset=new_y_off,
+                angle=item.angle,
+                filename=item.filename,
+                color=item.color,
+                order_id=item.order_id,
             )
         )
 
@@ -1445,7 +1507,42 @@ def bin_packing(
     if verbose:
         st.info("✨ Сортировка полигонов по площади (сначала крупные)")
 
+    # PERFORMANCE: Adaptive processing - гарантированная обработка всех ковров
+    def should_process_carpet(index, total_count, placed_count):
+        """
+        Определить, нужно ли обрабатывать ковер с данным индексом.
+        ИСПРАВЛЕНО: Обеспечивает обработку всех ковров, избегая "потери" остатков.
+        """
+        # КРИТИЧНО: Для малых наборов обрабатываем ВСЕ
+        if total_count <= 70:
+            return True
+
+        # Адаптивная логика для больших наборов
+        fill_ratio = placed_count / max(1, total_count * 0.1)
+
+        if fill_ratio < 0.3:  # Почти пустой лист - больше кандидатов
+            target_count = min(70, total_count)
+        else:  # Почти полон - меньше кандидатов
+            target_count = min(50, total_count)
+
+        # ИСПРАВЛЕНИЕ: Безопасный расчет шага
+        if target_count >= total_count:
+            return True  # Если цель >= общего количества - берем все
+
+        step = max(1, total_count // target_count)
+
+        # Проверяем, попадает ли текущий индекс в равномерную выборку
+        return index % step == 0
+
+    total_carpet_count = len(sorted_polygons)
+    processed_count = 0
+
     for i, carpet in enumerate(sorted_polygons):
+        # PERFORMANCE: Быстро пропускаем ненужные ковры
+        if not should_process_carpet(i, total_carpet_count, len(placed)):
+            continue
+
+        processed_count += 1
         placed_successfully = False
 
         # Check if polygon is too large for the sheet
@@ -1468,9 +1565,7 @@ def bin_packing(
         rotation_angles = [0, 90, 180, 270]
 
         for angle in rotation_angles:
-            rotated = (
-                rotate_polygon(carpet.polygon, angle) if angle != 0 else carpet.polygon
-            )
+            rotated = get_cached_rotation(carpet, angle)
             rotated_bounds = rotated.bounds
             rotated_width = rotated_bounds[2] - rotated_bounds[0]
             rotated_height = rotated_bounds[3] - rotated_bounds[1]
@@ -1498,11 +1593,11 @@ def bin_packing(
                         x_offset=dx_to_target,
                         y_offset=dy_to_target,
                         angle=angle,
-                        filename="test",
-                        color="test",
-                        order_id="test",
-                        carpet_id=0,
-                        priority=1,
+                        filename=carpet.filename,
+                        color=carpet.color,
+                        order_id=carpet.order_id,
+                        carpet_id=carpet.carpet_id,
+                        priority=carpet.priority,
                     )
                 ]
 
@@ -1593,15 +1688,15 @@ def bin_packing(
         if best_placement:
             placed.append(
                 PlacedCarpet(
-                    best_placement["polygon"],
-                    best_placement["x_offset"],
-                    best_placement["y_offset"],
-                    best_placement["angle"],
-                    carpet.filename,
-                    carpet.color,
-                    carpet.order_id,
-                    carpet.carpet_id,
-                    carpet.priority,
+                    polygon=best_placement["polygon"],  # type: ignore
+                    carpet_id=carpet.carpet_id,
+                    priority=carpet.priority,
+                    x_offset=best_placement["x_offset"],  # type: ignore
+                    y_offset=best_placement["y_offset"],  # type: ignore
+                    angle=best_placement["angle"],  # type: ignore
+                    filename=carpet.filename,
+                    color=carpet.color,
+                    order_id=carpet.order_id,
                 )
             )
 
@@ -1742,15 +1837,15 @@ def bin_packing(
                     if not collision:
                         placed.append(
                             PlacedCarpet(
-                                translated,
-                                x_offset,
-                                y_offset,
-                                0,
-                                carpet.filename,
-                                carpet.color,
-                                carpet.order_id,
-                                carpet.carpet_id,
-                                carpet.priority,
+                                polygon=translated,
+                                carpet_id=carpet.carpet_id,
+                                priority=carpet.priority,
+                                x_offset=x_offset,
+                                y_offset=y_offset,
+                                angle=0,
+                                filename=carpet.filename,
+                                color=carpet.color,
+                                order_id=carpet.order_id,
                             )
                         )
                         placed_successfully = True
@@ -1768,9 +1863,35 @@ def bin_packing(
                 st.warning(f"❌ Не удалось разместить полигон из {carpet.filename}")
             unplaced.append(
                 UnplacedCarpet(
-                    carpet.polygon, carpet.filename, carpet.color, carpet.order_id
+                    polygon=carpet.polygon,
+                    carpet_id=carpet.carpet_id,
+                    priority=carpet.priority,
+                    filename=carpet.filename,
+                    color=carpet.color,
+                    order_id=carpet.order_id,
                 )
             )
+    # КРИТИЧНО: Добавляем пропущенные ковры в unplaced чтобы они не терялись
+    if processed_count < total_carpet_count:
+        for i, carpet in enumerate(sorted_polygons):
+            if not should_process_carpet(i, total_carpet_count, len(placed)):
+                # Этот ковер был пропущен - добавляем в unplaced
+                unplaced.append(
+                    UnplacedCarpet(
+                        polygon=carpet.polygon,
+                        carpet_id=carpet.carpet_id,
+                        priority=carpet.priority,
+                        filename=carpet.filename,
+                        color=carpet.color,
+                        order_id=carpet.order_id,
+                    )
+                )
+
+    # PERFORMANCE: Логируем статистику обработки
+    if total_carpet_count > 100:
+        skipped_count = total_carpet_count - processed_count
+        logger.info(
+            f"📊 Обработано {processed_count} из {total_carpet_count} ковров, пропущено {skipped_count}, размещено {len(placed)}, в unplaced {len(unplaced)}")
 
     # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
     if len(placed) <= 20:  # Optimize most reasonable sets
@@ -1972,14 +2093,14 @@ def move_carpet_down(
 
         return PlacedCarpet(
             polygon=new_polygon,
+            carpet_id=carpet.carpet_id,
+            priority=carpet.priority,
             x_offset=carpet.x_offset + dx_total,
             y_offset=carpet.y_offset + dy_total,
             angle=new_angle,
             filename=carpet.filename,
             color=carpet.color,
             order_id=carpet.order_id,
-            carpet_id=carpet.carpet_id,
-            priority=carpet.priority,
         )
 
     return carpet  # No significant improvement found
@@ -2109,14 +2230,15 @@ def move_carpet_left(
 
         return PlacedCarpet(
             polygon=new_polygon,
+            carpet_id=carpet.carpet_id,
+            priority=carpet.priority,
             x_offset=carpet.x_offset + dx_total,
             y_offset=carpet.y_offset + dy_total,
             angle=new_angle,
             filename=carpet.filename,
             color=carpet.color,
             order_id=carpet.order_id,
-            carpet_id=carpet.carpet_id,
-            priority=carpet.priority,
+
         )
 
     return carpet  # No significant improvement found
@@ -2219,14 +2341,14 @@ def move_carpet_down_aggressive(
 
         return PlacedCarpet(
             polygon=new_polygon,
+            carpet_id=carpet.carpet_id,
+            priority=carpet.priority,
             x_offset=carpet.x_offset + dx_total,
             y_offset=carpet.y_offset + dy_total,
             angle=new_angle,
             filename=carpet.filename,
             color=carpet.color,
             order_id=carpet.order_id,
-            carpet_id=carpet.carpet_id,
-            priority=carpet.priority,
         )
 
     return carpet
@@ -3152,9 +3274,6 @@ def try_simple_placement(
 
     # Try multiple approaches for maximum space utilization
     placement_strategies = [
-        # Strategy 1: Coarse grid first
-        {"step": 10, "rotations": [0, 90, 180, 270]},  # 10mm steps
-        # Strategy 2: Fine grid with all rotations
         {"step": 5, "rotations": [0, 90, 180, 270]},  # 5mm steps
     ]
 
@@ -3165,10 +3284,7 @@ def try_simple_placement(
         # Try different rotations
         for angle in rotations:
             # Rotate polygon
-            if angle == 0:
-                rotated_polygon = carpet.polygon
-            else:
-                rotated_polygon = rotate_polygon(carpet.polygon, angle)
+            rotated_polygon = get_cached_rotation(carpet, angle)
 
             bounds = rotated_polygon.bounds
             poly_width = bounds[2] - bounds[0]
@@ -3213,15 +3329,15 @@ def try_simple_placement(
                             # Create a simulated layout with this placement
                             test_placed_carpets = existing_placed + [
                                 PlacedCarpet(
-                                    positioned_polygon,
-                                    dx,
-                                    dy,
-                                    angle,
-                                    "temp.dxf",
-                                    "temp",
-                                    "temp",
-                                    0,
-                                    1,
+                                    polygon=positioned_polygon,
+                                    x_offset=dx,
+                                    y_offset=dy,
+                                    angle=angle,
+                                    filename=carpet.filename,
+                                    color=carpet.color,
+                                    order_id=carpet.order_id,
+                                    carpet_id=carpet.carpet_id,
+                                    priority=carpet.priority,
                                 )
                             ]
 
@@ -3274,15 +3390,15 @@ def try_simple_placement(
         actual_y_offset = final_bounds[1] - orig_bounds[1]
 
         return PlacedCarpet(
-            best_candidate["polygon"],
-            actual_x_offset,
-            actual_y_offset,
-            best_candidate["angle"],
-            carpet.filename,
-            carpet.color,
-            carpet.order_id,
-            carpet.carpet_id,
-            carpet.priority,
+            polygon=best_candidate["polygon"],
+            carpet_id=carpet.carpet_id,
+            priority=carpet.priority,
+            x_offset=actual_x_offset,
+            y_offset=actual_y_offset,
+            angle=best_candidate["angle"],
+            filename=carpet.filename,
+            color=carpet.color,
+            order_id=carpet.order_id,
         )
 
     return None  # No valid placement found
@@ -3310,6 +3426,11 @@ def bin_packing_with_inventory(
             5,
             "Подготовка ковров к раскладке...",
         )
+
+    clear_optimization_caches()
+
+    # ВАЖНО: Кэшируем оригинальные полигоны ДО любых трансформаций
+    cache_original_polygons(carpets)
 
     placed_sheets: list[PlacedSheet] = []
     all_unplaced: list[UnplacedCarpet] = []
@@ -3492,7 +3613,12 @@ def bin_packing_with_inventory(
                             best_remaining = [
                                 remaining_carpet_map.get(
                                     UnplacedCarpet(
-                                        rt.polygon, rt.filename, rt.color, rt.order_id
+                                        polygon=rt.polygon,
+                                        carpet_id=rt.carpet_id,
+                                        priority=rt.priority,
+                                        filename=rt.filename,
+                                        color=rt.color,
+                                        order_id=rt.order_id,
                                     ),
                                     next(
                                         (
@@ -3517,7 +3643,12 @@ def bin_packing_with_inventory(
                                 for rt in remaining_unplaced
                                 if remaining_carpet_map.get(
                                     UnplacedCarpet(
-                                        rt.polygon, rt.filename, rt.color, rt.order_id
+                                        polygon=rt.polygon,
+                                        carpet_id=rt.carpet_id,
+                                        priority=rt.priority,
+                                        filename=rt.filename,
+                                        color=rt.color,
+                                        order_id=rt.order_id,
                                     ),
                                     next(
                                         (
@@ -3842,15 +3973,15 @@ def tighten_layout_with_obstacles(
 
         new_placed.append(
             PlacedCarpet(
-                new_poly,
-                new_x_off,
-                new_y_off,
-                item.angle,
-                item.filename,
-                item.color,
-                item.order_id,
-                item.carpet_id,
-                item.priority,
+                polygon=new_poly,
+                carpet_id=item.carpet_id,
+                priority=item.priority,
+                x_offset=new_x_off,
+                y_offset=new_y_off,
+                angle=item.angle,
+                filename=item.filename,
+                color=item.color,
+                order_id=item.order_id,
             )
         )
 
@@ -4027,15 +4158,15 @@ def tighten_layout(
 
         new_placed.append(
             PlacedCarpet(
-                new_poly,
-                new_x_off,
-                new_y_off,
-                item.angle,
-                item.filename,
-                item.color,
-                item.order_id,
-                item.carpet_id,
-                item.priority,
+                polygon=new_poly,
+                carpet_id=item.carpet_id,
+                priority=item.priority,
+                x_offset=new_x_off,
+                y_offset=new_y_off,
+                angle=item.angle,
+                filename=item.filename,
+                color=item.color,
+                order_id=item.order_id,
             )
         )
 
