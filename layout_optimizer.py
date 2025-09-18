@@ -484,6 +484,9 @@ def post_placement_optimize_aggressive(
             f"🔄 Переразмещаем {current_carpet.filename} (блокирует {blocker_info['blocking_amount']/100:.0f} см²)"
         )
 
+        # Восстанавливаем исходную форму ковра
+        original_polygon = rotate_polygon(current_carpet.polygon, -current_carpet.angle)
+
         # Получаем все остальные ковры как препятствия
         obstacles = [
             c.polygon for i, c in enumerate(optimized_carpets) if i != carpet_idx
@@ -497,10 +500,15 @@ def post_placement_optimize_aggressive(
 
         # АГРЕССИВНАЯ СТРАТЕГИЯ: Пробуем ВСЕ ориентации + ВСЕ позиции
         for test_angle in [0, 90, 180, 270]:
-            angle = test_angle - current_carpet.angle
-            if angle < 0:
-                angle += 360
-            rotated_polygon = get_cached_rotation(current_carpet, angle)
+            #angle = test_angle - current_carpet.angle
+            #if angle < 0:
+            #    angle += 360
+            #rotated_polygon = get_cached_rotation(current_carpet, angle)
+            rotated_polygon = (
+                rotate_polygon(original_polygon, test_angle)
+                if test_angle != 0
+                else original_polygon
+            )
 
             rot_bounds = rotated_polygon.bounds
             rot_width = rot_bounds[2] - rot_bounds[0]
@@ -664,11 +672,16 @@ def post_placement_optimize(
                 if test_angle == current_carpet.angle:
                     continue
 
+                original_polygon = rotate_polygon(
+                    current_carpet.polygon, -current_carpet.angle
+                )  # Возвращаем к 0°
+                rotated_polygon = rotate_polygon(original_polygon, test_angle)
+
                 # Создаем тестовый ковер с новым углом
-                angle = test_angle - current_carpet.angle
-                if angle < 0:
-                    angle += 360
-                rotated_polygon = get_cached_rotation(current_carpet, angle)
+                #angle = test_angle - current_carpet.angle
+                #if angle < 0:
+                #    angle += 360
+                #rotated_polygon = get_cached_rotation(current_carpet, angle)
 
                 # Пробуем разместить в той же позиции
                 bounds = rotated_polygon.bounds
