@@ -277,46 +277,40 @@ if excel_file is not None:
             # Display orders for selection
             st.subheader("📝 Выберите заказы для раскроя")
 
-            # Add search/filter options
-            col_filter1, col_filter2, col_filter3 = st.columns([1, 1, 1])
+            # Add dropdown filter options
+            # Get unique values from all orders for dynamic filtering
+            all_marketplaces = sorted(list(set(order.get("marketplace", "") for order in all_orders if order.get("marketplace", ""))))
+            all_border_colors = sorted(list(set(str(order.get("border_color", "")) for order in all_orders if order.get("border_color", ""))))
+
+            col_filter1, col_filter2 = st.columns([1, 1])
             with col_filter1:
-                search_marketplace = st.text_input(
-                    "🔍 Поиск по маркетплейсу:",
-                    placeholder="Введите маркетлейс",
-                    key="search_marketplace",
+                selected_marketplace = st.selectbox(
+                    "🏪 Маркетплейс:",
+                    options=["Все"] + all_marketplaces,
+                    index=0,
+                    key="filter_marketplace",
                 )
             with col_filter2:
-                search_article = st.text_input(
-                    "🔍 Поиск по артикулу:",
-                    placeholder="Введите артикул",
-                    key="search_article",
-                )
-            with col_filter3:
-                search_product = st.text_input(
-                    "🔍 Поиск по товару:",
-                    placeholder="Введите название",
-                    key="search_product",
+                selected_border_color = st.selectbox(
+                    "🎨 Кант цвет:",
+                    options=["Все"] + all_border_colors,
+                    index=0,
+                    key="filter_border_color",
                 )
 
-            # Filter orders based on search
+            # Filter orders based on dropdown selections
             filtered_orders = all_orders
-            if search_marketplace:
+            if selected_marketplace != "Все":
                 filtered_orders = [
                     order
                     for order in filtered_orders
-                    if search_marketplace.lower() in order["marketplace"].lower()
+                    if order.get("marketplace", "") == selected_marketplace
                 ]
-            if search_article:
+            if selected_border_color != "Все":
                 filtered_orders = [
                     order
                     for order in filtered_orders
-                    if search_article.lower() in order["article"].lower()
-                ]
-            if search_product:
-                filtered_orders = [
-                    order
-                    for order in filtered_orders
-                    if search_product.lower() in order["product"].lower()
+                    if str(order.get("border_color", "")) == selected_border_color
                 ]
 
             if filtered_orders != all_orders:
