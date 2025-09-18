@@ -3287,8 +3287,11 @@ def try_simple_placement(
 
     # Try multiple approaches for maximum space utilization
     placement_strategies = [
-        {"step": 5, "rotations": [0, 90, 180, 270]},  # 5mm steps
+        {"step": 10, "rotations": [0, 90, 180, 270]},  # Увеличен шаг с 5 до 10мм для ускорения
     ]
+
+    # Cache rotation results to avoid repeated calculations
+    rotation_cache = {}
 
     for strategy in placement_strategies:
         step: int = strategy["step"]
@@ -3296,8 +3299,10 @@ def try_simple_placement(
 
         # Try different rotations
         for angle in rotations:
-            # Rotate polygon
-            rotated_polygon = get_cached_rotation(carpet, angle)
+            # Use cached rotation
+            if angle not in rotation_cache:
+                rotation_cache[angle] = get_cached_rotation(carpet, angle)
+            rotated_polygon = rotation_cache[angle]
 
             bounds = rotated_polygon.bounds
             poly_width = bounds[2] - bounds[0]
@@ -3338,81 +3343,23 @@ def try_simple_placement(
                                     break
 
                         if not has_collision:
-                            # Found a valid position - now evaluate its tetris quality
-                            # Create a simulated layout with this placement
-                            test_placed_carpets = existing_placed + [
-                                PlacedCarpet(
-                                    polygon=positioned_polygon,
-                                    x_offset=dx,
-                                    y_offset=dy,
-                                    angle=angle,
-                                    filename=carpet.filename,
-                                    color=carpet.color,
-                                    order_id=carpet.order_id,
-                                    carpet_id=carpet.carpet_id,
-                                    priority=carpet.priority,
-                                )
-                            ]
+                            # For Priority 2, take first valid position for speed
+                            # Calculate correct offsets from original position
+                            original_bounds = carpet.polygon.bounds
+                            final_x_offset = dx + (original_bounds[0] - bounds[0])
+                            final_y_offset = dy + (original_bounds[1] - bounds[1])
 
-                            # Calculate tetris quality bonus for this position
-                            tetris_bonus = calculate_tetris_quality_bonus(
-                                positioned_polygon,
-                                test_placed_carpets,
-                                sheet_width_mm,
-                                sheet_height_mm,
+                            return PlacedCarpet(
+                                polygon=positioned_polygon,
+                                x_offset=final_x_offset,
+                                y_offset=final_y_offset,
+                                angle=angle,
+                                filename=carpet.filename,
+                                color=carpet.color,
+                                order_id=carpet.order_id,
+                                carpet_id=carpet.carpet_id,
+                                priority=carpet.priority,
                             )
-
-                            # Calculate position score (prefer bottom-left)
-                            position_score = (
-                                y * 1000 + x
-                            )  # Y priority like main algorithm
-
-                            # Total score (lower is better)
-                            total_score = position_score - tetris_bonus
-
-                            # Store this candidate
-                            candidates.append(
-                                {
-                                    "polygon": positioned_polygon,
-                                    "angle": angle,
-                                    "dx": dx,
-                                    "dy": dy,
-                                    "score": total_score,
-                                    "tetris_bonus": tetris_bonus,
-                                    "position": (x, y),
-                                }
-                            )
-
-                            # Limit candidates to avoid performance issues
-                            if len(candidates) > 2000:
-                                break
-
-                if len(candidates) > 2000:
-                    break
-            if len(candidates) > 2000:
-                break
-
-    # After trying all positions, find the best candidate by tetris quality
-    if candidates:
-        best_candidate = min(candidates, key=lambda c: c["score"])
-
-        # Calculate correct offsets from original position
-        orig_bounds = carpet.polygon.bounds
-        final_bounds = best_candidate["polygon"].bounds
-        actual_x_offset = final_bounds[0] - orig_bounds[0]
-        actual_y_offset = final_bounds[1] - orig_bounds[1]
-
-        return PlacedCarpet(
-            polygon=best_candidate["polygon"],
-            carpet_id=carpet.carpet_id,
-            priority=carpet.priority,
-            x_offset=actual_x_offset,
-            y_offset=actual_y_offset,
-            angle=best_candidate["angle"],
-            filename=carpet.filename,
-            color=carpet.color,
-            order_id=carpet.order_id,
-        )
 
     return None  # No valid placement found
 
@@ -4244,13 +4191,22 @@ def place_priority2(
                     logger.info(f"  ❌ Ковер {carpet.filename} не размещен")
 
             if additional_placed:
-                # Strict overlap check to ensure no significant overlaps
+                # Optimized overlap check - check only once per new item
                 has_overlap = False
+                existing_polygons = [p.polygon for p in layout.placed_polygons]
+
                 for new in additional_placed:
-                    for existing in layout.placed_polygons:
-                        if new.polygon.intersects(existing.polygon):
-                            inter = new.polygon.intersection(existing.polygon)
-                            if inter.area > 1:  # Tolerate tiny floating-point overlaps
+                    # Use any() for early exit
+                    overlapping_polys = [
+                        existing for existing in existing_polygons
+                        if new.polygon.intersects(existing)
+                    ]
+
+                    if overlapping_polys:
+                        # Check actual intersection area only for intersecting polygons
+                        for existing in overlapping_polys:
+                            inter = new.polygon.intersection(existing)
+                            if hasattr(inter, 'area') and inter.area > 1:
                                 has_overlap = True
                                 logger.warning(
                                     f"Перекрытие при размещении приоритета 2: {inter.area:.1f} мм² на листе #{layout.sheet_number}"
