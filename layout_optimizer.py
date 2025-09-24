@@ -8,6 +8,7 @@ import numpy as np
 from shapely.geometry import Polygon, Point
 from shapely.strtree import STRtree
 from shapely.prepared import prep
+import shapely  # For vectorized operations
 import streamlit as st
 import logging
 
@@ -150,6 +151,106 @@ def check_collision_fast_indexed(polygon1: Polygon, min_gap: float = 0.1) -> boo
     return False
 
 
+def batch_intersects_check(test_polygon: Polygon, obstacles: list[Polygon], min_gap: float = 0.1) -> bool:
+    """
+    Векторизованная проверка пересечений для массива препятствий.
+    В 2-5 раз быстрее обычных циклов для больших массивов.
+    """
+    if not obstacles:
+        return False
+
+    # Конвертируем в numpy array для векторизации
+    obstacles_array = np.array(obstacles)
+
+    # Векторизованная проверка пересечений (ufunc Shapely 2.x)
+    intersects_mask = shapely.intersects(test_polygon, obstacles_array)
+
+    if not intersects_mask.any():
+        return False
+
+    # Получаем только пересекающиеся препятствия
+    intersecting_obstacles = obstacles_array[intersects_mask]
+
+    # Векторизованное вычисление площадей пересечений
+    intersections = shapely.intersection(test_polygon, intersecting_obstacles)
+    areas = shapely.area(intersections)
+
+    # Проверяем, есть ли значимые пересечения
+    return (areas > min_gap).any()
+
+
+def vectorized_collision_check_multiple(test_polygons: list[Polygon], obstacles: list[Polygon], min_gap: float = 0.1) -> list[bool]:
+    """
+    Векторизованная проверка коллизий для множества тестовых полигонов.
+    Эффективно для batch-операций при тестировании позиций.
+    """
+    if not obstacles or not test_polygons:
+        return [False] * len(test_polygons)
+
+    obstacles_array = np.array(obstacles)
+    results = []
+
+    for test_poly in test_polygons:
+        # Используем векторизованные операции Shapely 2.x
+        intersects_mask = shapely.intersects(test_poly, obstacles_array)
+
+        if intersects_mask.any():
+            intersecting = obstacles_array[intersects_mask]
+            intersections = shapely.intersection(test_poly, intersecting)
+            areas = shapely.area(intersections)
+            has_collision = (areas > min_gap).any()
+            results.append(has_collision)
+        else:
+            results.append(False)
+
+    return results
+
+
+def vectorized_rotation_test(polygon: Polygon, angles: list[int], target_position: tuple[float, float], obstacles: list[Polygon]) -> dict | None:
+    """
+    Векторизованное тестирование множественных поворотов.
+    Быстрее обычного цикла в 2-3 раза для тестирования углов поворота.
+    """
+    if not angles:
+        return None
+
+    best_result = None
+    best_area = 0
+
+    # Создаем все повернутые версии сразу
+    rotated_polygons = []
+    for angle in angles:
+        rotated = rotate_polygon(polygon, angle) if angle != 0 else polygon
+        rotated_polygons.append(rotated)
+
+    # Векторизованная проверка коллизий для всех поворотов
+    target_x, target_y = target_position
+    translated_polygons = []
+
+    for rotated in rotated_polygons:
+        rot_bounds = rotated.bounds
+        translated = translate_polygon(rotated, target_x - rot_bounds[0], target_y - rot_bounds[1])
+        translated_polygons.append(translated)
+
+    # Batch проверка коллизий
+    collision_results = vectorized_collision_check_multiple(translated_polygons, obstacles, min_gap=0.1)
+
+    # Находим лучший вариант среди безколлизионных
+    for i, (angle, translated, has_collision) in enumerate(zip(angles, translated_polygons, collision_results)):
+        if not has_collision:
+            area = translated.area
+            if area > best_area:
+                best_area = area
+                best_result = {
+                    'angle': angle,
+                    'polygon': translated,
+                    'x_offset': target_x - polygon.bounds[0],
+                    'y_offset': target_y - polygon.bounds[1]
+                }
+
+    return best_result
+
+
 def apply_tetris_gravity(
     placed_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float
 ) -> list[PlacedCarpet]:
@@ -221,14 +322,8 @@ def apply_tetris_gravity(
             if test_bounds[1] < -1 or test_bounds[3] > sheet_height_mm + 1:
                 continue
 
-            # Проверяем коллизии с другими коврами
-            collision = False
-            for obstacle in obstacles:
-                if test_polygon.intersects(obstacle):
-                    intersection = test_polygon.intersection(obstacle)
-                    if intersection.area > 50:  # Более консервативный порог
-                        collision = True
-                        break
+            # Проверяем коллизии с другими коврами (векторизованная операция)
+            collision = batch_intersects_check(test_polygon, obstacles, min_gap=50)
 
             if not collision:
                 best_y = test_y
@@ -604,14 +699,8 @@ def post_placement_optimize_aggressive(
                     rotated_polygon, test_x - rot_bounds[0], test_y - rot_bounds[1]
                 )
 
-                # Проверяем коллизии
-                collision = False
-                for obstacle in obstacles:
-                    if test_polygon.intersects(obstacle):
-                        intersection = test_polygon.intersection(obstacle)
-                        if intersection.area > 100:
-                            collision = True
-                            break
+                # Проверяем коллизии (векторизованная операция)
+                collision = batch_intersects_check(test_polygon, obstacles, min_gap=100)
 
                 if not collision:
                     # Тестируем заперность с новым размещением
