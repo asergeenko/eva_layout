@@ -42,16 +42,18 @@ _original_polygons: dict[int, Polygon] = {}  # carpet_id -> original_polygon
 _collision_index: STRtree | None = None
 _indexed_obstacles: list[Polygon] = []
 _prepared_cache: dict[int, object] = {}  # polygon_id -> prepared geometry
+_bounds_cache: dict[str, tuple[float, float, float, float]] = {}  # Simple bounds cache
 
 
 def clear_optimization_caches():
     """Очистить все кэши оптимизации."""
-    global _rotation_cache, _original_polygons, _collision_index, _indexed_obstacles, _prepared_cache
+    global _rotation_cache, _original_polygons, _collision_index, _indexed_obstacles, _prepared_cache, _bounds_cache
     _rotation_cache.clear()
     _original_polygons.clear()
     _collision_index = None
     _indexed_obstacles.clear()
     _prepared_cache.clear()
+    _bounds_cache.clear()
 
 
 def cache_original_polygons(carpets: list[Carpet]) -> None:
@@ -106,6 +108,15 @@ def get_cached_rotation(
         _rotation_cache[carpet_id][angle] = rotated
 
     return _rotation_cache[carpet_id][angle]
+
+
+def get_bounds_fast(polygon: Polygon) -> tuple[float, float, float, float]:
+    """Получить bounds с простым кешированием для ускорения."""
+    # Используем id объекта как ключ - быстрее hash
+    poly_key = str(id(polygon))
+    if poly_key not in _bounds_cache:
+        _bounds_cache[poly_key] = polygon.bounds
+    return _bounds_cache[poly_key]
 
 
 def update_collision_index(obstacles: list[Polygon]) -> None:
