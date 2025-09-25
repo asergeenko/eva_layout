@@ -2992,8 +2992,8 @@ def find_enhanced_contour_following_position(
                     ):
                         candidates.append((test_x, test_y))
 
-    # Strategy 2: Sheet edges with very fine step
-    fine_step = 0.05
+    # Strategy 2: Sheet edges with optimized step
+    fine_step = 0.5  # Увеличиваем с 0.05 до 0.5 для ускорения
     for x in np.arange(0, sheet_width - poly_width + fine_step, fine_step):
         candidates.append((x, 0))  # Bottom edge
         if sheet_height - poly_height > 0:
