@@ -253,11 +253,13 @@ def vectorized_rotation_test(polygon: Polygon, angles: list[int], target_positio
             area = translated.area
             if area > best_area:
                 best_area = area
+                # Use cached bounds for performance
+                cached_bounds = get_bounds_fast(polygon)
                 best_result = {
                     'angle': angle,
                     'polygon': translated,
-                    'x_offset': target_x - polygon.bounds[0],
-                    'y_offset': target_y - polygon.bounds[1]
+                    'x_offset': target_x - cached_bounds[0],
+                    'y_offset': target_y - cached_bounds[1]
                 }
 
     return best_result
