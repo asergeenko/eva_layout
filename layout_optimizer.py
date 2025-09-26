@@ -2916,8 +2916,8 @@ def find_ultra_tight_position(
 
     candidates = []
 
-    # Grid search with adaptive limits
-    max_candidates = 1000 if small_polygon else 500
+    # Grid search with adaptive limits (reduced for performance)
+    max_candidates = 800 if small_polygon else 400
 
     for x in np.arange(0, sheet_width - poly_width + 1, step_size):
         for y in np.arange(0, sheet_height - poly_height + 1, step_size):
