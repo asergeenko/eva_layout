@@ -3963,7 +3963,7 @@ def tighten_layout(
     sheet_size=None,
     min_gap: float = 0.05,  # ULTRA-tight gap for maximum density
     step: float = 0.5,  # Finer step for better precision
-    max_passes: int = 5,  # More passes for better optimization
+    max_passes: int = 4,  # Reduced passes for better performance
 ) -> list[PlacedCarpet]:
     """
     Жадный сдвиг (greedy push): для каждого полигона пробуем сдвинуть максимально
