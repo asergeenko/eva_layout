@@ -2728,7 +2728,7 @@ def find_super_dense_position(
 
     # Adaptive step: smaller for small polygons, larger for big ones
     if polygon_area < 5000:  # Small carpet
-        step = 0.5
+        step = 1.0  # Увеличили с 0.5 для ускорения
     elif polygon_area < 20000:  # Medium carpet
         step = 1.0
     else:  # Large carpet
