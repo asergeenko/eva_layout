@@ -539,9 +539,9 @@ def post_placement_optimize_aggressive(
             for test_x in range(0, int(sheet_width_mm - rot_width), int(step_x)):
                 for test_y in range(0, int(sheet_height_mm - rot_height), int(step_y)):
                     test_positions.append((test_x, test_y))
-                    if len(test_positions) > 20:  # Ограничиваем количество тестов
+                    if len(test_positions) > 15:  # Уменьшили лимит для ускорения (было 20)
                         break
-                if len(test_positions) > 20:
+                if len(test_positions) > 15:
                     break
 
             # Тестируем каждую позицию
