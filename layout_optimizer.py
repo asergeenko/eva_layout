@@ -4,6 +4,7 @@
 __version__ = "1.5.0"
 
 import numpy as np
+import time
 
 from shapely.geometry import Polygon, Point
 import streamlit as st
