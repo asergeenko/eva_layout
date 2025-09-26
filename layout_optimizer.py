@@ -1476,6 +1476,9 @@ def bin_packing(
 ) -> tuple[list[PlacedCarpet], list[UnplacedCarpet]]:
     """Optimize placement of complex polygons on a sheet with ultra-dense/polygonal/improved algorithms."""
 
+    # Performance timing (no algorithm changes)
+    start_time = time.time()
+
     # Convert sheet size from cm to mm to match DXF polygon units
     sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
 
@@ -1938,8 +1941,9 @@ def bin_packing(
 
     if verbose:
         usage_percent = calculate_usage_percent(placed, sheet_size)
+        elapsed_time = time.time() - start_time
         st.info(
-            f"🏁 Упаковка завершена: {len(placed)} размещено, {len(unplaced)} не размещено, использование: {usage_percent:.1f}%"
+            f"🏁 Упаковка завершена: {len(placed)} размещено, {len(unplaced)} не размещено, использование: {usage_percent:.1f}%, время: {elapsed_time:.1f}с"
         )
     return placed, unplaced
 
