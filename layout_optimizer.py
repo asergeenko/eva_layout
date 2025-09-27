@@ -855,9 +855,13 @@ def check_collision_fast(
         return True
 
     try:
-        # CRITICAL FIX: Always check intersection first - this catches overlapping polygons
+        # CRITICAL FIX: Check intersection and area
         if polygon1.intersects(polygon2):
-            return True
+            intersection = polygon1.intersection(polygon2)
+            if hasattr(intersection, 'area') and intersection.area > 0.01:  # Более строгий порог
+                # DEBUG: Логируем обнаруженные коллизии
+                # logger.warning(f"🔍 КОЛЛИЗИЯ ОБНАРУЖЕНА: площадь пересечения {intersection.area:.3f} мм²")
+                return True
 
         # SPEED OPTIMIZATION: Only use bbox pre-filter for distant objects
         bounds1 = polygon1.bounds
@@ -869,7 +873,7 @@ def check_collision_fast(
         bbox_min_distance = (dx * dx + dy * dy) ** 0.5
 
         # SAFE EARLY EXIT: Only skip geometric check if bounding boxes are clearly far apart
-        if bbox_min_distance > min_gap + 50:  # Conservative 50mm safety margin
+        if bbox_min_distance > 50:  # Только если точно далеко
             return False
 
         # ALWAYS do accurate geometric distance check for close/potentially colliding objects
@@ -1913,35 +1917,49 @@ def bin_packing(
             f"📊 Обработано {processed_count} из {total_carpet_count} ковров, пропущено {skipped_count}, размещено {len(placed)}, в unplaced {len(unplaced)}"
         )
 
-    # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
-    if len(placed) <= 20:  # Optimize most reasonable sets
-        # Ultra-aggressive left compaction to squeeze everything left
-        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.4)
+    # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density - ВРЕМЕННО ОТКЛЮЧЕНО
+    # if len(placed) <= 20:  # Optimize most reasonable sets
+        # Ultra-aggressive left compaction to squeeze everything left - ВРЕМЕННО ОТКЛЮЧЕНО
+        # placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.4)
 
-        # Simple compaction with aggressive left push
-        placed = simple_compaction(placed, sheet_size)
+        # Simple compaction with aggressive left push - ВРЕМЕННО ОТКЛЮЧЕНО
+        # placed = simple_compaction(placed, sheet_size)
 
-        # Additional edge snapping for maximum left compaction
-        placed = fast_edge_snap(placed, sheet_size)
+        # Additional edge snapping for maximum left compaction - ВРЕМЕННО ОТКЛЮЧЕНО
+        # placed = fast_edge_snap(placed, sheet_size)
 
-        # Final ultra-left compaction
-        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.5)
+        # Final ultra-left compaction - ВРЕМЕННО ОТКЛЮЧЕНО
+        # placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.5)
 
-        # Light tightening to clean up
-        placed = tighten_layout(placed, sheet_size, min_gap=0.5, step=2.0, max_passes=1)
-    elif len(placed) <= 35:  # For larger sets, still do aggressive compaction
-        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.6)
-        placed = simple_compaction(placed, sheet_size)
-        placed = fast_edge_snap(placed, sheet_size)
+        # Light tightening to clean up - ВРЕМЕННО ОТКЛЮЧЕНО
+        # placed = tighten_layout(placed, sheet_size, min_gap=0.5, step=2.0, max_passes=1)
+    elif len(placed) <= 35:  # For larger sets, still do aggressive compaction - ВРЕМЕННО ОТКЛЮЧЕНО
+        # placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.6)
+        # placed = simple_compaction(placed, sheet_size)
+        # placed = fast_edge_snap(placed, sheet_size)
+        pass
     # No optimization for very large sets
 
-    # POST-OPTIMIZATION: Gravity compaction - move carpets down to maximize free space at top
-    if placed:
-        placed = apply_gravity_optimization(placed, sheet_width_mm, sheet_height_mm)
+    # POST-OPTIMIZATION: Gravity compaction - ВРЕМЕННО ОТКЛЮЧЕНО для отладки пересечений
+    # if placed:
+    #     placed = apply_gravity_optimization(placed, sheet_width_mm, sheet_height_mm)
+
+    # КРИТИЧЕСКАЯ ПРОВЕРКА: убеждаемся что нет пересечений
+    intersections_found = False
+    for i, carpet1 in enumerate(placed):
+        for j, carpet2 in enumerate(placed):
+            if i < j:  # Проверяем каждую пару только один раз
+                if carpet1.polygon.intersects(carpet2.polygon):
+                    intersection = carpet1.polygon.intersection(carpet2.polygon)
+                    if hasattr(intersection, 'area') and intersection.area > 0.01:  # Более 0.01 мм²
+                        logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Обнаружено пересечение между {carpet1.filename} и {carpet2.filename}, площадь: {intersection.area:.3f} мм²")
+                        intersections_found = True
 
     if verbose:
         usage_percent = calculate_usage_percent(placed, sheet_size)
         elapsed_time = time.time() - start_time
+        if intersections_found:
+            logger.error("🚨 ВНИМАНИЕ: Обнаружены пересечения ковров!")
         st.info(
             f"🏁 Упаковка завершена: {len(placed)} размещено, {len(unplaced)} не размещено, использование: {usage_percent:.1f}%, время: {elapsed_time:.1f}с"
         )
@@ -2871,7 +2889,7 @@ def find_enhanced_contour_following_position(
         # Collision check
         collision = False
         for obstacle in obstacles:
-            if check_collision(test_polygon, obstacle, min_gap=0.05):
+            if check_collision(test_polygon, obstacle, min_gap=1.0):  # Увеличили для предотвращения пересечений
                 collision = True
                 break
 
@@ -3656,7 +3674,7 @@ def bin_packing_with_inventory(
                         for new_poly in new_polygons:
                             for existing_poly in all_existing_polygons:
                                 if check_collision(
-                                    new_poly, existing_poly, min_gap=0.05
+                                    new_poly, existing_poly, min_gap=1.0  # Увеличили для предотвращения пересечений
                                 ):
                                     logger.error(
                                         f"КРИТИЧЕСКАЯ ОШИБКА: Обнаружено перекрытие при агрессивном дозаполнении листа #{layout.sheet_number}"
