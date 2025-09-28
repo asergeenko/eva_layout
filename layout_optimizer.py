@@ -1922,8 +1922,8 @@ def bin_packing(
         # Ultra-aggressive left compaction to squeeze everything left - ТЕСТИРУЕМ
         placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.4)
 
-        # Simple compaction with aggressive left push - ВРЕМЕННО ОТКЛЮЧЕНО
-        # placed = simple_compaction(placed, sheet_size)
+        # Simple compaction with aggressive left push - ТЕСТИРУЕМ
+        placed = simple_compaction(placed, sheet_size)
 
         # Additional edge snapping for maximum left compaction - ВРЕМЕННО ОТКЛЮЧЕНО
         # placed = fast_edge_snap(placed, sheet_size)
