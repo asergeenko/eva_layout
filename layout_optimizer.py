@@ -1290,7 +1290,7 @@ def simple_compaction(
     n = len(current_polys)
 
     moved_any = True
-    max_passes = 2  # Very limited passes
+    max_passes = 1  # Reduced from 2 for speed
 
     for pass_num in range(max_passes):
         if not moved_any:
@@ -1300,7 +1300,7 @@ def simple_compaction(
         # Simple down movement
         for i in range(n):
             poly = current_polys[i]
-            step = 2.0  # Large steps for speed
+            step = 3.0  # Increased from 2.0 for speed
 
             while True:
                 test = translate_polygon(poly, 0, -step)
@@ -2632,7 +2632,7 @@ def find_contour_following_position(
     candidates.sort(key=lambda pos: (pos[1], pos[0]))
 
     # Increase limit for small polygons to improve placement success
-    max_candidates = 1500 if is_small else 1000
+    max_candidates = 1000 if is_small else 600  # Reduced for speed
     candidates = candidates[: min(max_candidates, len(candidates))]
 
     # Test each position using true geometric collision detection
@@ -2758,7 +2758,7 @@ def find_super_dense_position(
             occupied_regions.append(obs_bounds)
 
     # Search in expanding rings from bottom-left
-    max_candidates = 2000  # Reasonable limit
+    max_candidates = 1200  # Reduced from 2000 for speed
     tested = 0
 
     for ring in range(20):  # Maximum 20 rings
@@ -2920,16 +2920,16 @@ def find_ultra_tight_position(
     small_polygon = polygon_size < 10000  # 100mm x 100mm
 
     if small_polygon:
-        step_size = 0.5  # Very fine grid for small polygons
+        step_size = 1.0  # Increased from 0.5 for speed
     elif len(obstacles) <= 5:
-        step_size = 1.0
+        step_size = 2.0  # Increased from 1.0 for speed
     else:
-        step_size = 2.0
+        step_size = 3.0  # Increased from 2.0 for speed
 
     candidates = []
 
     # Grid search with adaptive limits (reduced for performance)
-    max_candidates = 800 if small_polygon else 400
+    max_candidates = 500 if small_polygon else 250  # Reduced for speed
 
     for x in np.arange(0, sheet_width - poly_width + 1, step_size):
         for y in np.arange(0, sheet_height - poly_height + 1, step_size):
