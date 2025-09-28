@@ -1917,10 +1917,10 @@ def bin_packing(
             f"📊 Обработано {processed_count} из {total_carpet_count} ковров, пропущено {skipped_count}, размещено {len(placed)}, в unplaced {len(unplaced)}"
         )
 
-    # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density - ВРЕМЕННО ОТКЛЮЧЕНО
-    # if len(placed) <= 20:  # Optimize most reasonable sets
-        # Ultra-aggressive left compaction to squeeze everything left - ВРЕМЕННО ОТКЛЮЧЕНО
-        # placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.4)
+    # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
+    if len(placed) <= 20:  # Optimize most reasonable sets
+        # Ultra-aggressive left compaction to squeeze everything left - ТЕСТИРУЕМ
+        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.4)
 
         # Simple compaction with aggressive left push - ВРЕМЕННО ОТКЛЮЧЕНО
         # placed = simple_compaction(placed, sheet_size)
