@@ -1928,8 +1928,8 @@ def bin_packing(
         # Additional edge snapping for maximum left compaction - ТЕСТИРУЕМ
         placed = fast_edge_snap(placed, sheet_size)
 
-        # Final ultra-left compaction - ВРЕМЕННО ОТКЛЮЧЕНО
-        # placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.5)
+        # Final ultra-left compaction - ТЕСТИРУЕМ
+        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.5)
 
         # Light tightening to clean up - ВРЕМЕННО ОТКЛЮЧЕНО
         # placed = tighten_layout(placed, sheet_size, min_gap=0.5, step=2.0, max_passes=1)
