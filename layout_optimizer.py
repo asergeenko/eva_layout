@@ -857,11 +857,12 @@ def check_collision_fast(
     try:
         # CRITICAL FIX: Check intersection and area
         if polygon1.intersects(polygon2):
-            intersection = polygon1.intersection(polygon2)
-            if hasattr(intersection, 'area') and intersection.area > 0.01:  # Более строгий порог
+            return True
+            #intersection = polygon1.intersection(polygon2)
+            #if hasattr(intersection, 'area') and intersection.area > 0.01:  # Более строгий порог
                 # DEBUG: Логируем обнаруженные коллизии
                 # logger.warning(f"🔍 КОЛЛИЗИЯ ОБНАРУЖЕНА: площадь пересечения {intersection.area:.3f} мм²")
-                return True
+            #    return True
 
         # SPEED OPTIMIZATION: Only use bbox pre-filter for distant objects
         bounds1 = polygon1.bounds
@@ -1944,22 +1945,9 @@ def bin_packing(
     # if placed:
     #     placed = apply_gravity_optimization(placed, sheet_width_mm, sheet_height_mm)
 
-    # КРИТИЧЕСКАЯ ПРОВЕРКА: убеждаемся что нет пересечений
-    intersections_found = False
-    for i, carpet1 in enumerate(placed):
-        for j, carpet2 in enumerate(placed):
-            if i < j:  # Проверяем каждую пару только один раз
-                if carpet1.polygon.intersects(carpet2.polygon):
-                    intersection = carpet1.polygon.intersection(carpet2.polygon)
-                    if hasattr(intersection, 'area') and intersection.area > 0.01:  # Более 0.01 мм²
-                        logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Обнаружено пересечение между {carpet1.filename} и {carpet2.filename}, площадь: {intersection.area:.3f} мм²")
-                        intersections_found = True
-
     if verbose:
         usage_percent = calculate_usage_percent(placed, sheet_size)
         elapsed_time = time.time() - start_time
-        if intersections_found:
-            logger.error("🚨 ВНИМАНИЕ: Обнаружены пересечения ковров!")
         st.info(
             f"🏁 Упаковка завершена: {len(placed)} размещено, {len(unplaced)} не размещено, использование: {usage_percent:.1f}%, время: {elapsed_time:.1f}с"
         )
