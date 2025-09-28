@@ -4,8 +4,10 @@
 __version__ = "1.5.0"
 
 import numpy as np
+import time
 
 from shapely.geometry import Polygon, Point
+from shapely.strtree import STRtree
 import streamlit as st
 import logging
 
@@ -538,9 +540,9 @@ def post_placement_optimize_aggressive(
             for test_x in range(0, int(sheet_width_mm - rot_width), int(step_x)):
                 for test_y in range(0, int(sheet_height_mm - rot_height), int(step_y)):
                     test_positions.append((test_x, test_y))
-                    if len(test_positions) > 20:  # Ограничиваем количество тестов
+                    if len(test_positions) > 15:  # Уменьшили лимит для ускорения (было 20)
                         break
-                if len(test_positions) > 20:
+                if len(test_positions) > 15:
                     break
 
             # Тестируем каждую позицию
@@ -845,6 +847,27 @@ def apply_placement_transform(
     return final_polygon
 
 
+def check_collision_with_strtree(polygon: Polygon, placed_polygons: list[Polygon]) -> bool:
+    """Ultra-fast collision check using STRtree spatial index."""
+    if not placed_polygons:
+        return False
+
+    if not polygon.is_valid:
+        return True
+
+    # Create STRtree for spatial indexing
+    tree = STRtree(placed_polygons)
+
+    # Query only nearby polygons (returns indices)
+    possible_indices = list(tree.query(polygon))
+
+    # Check only potential collisions
+    for idx in possible_indices:
+        if polygon.intersects(placed_polygons[idx]):
+            return True
+
+    return False
+
 def check_collision_fast(
     polygon1: Polygon, polygon2: Polygon, min_gap: float = 0.1
 ) -> bool:
@@ -854,7 +877,7 @@ def check_collision_fast(
         return True
 
     try:
-        # CRITICAL FIX: Always check intersection first - this catches overlapping polygons
+        # CRITICAL FIX: Check intersection and area
         if polygon1.intersects(polygon2):
             return True
 
@@ -868,7 +891,7 @@ def check_collision_fast(
         bbox_min_distance = (dx * dx + dy * dy) ** 0.5
 
         # SAFE EARLY EXIT: Only skip geometric check if bounding boxes are clearly far apart
-        if bbox_min_distance > min_gap + 50:  # Conservative 50mm safety margin
+        if bbox_min_distance > 50:  # Только если точно далеко
             return False
 
         # ALWAYS do accurate geometric distance check for close/potentially colliding objects
@@ -1267,7 +1290,7 @@ def simple_compaction(
     n = len(current_polys)
 
     moved_any = True
-    max_passes = 2  # Very limited passes
+    max_passes = 1  # Reduced from 2 for speed
 
     for pass_num in range(max_passes):
         if not moved_any:
@@ -1277,7 +1300,7 @@ def simple_compaction(
         # Simple down movement
         for i in range(n):
             poly = current_polys[i]
-            step = 2.0  # Large steps for speed
+            step = 3.0  # Increased from 2.0 for speed
 
             while True:
                 test = translate_polygon(poly, 0, -step)
@@ -1474,6 +1497,9 @@ def bin_packing(
     progress_callback=None,  # Callback function for progress updates
 ) -> tuple[list[PlacedCarpet], list[UnplacedCarpet]]:
     """Optimize placement of complex polygons on a sheet with ultra-dense/polygonal/improved algorithms."""
+
+    # Performance timing (no algorithm changes)
+    start_time = time.time()
 
     # Convert sheet size from cm to mm to match DXF polygon units
     sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
@@ -1842,12 +1868,9 @@ def bin_packing(
                     # Skip ALL bounding box checks - use only true geometric collision
                     translated = translate_polygon(carpet.polygon, x_offset, y_offset)
 
-                    # Final precise collision check
-                    collision = False
-                    for placed_poly in placed:
-                        if check_collision(translated, placed_poly.polygon):
-                            collision = True
-                            break
+                    # Final precise collision check using STRtree
+                    placed_polygons = [p.polygon for p in placed]
+                    collision = check_collision_with_strtree(translated, placed_polygons)
 
                     if not collision:
                         placed.append(
@@ -1909,36 +1932,38 @@ def bin_packing(
             f"📊 Обработано {processed_count} из {total_carpet_count} ковров, пропущено {skipped_count}, размещено {len(placed)}, в unplaced {len(unplaced)}"
         )
 
-    # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
-    if len(placed) <= 20:  # Optimize most reasonable sets
-        # Ultra-aggressive left compaction to squeeze everything left
-        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.4)
+    # # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
+    # if len(placed) <= 20:  # Optimize most reasonable sets
+    #     # Ultra-aggressive left compaction to squeeze everything left - ТЕСТИРУЕМ
+    #     placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.4)
+    #
+    #     # Simple compaction with aggressive left push - ТЕСТИРУЕМ
+    #     placed = simple_compaction(placed, sheet_size)
+    #
+    #     # Additional edge snapping for maximum left compaction - ТЕСТИРУЕМ
+    #     placed = fast_edge_snap(placed, sheet_size)
+    #
+    #     # Final ultra-left compaction - ТЕСТИРУЕМ
+    #     placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.5)
+    #
+    #     # Light tightening to clean up - ТЕСТИРУЕМ
+    #     placed = tighten_layout(placed, sheet_size, min_gap=0.5, step=2.0, max_passes=1)
+    # elif len(placed) <= 35:  # For larger sets, still do aggressive compaction - ТЕСТИРУЕМ
+    #     placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.6)
+    #     placed = simple_compaction(placed, sheet_size)
+    #     placed = fast_edge_snap(placed, sheet_size)
+    #
+    # # No optimization for very large sets
 
-        # Simple compaction with aggressive left push
-        placed = simple_compaction(placed, sheet_size)
-
-        # Additional edge snapping for maximum left compaction
-        placed = fast_edge_snap(placed, sheet_size)
-
-        # Final ultra-left compaction
-        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.5)
-
-        # Light tightening to clean up
-        placed = tighten_layout(placed, sheet_size, min_gap=0.5, step=2.0, max_passes=1)
-    elif len(placed) <= 35:  # For larger sets, still do aggressive compaction
-        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.6)
-        placed = simple_compaction(placed, sheet_size)
-        placed = fast_edge_snap(placed, sheet_size)
-    # No optimization for very large sets
-
-    # POST-OPTIMIZATION: Gravity compaction - move carpets down to maximize free space at top
-    if placed:
-        placed = apply_gravity_optimization(placed, sheet_width_mm, sheet_height_mm)
+    # POST-OPTIMIZATION: Gravity compaction - ОТКЛЮЧЕНО (создает пересечения)
+    # if placed:
+    #     placed = apply_gravity_optimization(placed, sheet_width_mm, sheet_height_mm)
 
     if verbose:
         usage_percent = calculate_usage_percent(placed, sheet_size)
+        elapsed_time = time.time() - start_time
         st.info(
-            f"🏁 Упаковка завершена: {len(placed)} размещено, {len(unplaced)} не размещено, использование: {usage_percent:.1f}%"
+            f"🏁 Упаковка завершена: {len(placed)} размещено, {len(unplaced)} не размещено, использование: {usage_percent:.1f}%, время: {elapsed_time:.1f}с"
         )
     return placed, unplaced
 
@@ -2607,7 +2632,7 @@ def find_contour_following_position(
     candidates.sort(key=lambda pos: (pos[1], pos[0]))
 
     # Increase limit for small polygons to improve placement success
-    max_candidates = 1500 if is_small else 1000
+    max_candidates = 1000 if is_small else 600  # Reduced for speed
     candidates = candidates[: min(max_candidates, len(candidates))]
 
     # Test each position using true geometric collision detection
@@ -2626,12 +2651,8 @@ def find_contour_following_position(
         ):
             continue
 
-        # Use our new TRUE GEOMETRIC collision check (no bounding box constraints!)
-        collision = False
-        for obstacle in obstacles:
-            if check_collision(test_polygon, obstacle, min_gap=0.1):  # Ultra-tight
-                collision = True
-                break
+        # Use STRtree for ultra-fast collision check
+        collision = check_collision_with_strtree(test_polygon, obstacles)
 
         if not collision:
             return x, y
@@ -2723,7 +2744,7 @@ def find_super_dense_position(
 
     # Adaptive step: smaller for small polygons, larger for big ones
     if polygon_area < 5000:  # Small carpet
-        step = 0.5
+        step = 1.0  # Увеличили с 0.5 для ускорения
     elif polygon_area < 20000:  # Medium carpet
         step = 1.0
     else:  # Large carpet
@@ -2737,7 +2758,7 @@ def find_super_dense_position(
             occupied_regions.append(obs_bounds)
 
     # Search in expanding rings from bottom-left
-    max_candidates = 2000  # Reasonable limit
+    max_candidates = 1200  # Reduced from 2000 for speed
     tested = 0
 
     for ring in range(20):  # Maximum 20 rings
@@ -2763,12 +2784,8 @@ def find_super_dense_position(
                 and test_bounds[2] <= sheet_width + 0.01
                 and test_bounds[3] <= sheet_height + 0.01
             ):
-                # Collision check
-                collision = False
-                for obstacle in obstacles:
-                    if check_collision(test_polygon, obstacle, min_gap=0.1):
-                        collision = True
-                        break
+                # Ultra-fast collision check with STRtree
+                collision = check_collision_with_strtree(test_polygon, obstacles)
 
                 if not collision:
                     return x, y
@@ -2866,7 +2883,7 @@ def find_enhanced_contour_following_position(
         # Collision check
         collision = False
         for obstacle in obstacles:
-            if check_collision(test_polygon, obstacle, min_gap=0.05):
+            if check_collision(test_polygon, obstacle, min_gap=1.0):  # Увеличили для предотвращения пересечений
                 collision = True
                 break
 
@@ -2903,16 +2920,16 @@ def find_ultra_tight_position(
     small_polygon = polygon_size < 10000  # 100mm x 100mm
 
     if small_polygon:
-        step_size = 0.5  # Very fine grid for small polygons
+        step_size = 1.0  # Increased from 0.5 for speed
     elif len(obstacles) <= 5:
-        step_size = 1.0
+        step_size = 2.0  # Increased from 1.0 for speed
     else:
-        step_size = 2.0
+        step_size = 3.0  # Increased from 2.0 for speed
 
     candidates = []
 
-    # Grid search with adaptive limits
-    max_candidates = 1000 if small_polygon else 500
+    # Grid search with adaptive limits (reduced for performance)
+    max_candidates = 500 if small_polygon else 250  # Reduced for speed
 
     for x in np.arange(0, sheet_width - poly_width + 1, step_size):
         for y in np.arange(0, sheet_height - poly_height + 1, step_size):
@@ -2938,11 +2955,8 @@ def find_ultra_tight_position(
         ):
             continue
 
-        collision = False
-        for obstacle in obstacles:
-            if check_collision(test_polygon, obstacle, min_gap=0.1):
-                collision = True
-                break
+        # STRtree collision check
+        collision = check_collision_with_strtree(test_polygon, obstacles)
 
         if not collision:
             return x, y
@@ -3038,12 +3052,8 @@ def find_bottom_left_position_with_obstacles(
         # Only create translated polygon if all checks pass
         test_polygon = translate_polygon(polygon, x_offset, y_offset)
 
-        # OPTIMIZATION: Early exit on first collision
-        collision = False
-        for obstacle in obstacles:
-            if check_collision(test_polygon, obstacle, min_gap=0.1):
-                collision = True
-                break
+        # STRtree ultra-fast collision check
+        collision = check_collision_with_strtree(test_polygon, obstacles)
 
         if not collision:
             return x, y
@@ -3651,7 +3661,7 @@ def bin_packing_with_inventory(
                         for new_poly in new_polygons:
                             for existing_poly in all_existing_polygons:
                                 if check_collision(
-                                    new_poly, existing_poly, min_gap=0.05
+                                    new_poly, existing_poly, min_gap=1.0  # Увеличили для предотвращения пересечений
                                 ):
                                     logger.error(
                                         f"КРИТИЧЕСКАЯ ОШИБКА: Обнаружено перекрытие при агрессивном дозаполнении листа #{layout.sheet_number}"
@@ -3958,7 +3968,7 @@ def tighten_layout(
     sheet_size=None,
     min_gap: float = 0.05,  # ULTRA-tight gap for maximum density
     step: float = 0.5,  # Finer step for better precision
-    max_passes: int = 5,  # More passes for better optimization
+    max_passes: int = 4,  # Reduced passes for better performance
 ) -> list[PlacedCarpet]:
     """
     Жадный сдвиг (greedy push): для каждого полигона пробуем сдвинуть максимально
