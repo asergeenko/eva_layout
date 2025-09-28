@@ -7,6 +7,7 @@ import numpy as np
 import time
 
 from shapely.geometry import Polygon, Point
+from shapely.strtree import STRtree
 import streamlit as st
 import logging
 
@@ -846,6 +847,27 @@ def apply_placement_transform(
     return final_polygon
 
 
+def check_collision_with_strtree(polygon: Polygon, placed_polygons: list[Polygon]) -> bool:
+    """Ultra-fast collision check using STRtree spatial index."""
+    if not placed_polygons:
+        return False
+
+    if not polygon.is_valid:
+        return True
+
+    # Create STRtree for spatial indexing
+    tree = STRtree(placed_polygons)
+
+    # Query only nearby polygons (returns indices)
+    possible_indices = list(tree.query(polygon))
+
+    # Check only potential collisions
+    for idx in possible_indices:
+        if polygon.intersects(placed_polygons[idx]):
+            return True
+
+    return False
+
 def check_collision_fast(
     polygon1: Polygon, polygon2: Polygon, min_gap: float = 0.1
 ) -> bool:
@@ -858,11 +880,6 @@ def check_collision_fast(
         # CRITICAL FIX: Check intersection and area
         if polygon1.intersects(polygon2):
             return True
-            #intersection = polygon1.intersection(polygon2)
-            #if hasattr(intersection, 'area') and intersection.area > 0.01:  # Более строгий порог
-                # DEBUG: Логируем обнаруженные коллизии
-                # logger.warning(f"🔍 КОЛЛИЗИЯ ОБНАРУЖЕНА: площадь пересечения {intersection.area:.3f} мм²")
-            #    return True
 
         # SPEED OPTIMIZATION: Only use bbox pre-filter for distant objects
         bounds1 = polygon1.bounds
@@ -1851,12 +1868,9 @@ def bin_packing(
                     # Skip ALL bounding box checks - use only true geometric collision
                     translated = translate_polygon(carpet.polygon, x_offset, y_offset)
 
-                    # Final precise collision check
-                    collision = False
-                    for placed_poly in placed:
-                        if check_collision(translated, placed_poly.polygon):
-                            collision = True
-                            break
+                    # Final precise collision check using STRtree
+                    placed_polygons = [p.polygon for p in placed]
+                    collision = check_collision_with_strtree(translated, placed_polygons)
 
                     if not collision:
                         placed.append(
@@ -2637,12 +2651,8 @@ def find_contour_following_position(
         ):
             continue
 
-        # Use our new TRUE GEOMETRIC collision check (no bounding box constraints!)
-        collision = False
-        for obstacle in obstacles:
-            if check_collision(test_polygon, obstacle, min_gap=0.1):  # Ultra-tight
-                collision = True
-                break
+        # Use STRtree for ultra-fast collision check
+        collision = check_collision_with_strtree(test_polygon, obstacles)
 
         if not collision:
             return x, y
@@ -2774,12 +2784,8 @@ def find_super_dense_position(
                 and test_bounds[2] <= sheet_width + 0.01
                 and test_bounds[3] <= sheet_height + 0.01
             ):
-                # Collision check
-                collision = False
-                for obstacle in obstacles:
-                    if check_collision(test_polygon, obstacle, min_gap=0.1):
-                        collision = True
-                        break
+                # Ultra-fast collision check with STRtree
+                collision = check_collision_with_strtree(test_polygon, obstacles)
 
                 if not collision:
                     return x, y
@@ -2949,11 +2955,8 @@ def find_ultra_tight_position(
         ):
             continue
 
-        collision = False
-        for obstacle in obstacles:
-            if check_collision(test_polygon, obstacle, min_gap=0.1):
-                collision = True
-                break
+        # STRtree collision check
+        collision = check_collision_with_strtree(test_polygon, obstacles)
 
         if not collision:
             return x, y
@@ -3049,12 +3052,8 @@ def find_bottom_left_position_with_obstacles(
         # Only create translated polygon if all checks pass
         test_polygon = translate_polygon(polygon, x_offset, y_offset)
 
-        # OPTIMIZATION: Early exit on first collision
-        collision = False
-        for obstacle in obstacles:
-            if check_collision(test_polygon, obstacle, min_gap=0.1):
-                collision = True
-                break
+        # STRtree ultra-fast collision check
+        collision = check_collision_with_strtree(test_polygon, obstacles)
 
         if not collision:
             return x, y
