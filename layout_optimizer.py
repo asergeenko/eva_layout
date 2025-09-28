@@ -8,6 +8,7 @@ import time
 
 from shapely.geometry import Polygon, Point
 from shapely.strtree import STRtree
+from shapely.prepared import prep
 import streamlit as st
 import logging
 
@@ -35,6 +36,8 @@ _rotation_cache: dict[
     int, dict[int, Polygon]
 ] = {}  # carpet_id -> {angle: rotated_polygon}
 _original_polygons: dict[int, Polygon] = {}  # carpet_id -> original_polygon
+_bounds_cache: dict[int, tuple] = {}  # polygon_id -> bounds
+_prepared_cache: dict[int, object] = {}  # polygon_id -> prepared_geometry
 
 
 def clear_optimization_caches():
@@ -1196,7 +1199,7 @@ def ultra_left_compaction(
     n = len(current_polys)
 
     # Ultra-aggressive left push - try to fit all in left portion
-    for iteration in range(3):  # Multiple passes for maximum effect
+    for iteration in range(2):  # Reduced from 3 for speed
         moved_any = False
 
         # Sort by current X position (process rightmost first)
@@ -2898,12 +2901,12 @@ def find_ultra_tight_position(
 ) -> tuple[float | None, float | None]:
     """Find ultra-tight position using ENHANCED maximum density algorithm."""
 
-    # Try new SUPER DENSE algorithm first
-    result = find_super_dense_position(polygon, obstacles, sheet_width, sheet_height)
-    if result[0] is not None:
-        return result
+    # SPEED: Skip super dense algorithm (too slow)
+    # result = find_super_dense_position(polygon, obstacles, sheet_width, sheet_height)
+    # if result[0] is not None:
+    #     return result
 
-    # Try enhanced contour-following algorithm
+    # Try enhanced contour-following algorithm (faster)
     result = find_enhanced_contour_following_position(
         polygon, obstacles, sheet_width, sheet_height
     )
@@ -2920,11 +2923,11 @@ def find_ultra_tight_position(
     small_polygon = polygon_size < 10000  # 100mm x 100mm
 
     if small_polygon:
-        step_size = 1.0  # Increased from 0.5 for speed
-    elif len(obstacles) <= 5:
         step_size = 2.0  # Increased from 1.0 for speed
+    elif len(obstacles) <= 5:
+        step_size = 4.0  # Increased from 2.0 for speed
     else:
-        step_size = 3.0  # Increased from 2.0 for speed
+        step_size = 5.0  # Increased from 3.0 for speed
 
     candidates = []
 
@@ -2968,10 +2971,10 @@ def find_bottom_left_position_with_obstacles(
     polygon: Polygon, obstacles: list[Polygon], sheet_width: float, sheet_height: float
 ) -> tuple[float | None, float | None]:
     """Find the bottom-left position for a polygon using ultra-tight packing algorithm."""
-    # Try ultra-tight algorithm first
-    result = find_ultra_tight_position(polygon, obstacles, sheet_width, sheet_height)
-    if result[0] is not None:
-        return result
+    # SPEED: Skip ultra-tight algorithm (too slow), use grid directly
+    # result = find_ultra_tight_position(polygon, obstacles, sheet_width, sheet_height)
+    # if result[0] is not None:
+    #     return result
 
     # Fallback to improved algorithm
     bounds = polygon.bounds
