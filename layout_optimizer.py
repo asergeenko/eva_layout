@@ -1940,7 +1940,7 @@ def bin_packing(
         pass
     # No optimization for very large sets
 
-    # POST-OPTIMIZATION: Gravity compaction - ВРЕМЕННО ОТКЛЮЧЕНО для отладки пересечений
+    # POST-OPTIMIZATION: Gravity compaction - ОТКЛЮЧЕНО (создает пересечения)
     # if placed:
     #     placed = apply_gravity_optimization(placed, sheet_width_mm, sheet_height_mm)
 
