@@ -1931,8 +1931,8 @@ def bin_packing(
         # Final ultra-left compaction - ТЕСТИРУЕМ
         placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.5)
 
-        # Light tightening to clean up - ВРЕМЕННО ОТКЛЮЧЕНО
-        # placed = tighten_layout(placed, sheet_size, min_gap=0.5, step=2.0, max_passes=1)
+        # Light tightening to clean up - ТЕСТИРУЕМ
+        placed = tighten_layout(placed, sheet_size, min_gap=0.5, step=2.0, max_passes=1)
     elif len(placed) <= 35:  # For larger sets, still do aggressive compaction - ВРЕМЕННО ОТКЛЮЧЕНО
         # placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.6)
         # placed = simple_compaction(placed, sheet_size)
