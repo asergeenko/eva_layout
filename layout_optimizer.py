@@ -1933,10 +1933,10 @@ def bin_packing(
 
         # Light tightening to clean up - ТЕСТИРУЕМ
         placed = tighten_layout(placed, sheet_size, min_gap=0.5, step=2.0, max_passes=1)
-    elif len(placed) <= 35:  # For larger sets, still do aggressive compaction - ВРЕМЕННО ОТКЛЮЧЕНО
-        # placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.6)
-        # placed = simple_compaction(placed, sheet_size)
-        # placed = fast_edge_snap(placed, sheet_size)
+    elif len(placed) <= 35:  # For larger sets, still do aggressive compaction - ТЕСТИРУЕМ
+        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.6)
+        placed = simple_compaction(placed, sheet_size)
+        placed = fast_edge_snap(placed, sheet_size)
         pass
     # No optimization for very large sets
 
