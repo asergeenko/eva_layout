@@ -5,6 +5,8 @@ __version__ = "1.5.0"
 
 import numpy as np
 import time
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from functools import partial
 
 from shapely.geometry import Polygon, Point
 from shapely.strtree import STRtree
@@ -850,6 +852,34 @@ def apply_placement_transform(
     return final_polygon
 
 
+_global_strtree = None
+_global_strtree_polygons = []
+
+def check_collision_with_strtree_cached(polygon: Polygon, placed_polygons: list[Polygon]) -> bool:
+    """Ultra-fast collision check using cached STRtree spatial index."""
+    global _global_strtree, _global_strtree_polygons
+
+    if not placed_polygons:
+        return False
+
+    if not polygon.is_valid:
+        return True
+
+    # Reuse STRtree if polygons haven't changed
+    if _global_strtree_polygons != placed_polygons:
+        _global_strtree = STRtree(placed_polygons)
+        _global_strtree_polygons = placed_polygons[:]
+
+    # Query only nearby polygons (returns indices)
+    possible_indices = list(_global_strtree.query(polygon))
+
+    # Check only potential collisions
+    for idx in possible_indices:
+        if polygon.intersects(placed_polygons[idx]):
+            return True
+
+    return False
+
 def check_collision_with_strtree(polygon: Polygon, placed_polygons: list[Polygon]) -> bool:
     """Ultra-fast collision check using STRtree spatial index."""
     if not placed_polygons:
@@ -870,6 +900,69 @@ def check_collision_with_strtree(polygon: Polygon, placed_polygons: list[Polygon
             return True
 
     return False
+
+def test_position_parallel(args):
+    """Worker function for parallel position testing."""
+    position, carpet_polygon, placed_polygons, sheet_bounds = args
+    x, y = position
+
+    # Translate polygon to test position
+    translated = translate_polygon(carpet_polygon, x, y)
+
+    # Check bounds
+    bounds = translated.bounds
+    if not (bounds[0] >= sheet_bounds[0] and bounds[1] >= sheet_bounds[1] and
+            bounds[2] <= sheet_bounds[2] and bounds[3] <= sheet_bounds[3]):
+        return None
+
+    # Check collision
+    if check_collision_with_strtree(translated, placed_polygons):
+        return None
+
+    return (x, y)
+
+def find_position_vectorized(carpet_polygon: Polygon, placed_polygons: list[Polygon],
+                            sheet_width: float, sheet_height: float) -> tuple[float | None, float | None]:
+    """Find position using vectorized numpy operations for maximum speed."""
+
+    # Generate candidate positions using numpy
+    bounds = carpet_polygon.bounds
+    poly_width = bounds[2] - bounds[0]
+    poly_height = bounds[3] - bounds[1]
+
+    step_size = 4.0  # Coarser grid for speed
+    max_positions = 300  # Reduced for speed
+
+    # Use numpy for fast grid generation
+    x_range = np.arange(0, sheet_width - poly_width + 1, step_size)
+    y_range = np.arange(0, sheet_height - poly_height + 1, step_size)
+
+    # Create all combinations efficiently
+    xx, yy = np.meshgrid(x_range, y_range)
+    positions = np.column_stack([xx.ravel(), yy.ravel()])
+
+    # Limit positions
+    if len(positions) > max_positions:
+        positions = positions[:max_positions]
+
+    # Fast sequential testing with early exit
+    for pos in positions:
+        x, y = pos
+
+        # Translate polygon
+        translated = translate_polygon(carpet_polygon, x, y)
+
+        # Quick bounds check
+        t_bounds = translated.bounds
+        if not (t_bounds[0] >= -0.01 and t_bounds[1] >= -0.01 and
+                t_bounds[2] <= sheet_width + 0.01 and t_bounds[3] <= sheet_height + 0.01):
+            continue
+
+        # STRtree collision check with caching
+        if not check_collision_with_strtree_cached(translated, placed_polygons):
+            return x, y
+
+    return None, None
 
 def check_collision_fast(
     polygon1: Polygon, polygon2: Polygon, min_gap: float = 0.1
@@ -1503,6 +1596,8 @@ def bin_packing(
 
     # Performance timing (no algorithm changes)
     start_time = time.time()
+    placement_time = 0
+    collision_time = 0
 
     # Convert sheet size from cm to mm to match DXF polygon units
     sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
@@ -1847,54 +1942,38 @@ def bin_packing(
             else:
                 y_positions = [0]
 
-            for grid_x in x_positions:
-                for grid_y in y_positions:
-                    x_offset = grid_x - simple_bounds[0]
-                    y_offset = grid_y - simple_bounds[1]
+            # VECTORIZED POSITION SEARCH - numpy оптимизация
+            t1 = time.time()
+            placed_polygons = [p.polygon for p in placed]
+            result_pos = find_position_vectorized(carpet.polygon, placed_polygons, sheet_width_mm, sheet_height_mm)
+            vectorized_time = time.time() - t1
 
-                    # Fast bounds check with minimal tolerance for tight packing
-                    test_bounds = (
-                        simple_bounds[0] + x_offset,
-                        simple_bounds[1] + y_offset,
-                        simple_bounds[2] + x_offset,
-                        simple_bounds[3] + y_offset,
+            if result_pos[0] is not None:
+                x_offset = result_pos[0]
+                y_offset = result_pos[1]
+                translated = translate_polygon(carpet.polygon, x_offset, y_offset)
+                placement_time += vectorized_time
+
+                # Position found via parallel search
+                placed.append(
+                    PlacedCarpet(
+                        polygon=translated,
+                        carpet_id=carpet.carpet_id,
+                        priority=carpet.priority,
+                        x_offset=x_offset,
+                        y_offset=y_offset,
+                        angle=0,
+                        filename=carpet.filename,
+                        color=carpet.color,
+                        order_id=carpet.order_id,
                     )
-
-                    if not (
-                        test_bounds[0] >= -0.01
-                        and test_bounds[1] >= -0.01
-                        and test_bounds[2] <= sheet_width_mm + 0.01
-                        and test_bounds[3] <= sheet_height_mm + 0.01
-                    ):
-                        continue
-
-                    # Skip ALL bounding box checks - use only true geometric collision
-                    translated = translate_polygon(carpet.polygon, x_offset, y_offset)
-
-                    # Final precise collision check using STRtree
-                    placed_polygons = [p.polygon for p in placed]
-                    collision = check_collision_with_strtree(translated, placed_polygons)
-
-                    if not collision:
-                        placed.append(
-                            PlacedCarpet(
-                                polygon=translated,
-                                carpet_id=carpet.carpet_id,
-                                priority=carpet.priority,
-                                x_offset=x_offset,
-                                y_offset=y_offset,
-                                angle=0,
-                                filename=carpet.filename,
-                                color=carpet.color,
-                                order_id=carpet.order_id,
-                            )
-                        )
-                        placed_successfully = True
-                        if verbose:
-                            st.success(
-                                f"✅ Размещен {carpet.filename} (сетчатое размещение)"
-                            )
-                        break
+                )
+                placed_successfully = True
+                if verbose:
+                    st.success(
+                        f"✅ Размещен {carpet.filename} (параллельное размещение)"
+                    )
+                break
 
                 if placed_successfully:
                     break
@@ -1968,6 +2047,8 @@ def bin_packing(
         st.info(
             f"🏁 Упаковка завершена: {len(placed)} размещено, {len(unplaced)} не размещено, использование: {usage_percent:.1f}%, время: {elapsed_time:.1f}с"
         )
+        st.info(f"⏱️ ПРОФИЛИРОВАНИЕ: Размещение: {placement_time:.2f}с, Коллизии: {collision_time:.2f}с")
+        logger.info(f"⏱️ ДЕТАЛИ: translate_polygon={placement_time:.2f}с, STRtree_collision={collision_time:.2f}с")
     return placed, unplaced
 
 
