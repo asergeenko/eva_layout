@@ -11,6 +11,7 @@ from functools import partial
 from shapely.geometry import Polygon, Point
 from shapely.strtree import STRtree
 from shapely.prepared import prep
+from shapely import wkt
 import streamlit as st
 import logging
 
@@ -901,25 +902,91 @@ def check_collision_with_strtree(polygon: Polygon, placed_polygons: list[Polygon
 
     return False
 
-def test_position_parallel(args):
-    """Worker function for parallel position testing."""
-    position, carpet_polygon, placed_polygons, sheet_bounds = args
-    x, y = position
+def test_positions_batch_worker(args):
+    """Worker function for batch position testing with proper serialization."""
+    positions_batch, carpet_wkt, placed_wkts, sheet_bounds = args
 
-    # Translate polygon to test position
-    translated = translate_polygon(carpet_polygon, x, y)
+    # Deserialize polygons
+    carpet_polygon = wkt.loads(carpet_wkt)
+    placed_polygons = [wkt.loads(w) for w in placed_wkts]
 
-    # Check bounds
-    bounds = translated.bounds
-    if not (bounds[0] >= sheet_bounds[0] and bounds[1] >= sheet_bounds[1] and
-            bounds[2] <= sheet_bounds[2] and bounds[3] <= sheet_bounds[3]):
-        return None
+    # Test each position in the batch
+    for x, y in positions_batch:
+        # Translate polygon to test position
+        translated = translate_polygon(carpet_polygon, x, y)
 
-    # Check collision
-    if check_collision_with_strtree(translated, placed_polygons):
-        return None
+        # Check bounds
+        bounds = translated.bounds
+        if not (bounds[0] >= sheet_bounds[0] and bounds[1] >= sheet_bounds[1] and
+                bounds[2] <= sheet_bounds[2] and bounds[3] <= sheet_bounds[3]):
+            continue
 
-    return (x, y)
+        # Check collision using STRtree
+        if not check_collision_with_strtree(translated, placed_polygons):
+            return (x, y)  # Return first valid position
+
+    return None  # No valid position found in this batch
+
+def find_position_multiprocess(carpet_polygon: Polygon, placed_polygons: list[Polygon],
+                              sheet_width: float, sheet_height: float, max_workers: int = 8) -> tuple[float | None, float | None]:
+    """Find position using true multiprocessing with WKT serialization."""
+
+    # Generate candidate positions using numpy
+    bounds = carpet_polygon.bounds
+    poly_width = bounds[2] - bounds[0]
+    poly_height = bounds[3] - bounds[1]
+
+    step_size = 3.0  # Coarse grid for multiprocessing
+    max_total_positions = 800  # Total positions to test
+
+    # Use numpy for fast grid generation
+    x_range = np.arange(0, sheet_width - poly_width + 1, step_size)
+    y_range = np.arange(0, sheet_height - poly_height + 1, step_size)
+
+    # Create all combinations efficiently
+    xx, yy = np.meshgrid(x_range, y_range)
+    positions = np.column_stack([xx.ravel(), yy.ravel()])
+
+    # Limit positions
+    if len(positions) > max_total_positions:
+        positions = positions[:max_total_positions]
+
+    if len(positions) == 0:
+        return None, None
+
+    # Serialize polygons to WKT for multiprocessing
+    carpet_wkt = carpet_polygon.wkt
+    placed_wkts = [p.wkt for p in placed_polygons]
+    sheet_bounds = (-0.01, -0.01, sheet_width + 0.01, sheet_height + 0.01)
+
+    # Split positions into batches for workers
+    batch_size = max(1, len(positions) // max_workers)
+    position_batches = []
+    for i in range(0, len(positions), batch_size):
+        batch = positions[i:i + batch_size]
+        position_batches.append(batch)
+
+    # Prepare arguments for workers
+    args_list = []
+    for batch in position_batches:
+        args_list.append((batch, carpet_wkt, placed_wkts, sheet_bounds))
+
+    # Use multiprocessing on your 12-core Ryzen
+    try:
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(test_positions_batch_worker, args_list))
+
+        # Find first valid result
+        for result in results:
+            if result is not None:
+                return result
+
+    except Exception as e:
+        logger.warning(f"Multiprocessing failed: {e}, falling back to vectorized")
+        # Fallback to vectorized approach
+        return find_position_vectorized(carpet_polygon, placed_polygons, sheet_width, sheet_height)
+
+    return None, None
 
 def find_position_vectorized(carpet_polygon: Polygon, placed_polygons: list[Polygon],
                             sheet_width: float, sheet_height: float) -> tuple[float | None, float | None]:
@@ -1598,6 +1665,9 @@ def bin_packing(
     start_time = time.time()
     placement_time = 0
     collision_time = 0
+    postprocess_time = 0
+    grid_generation_time = 0
+    polygon_creation_time = 0
 
     # Convert sheet size from cm to mm to match DXF polygon units
     sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
@@ -1677,12 +1747,17 @@ def bin_packing(
     processed_count = 0
 
     for i, carpet in enumerate(sorted_polygons):
+        carpet_start = time.time()
+
         # PERFORMANCE: Быстро пропускаем ненужные ковры
         if not should_process_carpet(i, total_carpet_count, len(placed)):
             continue
 
         processed_count += 1
         placed_successfully = False
+
+        if i % 10 == 0:  # Log every 10th carpet to avoid spam
+            logger.info(f"🔄 Обрабатываем ковер {i+1}/{total_carpet_count}: {carpet.filename}")
 
         # Check if polygon is too large for the sheet
         bounds = carpet.polygon.bounds
@@ -1925,6 +2000,7 @@ def bin_packing(
             simple_height = simple_bounds[3] - simple_bounds[1]
 
             # Optimized grid placement as fallback with timeout
+            grid_start = time.time()
             max_grid_attempts = (
                 5 if len(placed) > 10 else 10
             )  # Further reduced for many obstacles
@@ -1942,17 +2018,22 @@ def bin_packing(
             else:
                 y_positions = [0]
 
-            # VECTORIZED POSITION SEARCH - numpy оптимизация
-            t1 = time.time()
+            grid_generation_time += time.time() - grid_start
+
+            # MULTIPROCESS POSITION SEARCH - используем все 12 ядер Ryzen
+            polygon_start = time.time()
             placed_polygons = [p.polygon for p in placed]
-            result_pos = find_position_vectorized(carpet.polygon, placed_polygons, sheet_width_mm, sheet_height_mm)
-            vectorized_time = time.time() - t1
+            polygon_creation_time += time.time() - polygon_start
+
+            t1 = time.time()
+            result_pos = find_position_multiprocess(carpet.polygon, placed_polygons, sheet_width_mm, sheet_height_mm, max_workers=8)
+            multiprocess_time = time.time() - t1
 
             if result_pos[0] is not None:
                 x_offset = result_pos[0]
                 y_offset = result_pos[1]
                 translated = translate_polygon(carpet.polygon, x_offset, y_offset)
-                placement_time += vectorized_time
+                placement_time += multiprocess_time
 
                 # Position found via parallel search
                 placed.append(
@@ -1971,7 +2052,7 @@ def bin_packing(
                 placed_successfully = True
                 if verbose:
                     st.success(
-                        f"✅ Размещен {carpet.filename} (параллельное размещение)"
+                        f"✅ Размещен {carpet.filename} (мультипроцессинг 8 ядер)"
                     )
                 break
 
@@ -1991,6 +2072,10 @@ def bin_packing(
                     order_id=carpet.order_id,
                 )
             )
+
+        carpet_time = time.time() - carpet_start
+        if carpet_time > 1.0:  # Log only slow carpets
+            logger.info(f"⚠️ МЕДЛЕННЫЙ ковер {i+1}: {carpet.filename} занял {carpet_time:.3f}с")
     # КРИТИЧНО: Добавляем пропущенные ковры в unplaced чтобы они не терялись
     if processed_count < total_carpet_count:
         for i, carpet in enumerate(sorted_polygons):
@@ -2014,28 +2099,35 @@ def bin_packing(
             f"📊 Обработано {processed_count} из {total_carpet_count} ковров, пропущено {skipped_count}, размещено {len(placed)}, в unplaced {len(unplaced)}"
         )
 
-    # # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
-    # if len(placed) <= 20:  # Optimize most reasonable sets
-    #     # Ultra-aggressive left compaction to squeeze everything left - ТЕСТИРУЕМ
-    #     placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.4)
-    #
-    #     # Simple compaction with aggressive left push - ТЕСТИРУЕМ
-    #     placed = simple_compaction(placed, sheet_size)
-    #
-    #     # Additional edge snapping for maximum left compaction - ТЕСТИРУЕМ
-    #     placed = fast_edge_snap(placed, sheet_size)
-    #
-    #     # Final ultra-left compaction - ТЕСТИРУЕМ
-    #     placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.5)
-    #
-    #     # Light tightening to clean up - ТЕСТИРУЕМ
-    #     placed = tighten_layout(placed, sheet_size, min_gap=0.5, step=2.0, max_passes=1)
-    # elif len(placed) <= 35:  # For larger sets, still do aggressive compaction - ТЕСТИРУЕМ
-    #     placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.6)
-    #     placed = simple_compaction(placed, sheet_size)
-    #     placed = fast_edge_snap(placed, sheet_size)
-    #
-    # # No optimization for very large sets
+    # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
+    post_start = time.time()
+    if len(placed) <= 20:  # Optimize most reasonable sets
+        t1 = time.time()
+        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.4)
+        logger.info(f"⏱️ ultra_left_compaction(1): {time.time()-t1:.3f}с")
+
+        t2 = time.time()
+        placed = simple_compaction(placed, sheet_size)
+        logger.info(f"⏱️ simple_compaction: {time.time()-t2:.3f}с")
+
+        t3 = time.time()
+        placed = fast_edge_snap(placed, sheet_size)
+        logger.info(f"⏱️ fast_edge_snap: {time.time()-t3:.3f}с")
+
+        t4 = time.time()
+        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.5)
+        logger.info(f"⏱️ ultra_left_compaction(2): {time.time()-t4:.3f}с")
+
+        t5 = time.time()
+        placed = tighten_layout(placed, sheet_size, min_gap=0.5, step=2.0, max_passes=1)
+        logger.info(f"⏱️ tighten_layout: {time.time()-t5:.3f}с")
+    elif len(placed) <= 35:  # For larger sets, still do aggressive compaction
+        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.6)
+        placed = simple_compaction(placed, sheet_size)
+        placed = fast_edge_snap(placed, sheet_size)
+
+    postprocess_time = time.time() - post_start
+    # No optimization for very large sets
 
     # POST-OPTIMIZATION: Gravity compaction - ОТКЛЮЧЕНО (создает пересечения)
     # if placed:
@@ -2047,8 +2139,10 @@ def bin_packing(
         st.info(
             f"🏁 Упаковка завершена: {len(placed)} размещено, {len(unplaced)} не размещено, использование: {usage_percent:.1f}%, время: {elapsed_time:.1f}с"
         )
-        st.info(f"⏱️ ПРОФИЛИРОВАНИЕ: Размещение: {placement_time:.2f}с, Коллизии: {collision_time:.2f}с")
-        logger.info(f"⏱️ ДЕТАЛИ: translate_polygon={placement_time:.2f}с, STRtree_collision={collision_time:.2f}с")
+        st.info(f"⏱️ ПРОФИЛИРОВАНИЕ: Размещение: {placement_time:.2f}с, Коллизии: {collision_time:.2f}с, Post-processing: {postprocess_time:.2f}с")
+        st.info(f"📊 ДЕТАЛИ: Grid: {grid_generation_time:.3f}с, Polygons: {polygon_creation_time:.3f}с")
+        st.info(f"🚀 МУЛЬТИПРОЦЕССИНГ: Использовано 8 ядер из 12 доступных на Ryzen 5 5600H")
+        logger.info(f"⏱️ ПОЛНОЕ ПРОФИЛИРОВАНИЕ: placement={placement_time:.3f}с, collision={collision_time:.3f}с, postprocess={postprocess_time:.3f}с, grid={grid_generation_time:.3f}с, polygons={polygon_creation_time:.3f}с")
     return placed, unplaced
 
 
@@ -3361,7 +3455,10 @@ def smart_bin_packing(
     smart_sorted = sorted(carpets, key=get_enhanced_smart_score, reverse=True)
 
     # Use enhanced bin packing with tighter gap settings
+    binpacking_start = time.time()
     placed, unplaced = bin_packing(smart_sorted, sheet_size, verbose=verbose)
+    binpacking_time = time.time() - binpacking_start
+    logger.info(f"🔍 bin_packing завершен за {binpacking_time:.3f}с, размещено {len(placed)}, не размещено {len(unplaced)}")
 
     return placed, unplaced
 
@@ -3545,6 +3642,7 @@ def bin_packing_with_inventory(
             continue
 
         try:
+            existing_start = time.time()
             additional_placed, remaining_unplaced = bin_packing_with_existing(
                 matching_carpets,
                 layout.placed_polygons,
@@ -3580,8 +3678,11 @@ def bin_packing_with_inventory(
                 logger.info(
                     f"    Дозаполнен лист #{layout.sheet_number}: +{len(additional_placed)} приоритет1+Excel"
                 )
+            existing_time = time.time() - existing_start
+            logger.info(f"🔍 bin_packing_with_existing завершен за {existing_time:.3f}с")
         except Exception as e:
-            logger.debug(f"Не удалось дозаполнить лист приоритетом 1: {e}")
+            existing_time = time.time() - existing_start
+            logger.debug(f"Не удалось дозаполнить лист приоритетом 1 за {existing_time:.3f}с: {e}")
             continue
 
     # Create new sheets for remaining priority 1 carpets
@@ -3624,6 +3725,7 @@ def bin_packing_with_inventory(
                     }
 
                     for attempt in range(4):  # Try 4 different enhanced orderings
+                        attempt_start = time.time()
                         if attempt == 1:
                             # Enhanced big-to-small strategy (best for foundation)
                             def get_foundation_score(carpet: Carpet):
@@ -3665,6 +3767,9 @@ def bin_packing_with_inventory(
                                 verbose=False,
                             )
                         )
+
+                        attempt_time = time.time() - attempt_start
+                        logger.info(f"🔍 Попытка #{attempt+1}/4 завершена за {attempt_time:.3f}с, размещено {len(additional_placed)}")
 
                         # Keep the best result
                         if len(additional_placed) > len(best_placed):
@@ -3806,12 +3911,16 @@ def bin_packing_with_inventory(
 
             ###################################################################
             # Keep original bin_packing for now to ensure stability
+            sheet_start = time.time()
+            logger.info(f"🚀 Начинаем размещение для листа #{sheet_counter}, ковров: {len(remaining_carpets)}")
             placed, remaining = bin_packing(
                 remaining_carpets,
                 sheet_size,
                 verbose=False,
                 progress_callback=progress_callback,
             )
+            sheet_time = time.time() - sheet_start
+            logger.info(f"🏁 Лист #{sheet_counter} завершен за {sheet_time:.3f}с, размещено {len(placed)}, осталось {len(remaining)}")
 
             if placed:
                 new_layout = create_new_sheet(sheet_type, sheet_counter, color)
