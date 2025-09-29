@@ -8,7 +8,6 @@ import time
 
 from shapely.geometry import Polygon, Point
 from shapely.strtree import STRtree
-import streamlit as st
 import logging
 
 from carpet import Carpet, PlacedCarpet, UnplacedCarpet, PlacedSheet
@@ -53,17 +52,7 @@ def cache_original_polygons(carpets: list[Carpet]) -> None:
         carpet_id = carpet.carpet_id
         if carpet_id not in _original_polygons:
             # Создаем копию полигона, чтобы избежать проблем со ссылками
-            original_bounds = carpet.polygon.bounds
             _original_polygons[carpet_id] = Polygon(carpet.polygon.exterior.coords)
-            logger.info(
-                f"💾 Сохранен оригинальный полигон для carpet={carpet}, filename={carpet.filename}, bounds={original_bounds}"
-            )
-        else:
-            logger.info(f"⚠️ Полигон для carpet={carpet} уже в кэше - пропускаем")
-
-    logger.info(
-        f"✅ Кэширование завершено, всего оригиналов в кэше: {len(_original_polygons)}"
-    )
 
 
 def get_original_polygon(carpet_id: int) -> Polygon | None:
@@ -484,10 +473,6 @@ def post_placement_optimize_aggressive(
         carpet_idx = blocker_info["carpet_index"]
         current_carpet = optimized_carpets[carpet_idx]
 
-        print(
-            f"🔄 Переразмещаем {current_carpet.filename} (блокирует {blocker_info['blocking_amount']/100:.0f} см²)"
-        )
-
         # Восстанавливаем исходную форму ковра
         original_polygon = rotate_polygon(current_carpet.polygon, -current_carpet.angle)
 
@@ -540,7 +525,9 @@ def post_placement_optimize_aggressive(
             for test_x in range(0, int(sheet_width_mm - rot_width), int(step_x)):
                 for test_y in range(0, int(sheet_height_mm - rot_height), int(step_y)):
                     test_positions.append((test_x, test_y))
-                    if len(test_positions) > 15:  # Уменьшили лимит для ускорения (было 20)
+                    if (
+                        len(test_positions) > 15
+                    ):  # Уменьшили лимит для ускорения (было 20)
                         break
                 if len(test_positions) > 15:
                     break
@@ -594,10 +581,6 @@ def post_placement_optimize_aggressive(
         if (
             best_placement and best_improvement > 100
         ):  # REDUCED: Минимум 10 см² улучшения (более агрессивно)
-            print(
-                f"✅ Найдено лучшее размещение: освобождает {best_improvement/100:.0f} см²"
-            )
-
             optimized_carpets[carpet_idx] = PlacedCarpet(
                 polygon=best_placement["polygon"],
                 x_offset=best_placement["x_offset"],
@@ -610,13 +593,6 @@ def post_placement_optimize_aggressive(
                 priority=current_carpet.priority,
             )
             improvements_made += 1
-        else:
-            print(
-                f"❌ Лучшее размещение не найдено (улучшение: {best_improvement/100:.0f} см²)"
-            )
-
-    if improvements_made > 0:
-        print(f"🎊 Агрессивная оптимизация улучшила {improvements_made} ковров!")
 
     return optimized_carpets
 
@@ -847,7 +823,9 @@ def apply_placement_transform(
     return final_polygon
 
 
-def check_collision_with_strtree(polygon: Polygon, placed_polygons: list[Polygon]) -> bool:
+def check_collision_with_strtree(
+    polygon: Polygon, placed_polygons: list[Polygon]
+) -> bool:
     """Ultra-fast collision check using STRtree spatial index."""
     if not placed_polygons:
         return False
@@ -867,6 +845,7 @@ def check_collision_with_strtree(polygon: Polygon, placed_polygons: list[Polygon
             return True
 
     return False
+
 
 def check_collision_fast(
     polygon1: Polygon, polygon2: Polygon, min_gap: float = 0.1
@@ -925,11 +904,6 @@ def bin_packing_with_existing(
 
     # Start with existing placed polygons as obstacles
     obstacles = [placed_tuple.polygon for placed_tuple in existing_placed]
-
-    if verbose:
-        st.info(
-            f"Дозаполняем лист с {len(obstacles)} существующими деталями, добавляем {len(polygons)} новых"
-        )
 
     # IMPROVEMENT 1: Sort polygons by area and perimeter for better packing
     def get_polygon_priority(polygon_tuple: Carpet):
@@ -1057,14 +1031,6 @@ def bin_packing_with_existing(
                 shape_bonus -= tetris_bonus  # Negative is better
 
                 total_score = position_score + shape_bonus
-
-                # DEBUG: Log scoring for each orientation
-                if verbose:
-                    print(
-                        f"  Angle {angle}°: pos=({best_x:.1f},{best_y:.1f}), "
-                        f"pos_score={position_score:.0f}, shape_bonus={shape_bonus:.0f}, "
-                        f"tetris_bonus={tetris_bonus:.0f}, total={total_score:.0f}, aspect_ratio={aspect_ratio:.2f}"
-                    )
 
                 if total_score < best_priority:
                     best_priority = total_score
@@ -1499,18 +1465,12 @@ def bin_packing(
     """Optimize placement of complex polygons on a sheet with ultra-dense/polygonal/improved algorithms."""
 
     # Performance timing (no algorithm changes)
-    start_time = time.time()
 
     # Convert sheet size from cm to mm to match DXF polygon units
     sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
 
     placed: list[PlacedCarpet] = []
     unplaced: list[UnplacedCarpet] = []
-
-    if verbose:
-        st.info(
-            f"Начинаем стандартную упаковку {len(polygons)} полигонов на листе {sheet_size[0]}x{sheet_size[1]} см"
-        )
 
     # IMPROVEMENT 1: Enhanced polygon sorting for optimal packing density
     def get_polygon_priority(carpet: Carpet):
@@ -1544,9 +1504,6 @@ def bin_packing(
 
     # Set dataset size context for adaptive algorithms
     find_bottom_left_position._dataset_size = len(sorted_polygons)
-
-    if verbose:
-        st.info("✨ Сортировка полигонов по площади (сначала крупные)")
 
     # PERFORMANCE: Adaptive processing - гарантированная обработка всех ковров
     def should_process_carpet(index, total_count, placed_count):
@@ -1592,10 +1549,6 @@ def bin_packing(
         poly_height = bounds[3] - bounds[1]
 
         if poly_width > sheet_width_mm or poly_height > sheet_height_mm:
-            if verbose:
-                st.warning(
-                    f"Полигон из {carpet.filename} слишком большой: {poly_width/10:.1f}x{poly_height/10:.1f} см > {sheet_size[0]}x{sheet_size[1]} см"
-                )
             unplaced.append(UnplacedCarpet.from_carpet(carpet))
             continue
 
@@ -1692,9 +1645,9 @@ def bin_packing(
                 # Предпочитаем ориентации которые максимизируют непрерывное свободное пространство сверху
 
                 # Симулируем размещение этого ковра и вычисляем будущую максимальную высоту
-                dx_to_target = best_x - rotated_bounds[0]
-                dy_to_target = best_y - rotated_bounds[1]
-                test_translated = translate_polygon(rotated, dx_to_target, dy_to_target)
+                # dx_to_target = best_x - rotated_bounds[0]
+                # dy_to_target = best_y - rotated_bounds[1]
+                # test_translated = translate_polygon(rotated, dx_to_target, dy_to_target)
 
                 # REVOLUTIONARY: True tetris quality assessment
                 tetris_bonus = calculate_tetris_quality_bonus(
@@ -1741,7 +1694,7 @@ def bin_packing(
                 )
             )
 
-            # 🚀 РЕВОЛЮЦИОННАЯ POST-PLACEMENT OPTIMIZATION
+            # POST-PLACEMENT OPTIMIZATION
             if len(placed) >= 2:  # Применяем только если есть что оптимизировать
                 try:
                     # Этап 1: АГРЕССИВНАЯ Post-Placement оптимизация (полное переразмещение проблемных ковров)
@@ -1779,47 +1732,12 @@ def bin_packing(
                             break
 
                     if not collision_found:
-                        # Вычисляем улучшения
-                        original_trapped = calculate_trapped_space(
-                            placed, sheet_width_mm, sheet_height_mm
-                        )
-                        optimized_trapped = calculate_trapped_space(
-                            final_optimized, sheet_width_mm, sheet_height_mm
-                        )
-
-                        trapped_improvement = original_trapped - optimized_trapped
-
                         placed = final_optimized  # Применяем полную оптимизацию
 
-                        if (
-                            verbose and trapped_improvement > 5000
-                        ):  # Больше 500 см² улучшения
-                            st.success(
-                                f"🎯 Post-Placement оптимизация освободила {trapped_improvement/100:.0f} см² заперного пространства!"
-                            )
-
-                        # Дополнительная информация о верхнем пространстве
-                        free_top_area = calculate_free_top_space(
-                            placed, sheet_width_mm, sheet_height_mm
-                        )
-                        if verbose and free_top_area > 50000:  # Больше 500 см²
-                            st.info(f"🏞️ Свободно сверху: {free_top_area/10000:.0f} см²")
-
-                    elif verbose:
-                        st.warning(
-                            "⚠️ Post-Placement оптимизация отменена - обнаружены коллизии"
-                        )
-
-                except Exception as e:
-                    if verbose:
-                        st.error(f"❌ Ошибка Post-Placement оптимизации: {e}")
-                        # Продолжаем с исходным размещением
+                except Exception:
+                    logger.exception("❌ Ошибка Post-Placement оптимизации.")
 
             placed_successfully = True
-            if verbose:
-                st.success(
-                    f"✅ Размещен {carpet.filename} (угол: {best_placement['angle']}°)"
-                )
         else:
             # Fallback to original grid method if no bottom-left position found
             simple_bounds = carpet.polygon.bounds
@@ -1870,7 +1788,9 @@ def bin_packing(
 
                     # Final precise collision check using STRtree
                     placed_polygons = [p.polygon for p in placed]
-                    collision = check_collision_with_strtree(translated, placed_polygons)
+                    collision = check_collision_with_strtree(
+                        translated, placed_polygons
+                    )
 
                     if not collision:
                         placed.append(
@@ -1887,18 +1807,12 @@ def bin_packing(
                             )
                         )
                         placed_successfully = True
-                        if verbose:
-                            st.success(
-                                f"✅ Размещен {carpet.filename} (сетчатое размещение)"
-                            )
                         break
 
                 if placed_successfully:
                     break
 
         if not placed_successfully:
-            if verbose:
-                st.warning(f"❌ Не удалось разместить полигон из {carpet.filename}")
             unplaced.append(
                 UnplacedCarpet(
                     polygon=carpet.polygon,
@@ -1959,12 +1873,6 @@ def bin_packing(
     # if placed:
     #     placed = apply_gravity_optimization(placed, sheet_width_mm, sheet_height_mm)
 
-    if verbose:
-        usage_percent = calculate_usage_percent(placed, sheet_size)
-        elapsed_time = time.time() - start_time
-        st.info(
-            f"🏁 Упаковка завершена: {len(placed)} размещено, {len(unplaced)} не размещено, использование: {usage_percent:.1f}%, время: {elapsed_time:.1f}с"
-        )
     return placed, unplaced
 
 
@@ -2883,7 +2791,9 @@ def find_enhanced_contour_following_position(
         # Collision check
         collision = False
         for obstacle in obstacles:
-            if check_collision(test_polygon, obstacle, min_gap=1.0):  # Увеличили для предотвращения пересечений
+            if check_collision(
+                test_polygon, obstacle, min_gap=1.0
+            ):  # Увеличили для предотвращения пересечений
                 collision = True
                 break
 
@@ -3240,48 +3150,6 @@ def calculate_placement_waste(
     return waste
 
 
-def smart_bin_packing(
-    carpets: list[Carpet],
-    sheet_size: tuple[float, float],
-    verbose: bool = False,
-    progress_callback=None,
-) -> tuple[list[PlacedCarpet], list[UnplacedCarpet]]:
-    """Optimized single-pass bin packing with smart sorting."""
-    if not carpets:
-        return [], []
-
-    # ENHANCED BIG-TO-SMALL STRATEGY: Large carpets first, then progressively smaller
-    # This creates better foundation for Tetris-style falling behavior
-    def get_enhanced_smart_score(carpet: Carpet):
-        bounds = carpet.polygon.bounds
-        area = carpet.polygon.area
-        width = bounds[2] - bounds[0]
-        height = bounds[3] - bounds[1]
-
-        # PRIMARY: Area is the most important factor (bigger first)
-        area_score = area * 1000000  # Scale up area significantly
-
-        # SECONDARY: Prefer shapes that are easier to place around (wider is better for foundation)
-        width_bonus = width * 1000  # Bonus for width (good for bottom layer)
-
-        # TERTIARY: Slight penalty for very tall narrow shapes (harder to fill around)
-        aspect_ratio = width / height if height > 0 else 1
-        if aspect_ratio < 0.3:  # Very tall narrow shapes
-            narrow_penalty = 50000  # Small penalty
-        else:
-            narrow_penalty = 0
-
-        return area_score + width_bonus - narrow_penalty
-
-    # Sort by enhanced strategy: largest areas with good foundation potential first
-    smart_sorted = sorted(carpets, key=get_enhanced_smart_score, reverse=True)
-
-    # Use enhanced bin packing with tighter gap settings
-    placed, unplaced = bin_packing(smart_sorted, sheet_size, verbose=verbose)
-
-    return placed, unplaced
-
-
 def try_simple_placement(
     carpet: Carpet, existing_placed: list[PlacedCarpet], sheet_size: tuple[float, float]
 ) -> PlacedCarpet | None:
@@ -3293,9 +3161,6 @@ def try_simple_placement(
 
     # Get existing obstacles
     obstacles = [placed.polygon for placed in existing_placed]
-
-    # Initialize candidates list
-    candidates = []
 
     # Try multiple approaches for maximum space utilization
     placement_strategies = [
@@ -3651,17 +3516,19 @@ def bin_packing_with_inventory(
                     # Apply the best result if any improvement
                     if best_placed:
                         # CRITICAL: Verify no overlaps before accepting placement
-                        all_existing_polygons = [
+                        all_existing_polygons = (
                             p.polygon for p in layout.placed_polygons
-                        ]
-                        new_polygons = [p.polygon for p in best_placed]
+                        )
+                        new_polygons = (p.polygon for p in best_placed)
 
                         # Check for any overlaps between new and existing polygons
                         has_overlap = False
                         for new_poly in new_polygons:
                             for existing_poly in all_existing_polygons:
                                 if check_collision(
-                                    new_poly, existing_poly, min_gap=1.0  # Увеличили для предотвращения пересечений
+                                    new_poly,
+                                    existing_poly,
+                                    min_gap=1.0,  # Увеличили для предотвращения пересечений
                                 ):
                                     logger.error(
                                         f"КРИТИЧЕСКАЯ ОШИБКА: Обнаружено перекрытие при агрессивном дозаполнении листа #{layout.sheet_number}"
@@ -3687,7 +3554,6 @@ def bin_packing_with_inventory(
                             logger.warning(
                                 "Отклонено агрессивное дозаполнение из-за обнаруженных перекрытий"
                             )
-                            best_placed = []  # Reset to prevent further processing
 
                             # Remove successfully placed carpets from remaining list
                             placed_carpet_set = set(
@@ -3698,10 +3564,6 @@ def bin_packing_with_inventory(
                                 for c in remaining_carpets
                                 if c not in placed_carpet_set
                             ]
-
-                            logger.info(
-                                f"    Агрессивно дозаполнен лист #{layout.sheet_number}: +{len(best_placed)} ковров, итого {layout.usage_percent:.1f}%"
-                            )
 
                 except Exception as e:
                     logger.debug(f"Не удалось агрессивно дозаполнить лист: {e}")
@@ -3722,12 +3584,14 @@ def bin_packing_with_inventory(
 
             ###################################################################
             # Keep original bin_packing for now to ensure stability
+            t1 = time.time()
             placed, remaining = bin_packing(
                 remaining_carpets,
                 sheet_size,
                 verbose=False,
                 progress_callback=progress_callback,
             )
+            logger.info(f"bin_packing сработал за {time.time() - t1} c.")
 
             if placed:
                 new_layout = create_new_sheet(sheet_type, sheet_counter, color)
@@ -3746,11 +3610,6 @@ def bin_packing_with_inventory(
                 logger.info(
                     f"    Создан лист #{sheet_counter}: {len(placed)} приоритет1+Excel"
                 )
-
-                if verbose:
-                    st.success(
-                        f"✅ Лист #{sheet_counter} ({sheet_type['name']}): {len(placed)} приоритет1+Excel"
-                    )
 
                 if progress_callback:
                     progress = min(
@@ -3820,11 +3679,6 @@ def bin_packing_with_inventory(
     logger.info("\n=== ИТОГИ РАЗМЕЩЕНИЯ ===")
     logger.info(f"Всего листов создано: {len(placed_sheets)}")
     logger.info(f"Неразмещенных полигонов: {len(all_unplaced)}")
-
-    if verbose:
-        st.info(
-            f"Размещение завершено: {len(placed_sheets)} листов, {len(all_unplaced)} не размещено"
-        )
 
     if progress_callback:
         progress_callback(100, f"Завершено: {len(placed_sheets)} листов создано")
@@ -3992,7 +3846,6 @@ def tighten_layout(
 
     # Создаём список текущих полигонов (будем обновлять)
     current_polys = [item.polygon for item in placed]
-    # Сохраняем сопут. данные (x_off, y_off, angle, filename, color, order_id) с запасом по длине
     meta = placed[:]
 
     n = len(current_polys)

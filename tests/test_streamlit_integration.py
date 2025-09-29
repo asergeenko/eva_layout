@@ -72,7 +72,6 @@ def process_orders(orders) -> list[Carpet]:
             # Обрабатываем найденные DXF файлы
             for dxf_file in dxf_files:
                 try:
-                    # Используем verbose=False чтобы избежать Streamlit вызовов
                     polygon_data = parse_dxf_complete(dxf_file, verbose=False)
                     if polygon_data and polygon_data.get("combined_polygon"):
                         polygon = polygon_data["combined_polygon"]

@@ -279,8 +279,24 @@ if excel_file is not None:
 
             # Add dropdown filter options
             # Get unique values from all orders for dynamic filtering
-            all_marketplaces = sorted(list(set(order.get("marketplace", "") for order in all_orders if order.get("marketplace", ""))))
-            all_border_colors = sorted(list(set(str(order.get("border_color", "")) for order in all_orders if order.get("border_color", ""))))
+            all_marketplaces = sorted(
+                list(
+                    set(
+                        order.get("marketplace", "")
+                        for order in all_orders
+                        if order.get("marketplace", "")
+                    )
+                )
+            )
+            all_border_colors = sorted(
+                list(
+                    set(
+                        str(order.get("border_color", ""))
+                        for order in all_orders
+                        if order.get("border_color", "")
+                    )
+                )
+            )
 
             col_filter1, col_filter2 = st.columns([1, 1])
             with col_filter1:
@@ -493,25 +509,6 @@ if excel_file is not None:
                 # Store selected orders in session state
                 st.session_state.selected_orders = all_selected_orders
                 logger.info(f"Выбрано {len(all_selected_orders)} заказов для обработки")
-                # Log only first few orders to avoid slowdown
-                if len(all_selected_orders) <= 5:
-                    for order in all_selected_orders:
-                        logger.info(
-                            f"  Заказ {order.get('order_id', 'N/A')}: {order.get('article', 'N/A')}"
-                        )
-                else:
-                    # Log only first 3 and last 2 for large lists
-                    for order in all_selected_orders[:3]:
-                        logger.info(
-                            f"  Заказ {order.get('order_id', 'N/A')}: {order.get('article', 'N/A')}"
-                        )
-                    logger.info(
-                        f"  ... (пропущено {len(all_selected_orders) - 5} заказов) ..."
-                    )
-                    for order in all_selected_orders[-2:]:
-                        logger.info(
-                            f"  Заказ {order.get('order_id', 'N/A')}: {order.get('article', 'N/A')}"
-                        )
         else:
             st.warning("⚠️ Не найдено невыполненных заказов в указанных месяцах")
 
@@ -857,14 +854,9 @@ if st.button("🚀 Оптимизировать раскрой"):
                     file_priority,  # Add priority as 5th element
                 )
                 carpets.append(carpet)
-                logger.info(f"ДОБАВЛЕН ПОЛИГОН: order_id={carpet.order_id}")
+                # logger.info(f"ДОБАВЛЕН ПОЛИГОН: order_id={carpet.order_id}")
                 # Store original DXF data using display_name as key
                 original_dxf_data_map[display_name] = parsed_data
-                logger.info(
-                    f"СОЗДАН ПОЛИГОН: файл={display_name}, заказ={file_order_id}, цвет={file_color}"
-                )
-            else:
-                logger.warning(f"Не удалось получить полигон из файла {display_name}")
 
         # Clear progress indicators
         progress_bar.empty()
@@ -882,8 +874,8 @@ if st.button("🚀 Оптимизировать раскрой"):
             order_counts[carpet.order_id] = order_counts.get(carpet.order_id, 0) + 1
 
         logger.info(f"Анализ заказов: найдено {len(order_counts)} уникальных заказов")
-        for order_id, count in order_counts.items():
-            logger.info(f"  • Заказ {order_id}: {count} файлов")
+        # for order_id, count in order_counts.items():
+        #    logger.info(f"  • Заказ {order_id}: {count} файлов")
 
         # Store original dimensions for comparison later
         original_dimensions = {}

@@ -26,7 +26,6 @@ def test_placement_efficiency():
         files = path.rglob("*.dxf", case_sensitive=False)
         for dxf_file in files:
             try:
-                # Используем verbose=False чтобы избежать Streamlit вызовов
                 polygon_data = parse_dxf_complete(dxf_file.as_posix(), verbose=False)
                 if polygon_data and polygon_data.get("combined_polygon"):
                     base_polygon = polygon_data["combined_polygon"]

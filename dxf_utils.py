@@ -3,12 +3,14 @@ import os
 import tempfile
 from io import BytesIO
 
+import logging
 import ezdxf
 import numpy as np
-import streamlit as st
 from shapely import Polygon, unary_union, MultiPolygon
 
 from carpet import PlacedCarpet
+
+logger = logging.getLogger(__name__)
 
 
 def convert_entity_to_polygon_improved(entity):
@@ -100,8 +102,8 @@ def convert_entity_to_polygon_improved(entity):
             if len(points) >= 3:
                 return Polygon(points)
 
-    except Exception as e:
-        print(f"⚠️ Ошибка конвертации {entity_type}: {e}")
+    except Exception:
+        logger.exception(f"Ошибка конвертации {entity_type}.")
 
     return None
 
@@ -124,10 +126,6 @@ def save_dxf_layout_complete(
         transformed_polygon = placed_element.polygon
         rotation_angle = placed_element.angle
         file_name = placed_element.filename
-
-        print(
-            f"🔧 Processing {file_name}: transformed bounds = {transformed_polygon.bounds}"
-        )
 
         # Get original DXF data
         # Handle case where file_name might be a float64 or other non-string type
@@ -639,14 +637,8 @@ def parse_dxf(file, verbose=True) -> Polygon:
             if polygon and polygon.is_valid and polygon.area > 0:
                 polygons.append(polygon)
 
-        except Exception as e:
-            if verbose:
-                st.warning(f"Ошибка обработки {entity_type}: {e}")
-
-    if verbose:
-        st.info(f"Всего объектов: {total_entities}")
-        st.info(f"Найденные типы объектов: {entity_types}")
-        st.info(f"Создано валидных полигонов: {len(polygons)}")
+        except Exception:
+            logger.exception(f"Ошибка обработки {entity_type}")
 
     # Combine all polygons into one using unary_union
     if polygons:
@@ -658,18 +650,8 @@ def parse_dxf(file, verbose=True) -> Polygon:
         if hasattr(combined, "geoms"):
             # It's a MultiPolygon, take convex hull to get single polygon
             combined = combined.convex_hull
-            if verbose:
-                st.info(
-                    f"Объединено в один полигон (convex hull), площадь: {combined.area:.2f}"
-                )
-        else:
-            if verbose:
-                st.info(f"Объединено в один полигон, площадь: {combined.area:.2f}")
-
         return combined
     else:
-        if verbose:
-            st.error("Не найдено валидных полигонов для объединения")
         return None
 
 
@@ -759,27 +741,11 @@ def parse_dxf_complete(file: BytesIO | str, verbose: bool = True):
                     fixed_polygon = polygon.buffer(0)
                     if fixed_polygon.is_valid:  # and fixed_polygon.area > 0.1:
                         polygon = fixed_polygon
-                        if verbose:
-                            st.info(
-                                "   🔧 Исправлен невалидный полигон с помощью buffer(0)"
-                            )
                     else:
-                        if verbose:
-                            st.warning("   ❌ Не удалось исправить невалидный полигон")
                         continue
                 result["polygons"].append(polygon)
-        except Exception as e:
-            if verbose:
-                st.warning(f"⚠️ Не удалось конвертировать {entity_type} в полигон: {e}")
-
-    if verbose:
-        st.info("📊 Парсинг завершен:")
-        st.info(f"   • Всего элементов: {total_entities}")
-        st.info(f"   • Типы: {entity_types}")
-        st.info(f"   • Полигонов для оптимизации: {len(result['polygons'])}")
-        st.info(
-            f"   • Сохранено исходных элементов: {len(result['original_entities'])}"
-        )
+        except Exception:
+            logger.exception(f"⚠️ Не удалось конвертировать {entity_type} в полигон.")
 
     # Calculate overall bounds
     if result["polygons"]:
@@ -800,15 +766,9 @@ def parse_dxf_complete(file: BytesIO | str, verbose: bool = True):
                 # Keep as MultiPolygon or take the largest polygon
                 largest_polygon = max(combined.geoms, key=lambda p: p.area)
                 result["combined_polygon"] = largest_polygon
-                if verbose:
-                    st.info(
-                        f"   • Взят наибольший полигон из {len(combined.geoms)} (без упрощения)"
-                    )
             else:
                 result["combined_polygon"] = combined
     else:
-        if verbose:
-            st.warning("⚠️ Не найдено полигонов для оптимизации")
         result["combined_polygon"] = None
 
     # Calculate real bounds of SPLINE elements for accurate transformation
@@ -843,10 +803,6 @@ def parse_dxf_complete(file: BytesIO | str, verbose: bool = True):
                 max(all_spline_xs),
                 max(all_spline_ys),
             )
-            if verbose:
-                st.info(
-                    f"✅ Сохранены реальные bounds SPLINE элементов: {result['real_spline_bounds']}"
-                )
 
     # Store original data separately since Shapely polygons don't allow attribute assignment
     # We'll pass this data through function parameters instead
