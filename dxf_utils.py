@@ -10,6 +10,10 @@ from shapely import Polygon, unary_union, MultiPolygon
 
 from carpet import PlacedCarpet
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def convert_entity_to_polygon_improved(entity):
     """Improved entity to polygon conversion with better SPLINE handling."""
@@ -101,7 +105,7 @@ def convert_entity_to_polygon_improved(entity):
                 return Polygon(points)
 
     except Exception as e:
-        print(f"⚠️ Ошибка конвертации {entity_type}: {e}")
+        logger.error(f"⚠️ Ошибка конвертации {entity_type}: {e}")
 
     return None
 
@@ -124,10 +128,6 @@ def save_dxf_layout_complete(
         transformed_polygon = placed_element.polygon
         rotation_angle = placed_element.angle
         file_name = placed_element.filename
-
-        print(
-            f"🔧 Processing {file_name}: transformed bounds = {transformed_polygon.bounds}"
-        )
 
         # Get original DXF data
         # Handle case where file_name might be a float64 or other non-string type
