@@ -5,12 +5,9 @@ __version__ = "1.5.0"
 
 import numpy as np
 import time
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from functools import partial
 
 from shapely.geometry import Polygon, Point
 from shapely.strtree import STRtree
-from shapely.prepared import prep
 import streamlit as st
 import logging
 
@@ -58,17 +55,7 @@ def cache_original_polygons(carpets: list[Carpet]) -> None:
         carpet_id = carpet.carpet_id
         if carpet_id not in _original_polygons:
             # Создаем копию полигона, чтобы избежать проблем со ссылками
-            original_bounds = carpet.polygon.bounds
             _original_polygons[carpet_id] = Polygon(carpet.polygon.exterior.coords)
-            logger.info(
-                f"💾 Сохранен оригинальный полигон для carpet={carpet}, filename={carpet.filename}, bounds={original_bounds}"
-            )
-        else:
-            logger.info(f"⚠️ Полигон для carpet={carpet} уже в кэше - пропускаем")
-
-    logger.info(
-        f"✅ Кэширование завершено, всего оригиналов в кэше: {len(_original_polygons)}"
-    )
 
 
 def get_original_polygon(carpet_id: int) -> Polygon | None:
@@ -489,10 +476,6 @@ def post_placement_optimize_aggressive(
         carpet_idx = blocker_info["carpet_index"]
         current_carpet = optimized_carpets[carpet_idx]
 
-        print(
-            f"🔄 Переразмещаем {current_carpet.filename} (блокирует {blocker_info['blocking_amount']/100:.0f} см²)"
-        )
-
         # Восстанавливаем исходную форму ковра
         original_polygon = rotate_polygon(current_carpet.polygon, -current_carpet.angle)
 
@@ -545,7 +528,9 @@ def post_placement_optimize_aggressive(
             for test_x in range(0, int(sheet_width_mm - rot_width), int(step_x)):
                 for test_y in range(0, int(sheet_height_mm - rot_height), int(step_y)):
                     test_positions.append((test_x, test_y))
-                    if len(test_positions) > 15:  # Уменьшили лимит для ускорения (было 20)
+                    if (
+                        len(test_positions) > 15
+                    ):  # Уменьшили лимит для ускорения (было 20)
                         break
                 if len(test_positions) > 15:
                     break
@@ -599,10 +584,6 @@ def post_placement_optimize_aggressive(
         if (
             best_placement and best_improvement > 100
         ):  # REDUCED: Минимум 10 см² улучшения (более агрессивно)
-            print(
-                f"✅ Найдено лучшее размещение: освобождает {best_improvement/100:.0f} см²"
-            )
-
             optimized_carpets[carpet_idx] = PlacedCarpet(
                 polygon=best_placement["polygon"],
                 x_offset=best_placement["x_offset"],
@@ -615,13 +596,6 @@ def post_placement_optimize_aggressive(
                 priority=current_carpet.priority,
             )
             improvements_made += 1
-        else:
-            print(
-                f"❌ Лучшее размещение не найдено (улучшение: {best_improvement/100:.0f} см²)"
-            )
-
-    if improvements_made > 0:
-        print(f"🎊 Агрессивная оптимизация улучшила {improvements_made} ковров!")
 
     return optimized_carpets
 
@@ -855,7 +829,10 @@ def apply_placement_transform(
 _global_strtree = None
 _global_strtree_polygons = []
 
-def check_collision_with_strtree_cached(polygon: Polygon, placed_polygons: list[Polygon]) -> bool:
+
+def check_collision_with_strtree_cached(
+    polygon: Polygon, placed_polygons: list[Polygon]
+) -> bool:
     """Ultra-fast collision check using cached STRtree spatial index."""
     global _global_strtree, _global_strtree_polygons
 
@@ -880,7 +857,10 @@ def check_collision_with_strtree_cached(polygon: Polygon, placed_polygons: list[
 
     return False
 
-def check_collision_with_strtree(polygon: Polygon, placed_polygons: list[Polygon]) -> bool:
+
+def check_collision_with_strtree(
+    polygon: Polygon, placed_polygons: list[Polygon]
+) -> bool:
     """Ultra-fast collision check using STRtree spatial index."""
     if not placed_polygons:
         return False
@@ -901,6 +881,7 @@ def check_collision_with_strtree(polygon: Polygon, placed_polygons: list[Polygon
 
     return False
 
+
 def test_position_parallel(args):
     """Worker function for parallel position testing."""
     position, carpet_polygon, placed_polygons, sheet_bounds = args
@@ -911,8 +892,12 @@ def test_position_parallel(args):
 
     # Check bounds
     bounds = translated.bounds
-    if not (bounds[0] >= sheet_bounds[0] and bounds[1] >= sheet_bounds[1] and
-            bounds[2] <= sheet_bounds[2] and bounds[3] <= sheet_bounds[3]):
+    if not (
+        bounds[0] >= sheet_bounds[0]
+        and bounds[1] >= sheet_bounds[1]
+        and bounds[2] <= sheet_bounds[2]
+        and bounds[3] <= sheet_bounds[3]
+    ):
         return None
 
     # Check collision
@@ -921,8 +906,13 @@ def test_position_parallel(args):
 
     return (x, y)
 
-def find_position_vectorized(carpet_polygon: Polygon, placed_polygons: list[Polygon],
-                            sheet_width: float, sheet_height: float) -> tuple[float | None, float | None]:
+
+def find_position_vectorized(
+    carpet_polygon: Polygon,
+    placed_polygons: list[Polygon],
+    sheet_width: float,
+    sheet_height: float,
+) -> tuple[float | None, float | None]:
     """Find position using vectorized numpy operations for maximum speed."""
 
     # Generate candidate positions using numpy
@@ -954,8 +944,12 @@ def find_position_vectorized(carpet_polygon: Polygon, placed_polygons: list[Poly
 
         # Quick bounds check
         t_bounds = translated.bounds
-        if not (t_bounds[0] >= -0.01 and t_bounds[1] >= -0.01 and
-                t_bounds[2] <= sheet_width + 0.01 and t_bounds[3] <= sheet_height + 0.01):
+        if not (
+            t_bounds[0] >= -0.01
+            and t_bounds[1] >= -0.01
+            and t_bounds[2] <= sheet_width + 0.01
+            and t_bounds[3] <= sheet_height + 0.01
+        ):
             continue
 
         # STRtree collision check with caching
@@ -963,6 +957,7 @@ def find_position_vectorized(carpet_polygon: Polygon, placed_polygons: list[Poly
             return x, y
 
     return None, None
+
 
 def check_collision_fast(
     polygon1: Polygon, polygon2: Polygon, min_gap: float = 0.1
@@ -1643,9 +1638,6 @@ def bin_packing(
     # Set dataset size context for adaptive algorithms
     find_bottom_left_position._dataset_size = len(sorted_polygons)
 
-    if verbose:
-        st.info("✨ Сортировка полигонов по площади (сначала крупные)")
-
     # PERFORMANCE: Adaptive processing - гарантированная обработка всех ковров
     def should_process_carpet(index, total_count, placed_count):
         """
@@ -1920,39 +1912,16 @@ def bin_packing(
                 )
         else:
             # Fallback to original grid method if no bottom-left position found
-            simple_bounds = carpet.polygon.bounds
-            simple_width = simple_bounds[2] - simple_bounds[0]
-            simple_height = simple_bounds[3] - simple_bounds[1]
-
-            # Optimized grid placement as fallback with timeout
-            max_grid_attempts = (
-                5 if len(placed) > 10 else 10
-            )  # Further reduced for many obstacles
-            if sheet_width_mm > simple_width:
-                x_positions = np.linspace(
-                    0, sheet_width_mm - simple_width, max_grid_attempts
-                )
-            else:
-                x_positions = [0]
-
-            if sheet_height_mm > simple_height:
-                y_positions = np.linspace(
-                    0, sheet_height_mm - simple_height, max_grid_attempts
-                )
-            else:
-                y_positions = [0]
-
             # VECTORIZED POSITION SEARCH - numpy оптимизация
-            t1 = time.time()
             placed_polygons = [p.polygon for p in placed]
-            result_pos = find_position_vectorized(carpet.polygon, placed_polygons, sheet_width_mm, sheet_height_mm)
-            vectorized_time = time.time() - t1
+            result_pos = find_position_vectorized(
+                carpet.polygon, placed_polygons, sheet_width_mm, sheet_height_mm
+            )
 
             if result_pos[0] is not None:
                 x_offset = result_pos[0]
                 y_offset = result_pos[1]
                 translated = translate_polygon(carpet.polygon, x_offset, y_offset)
-                placement_time += vectorized_time
 
                 # Position found via parallel search
                 placed.append(
@@ -1968,15 +1937,7 @@ def bin_packing(
                         order_id=carpet.order_id,
                     )
                 )
-                placed_successfully = True
-                if verbose:
-                    st.success(
-                        f"✅ Размещен {carpet.filename} (параллельное размещение)"
-                    )
                 break
-
-                if placed_successfully:
-                    break
 
         if not placed_successfully:
             if verbose:
@@ -2047,8 +2008,12 @@ def bin_packing(
         st.info(
             f"🏁 Упаковка завершена: {len(placed)} размещено, {len(unplaced)} не размещено, использование: {usage_percent:.1f}%, время: {elapsed_time:.1f}с"
         )
-        st.info(f"⏱️ ПРОФИЛИРОВАНИЕ: Размещение: {placement_time:.2f}с, Коллизии: {collision_time:.2f}с")
-        logger.info(f"⏱️ ДЕТАЛИ: translate_polygon={placement_time:.2f}с, STRtree_collision={collision_time:.2f}с")
+        st.info(
+            f"⏱️ ПРОФИЛИРОВАНИЕ: Размещение: {placement_time:.2f}с, Коллизии: {collision_time:.2f}с"
+        )
+        logger.info(
+            f"⏱️ ДЕТАЛИ: translate_polygon={placement_time:.2f}с, STRtree_collision={collision_time:.2f}с"
+        )
     return placed, unplaced
 
 
@@ -2967,7 +2932,9 @@ def find_enhanced_contour_following_position(
         # Collision check
         collision = False
         for obstacle in obstacles:
-            if check_collision(test_polygon, obstacle, min_gap=1.0):  # Увеличили для предотвращения пересечений
+            if check_collision(
+                test_polygon, obstacle, min_gap=1.0
+            ):  # Увеличили для предотвращения пересечений
                 collision = True
                 break
 
@@ -3361,7 +3328,12 @@ def smart_bin_packing(
     smart_sorted = sorted(carpets, key=get_enhanced_smart_score, reverse=True)
 
     # Use enhanced bin packing with tighter gap settings
+    binpacking_start = time.time()
     placed, unplaced = bin_packing(smart_sorted, sheet_size, verbose=verbose)
+    binpacking_time = time.time() - binpacking_start
+    logger.info(
+        f"bin_packing внутри smart_bin_packing завершен за {binpacking_time:.3f}с, размещено {len(placed)}, не размещено {len(unplaced)}"
+    )
 
     return placed, unplaced
 
@@ -3377,9 +3349,6 @@ def try_simple_placement(
 
     # Get existing obstacles
     obstacles = [placed.polygon for placed in existing_placed]
-
-    # Initialize candidates list
-    candidates = []
 
     # Try multiple approaches for maximum space utilization
     placement_strategies = [
@@ -3745,7 +3714,9 @@ def bin_packing_with_inventory(
                         for new_poly in new_polygons:
                             for existing_poly in all_existing_polygons:
                                 if check_collision(
-                                    new_poly, existing_poly, min_gap=1.0  # Увеличили для предотвращения пересечений
+                                    new_poly,
+                                    existing_poly,
+                                    min_gap=1.0,  # Увеличили для предотвращения пересечений
                                 ):
                                     logger.error(
                                         f"КРИТИЧЕСКАЯ ОШИБКА: Обнаружено перекрытие при агрессивном дозаполнении листа #{layout.sheet_number}"
@@ -3806,11 +3777,16 @@ def bin_packing_with_inventory(
 
             ###################################################################
             # Keep original bin_packing for now to ensure stability
+            binpacking_start = time.time()
             placed, remaining = bin_packing(
                 remaining_carpets,
                 sheet_size,
                 verbose=False,
                 progress_callback=progress_callback,
+            )
+            binpacking_time = time.time() - binpacking_start
+            logger.info(
+                f"bin_packing внутри bin_packing_with_inventory завершен за {binpacking_time:.3f}с, размещено {len(placed)}, не размещено {len(remaining)}"
             )
 
             if placed:

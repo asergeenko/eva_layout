@@ -279,8 +279,24 @@ if excel_file is not None:
 
             # Add dropdown filter options
             # Get unique values from all orders for dynamic filtering
-            all_marketplaces = sorted(list(set(order.get("marketplace", "") for order in all_orders if order.get("marketplace", ""))))
-            all_border_colors = sorted(list(set(str(order.get("border_color", "")) for order in all_orders if order.get("border_color", ""))))
+            all_marketplaces = sorted(
+                list(
+                    set(
+                        order.get("marketplace", "")
+                        for order in all_orders
+                        if order.get("marketplace", "")
+                    )
+                )
+            )
+            all_border_colors = sorted(
+                list(
+                    set(
+                        str(order.get("border_color", ""))
+                        for order in all_orders
+                        if order.get("border_color", "")
+                    )
+                )
+            )
 
             col_filter1, col_filter2 = st.columns([1, 1])
             with col_filter1:
@@ -843,10 +859,6 @@ if st.button("🚀 Оптимизировать раскрой"):
 
                 # DEBUG: Log all file attributes to understand the issue
                 file_attrs = [attr for attr in dir(file) if not attr.startswith("_")]
-                logger.debug(f"ФАЙЛ {display_name}: атрибуты = {file_attrs}")
-                logger.debug(
-                    f"ФАЙЛ {display_name}: color = {file_color}, order_id = {file_order_id}, priority = {file_priority}"
-                )
 
                 # Use the display_name for polygon identification, include priority
                 carpet = Carpet(
@@ -857,12 +869,8 @@ if st.button("🚀 Оптимизировать раскрой"):
                     file_priority,  # Add priority as 5th element
                 )
                 carpets.append(carpet)
-                logger.info(f"ДОБАВЛЕН ПОЛИГОН: order_id={carpet.order_id}")
                 # Store original DXF data using display_name as key
                 original_dxf_data_map[display_name] = parsed_data
-                logger.info(
-                    f"СОЗДАН ПОЛИГОН: файл={display_name}, заказ={file_order_id}, цвет={file_color}"
-                )
             else:
                 logger.warning(f"Не удалось получить полигон из файла {display_name}")
 
@@ -882,8 +890,6 @@ if st.button("🚀 Оптимизировать раскрой"):
             order_counts[carpet.order_id] = order_counts.get(carpet.order_id, 0) + 1
 
         logger.info(f"Анализ заказов: найдено {len(order_counts)} уникальных заказов")
-        for order_id, count in order_counts.items():
-            logger.info(f"  • Заказ {order_id}: {count} файлов")
 
         # Store original dimensions for comparison later
         original_dimensions = {}
@@ -982,7 +988,7 @@ if st.button("🚀 Оптимизировать раскрой"):
             # Clear progress indicators after a moment
             import time
 
-            time.sleep(1)
+            time.sleep(0.3)
             optimization_progress.empty()
             optimization_status.empty()
 
