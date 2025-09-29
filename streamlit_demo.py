@@ -218,11 +218,9 @@ if st.session_state.available_sheets:
         if st.button("🗑️ Удалить все листы", key="clear_sheets"):
             st.session_state.available_sheets = []
             st.rerun()
-else:
-    st.info("Добавьте типы листов, которые у вас есть в наличии.")
 
 # Order Loading Section
-st.header("📋 Загрузка заказов из Excel таблицы")
+st.header("📋 Загрузка заказов")
 
 # Initialize session state for orders
 if "selected_orders" not in st.session_state:
@@ -230,6 +228,7 @@ if "selected_orders" not in st.session_state:
 if "manual_files" not in st.session_state:
     st.session_state.manual_files = []
 
+st.subheader("1. Excel файл")
 # Excel file upload
 excel_file = st.file_uploader(
     "Загрузите файл заказов Excel", type=["xlsx", "xls"], key="excel_upload"
@@ -540,10 +539,7 @@ if st.session_state.selected_orders:
 
 
 # Additional DXF files section (always available)
-st.subheader("📎 Загрузить вручную")
-st.write(
-    "Добавьте DXF файлы группами. Каждая группа будет иметь свои настройки цвета и количества."
-)
+st.subheader("2. Загрузить вручную")
 
 # Initialize session state for file groups
 if "file_groups" not in st.session_state:
@@ -555,7 +551,7 @@ if "group_counter" not in st.session_state:
 # Use group_counter in key to reset uploader after each group creation
 uploader_key = f"manual_dxf_{len(st.session_state.file_groups)}"
 manual_files = st.file_uploader(
-    "Выберите DXF файлы (будет создана новая группа)",
+    "Выберите DXF файлы (будет создана новая группа). Каждая группа будет иметь свои настройки цвета и количества.",
     type=["dxf"],
     accept_multiple_files=True,
     key=uploader_key,
@@ -939,10 +935,10 @@ if st.button("🚀 Оптимизировать раскрой"):
             f"✅ Полигоны сохранены в исходном масштабе: {len(carpets)} объектов"
         )
 
-        st.header("🔄 Процесс оптимизации")
+        st.header("🔄 Раскладка ковров")
         try:
             # Actual processing with progress tracking
-            st.info("🔄 Запуск процесса оптимизации...")
+            # st.info("🔄 Запуск процесса раскладки...")
             optimization_progress = st.progress(5)
             optimization_status = st.empty()
 
@@ -969,7 +965,7 @@ if st.button("🚀 Оптимизировать раскрой"):
 
             # Finalize
             optimization_progress.progress(100)
-            optimization_status.text("✅ Оптимизация завершена.")
+            optimization_status.text("✅ Раскладка завершена.")
 
             # Clear progress indicators after a moment
             import time
@@ -980,7 +976,7 @@ if st.button("🚀 Оптимизировать раскрой"):
 
         except ValueError as e:
             # Handle any other ValueError exceptions
-            st.error(f"❌ Ошибка при оптимизации: {str(e)}")
+            st.error(f"❌ Ошибка при раскладке: {str(e)}")
             st.stop()
 
         # Convert to old format for compatibility with existing display code
