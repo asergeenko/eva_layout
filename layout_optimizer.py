@@ -15,6 +15,8 @@ from geometry_utils import translate_polygon, rotate_polygon
 from fast_geometry import (
     SpatialIndexCache,
     check_collision_fast_indexed_intersects_only,
+    extract_bounds_array,
+    filter_positions_by_bounds_only,
 )
 
 # Настройка логирования
@@ -2930,9 +2932,13 @@ def find_bottom_left_position_with_obstacles(
     candidate_positions = list(set(candidate_positions))
     candidate_positions.sort(key=lambda pos: (pos[1], pos[0]))
 
-    # Test each position with STRtree cached collision detection
+    # OPTIMIZATION: Update STRtree cache ONCE before loop
+    global _global_spatial_cache
+    _global_spatial_cache.update(obstacles)
+
+    # Test each position - using cached STRtree for speed
     for x, y in candidate_positions:
-        # OPTIMIZATION: Fast boundary pre-check without polygon creation
+        # Fast boundary pre-check
         if x + poly_width > sheet_width + 0.1 or y + poly_height > sheet_height + 0.1:
             continue
         if x < -0.1 or y < -0.1:
@@ -2942,7 +2948,7 @@ def find_bottom_left_position_with_obstacles(
         x_offset = x - bounds[0]
         y_offset = y - bounds[1]
 
-        # OPTIMIZATION: Check if bounds would be valid after translation
+        # Check if bounds would be valid after translation
         test_bounds = (
             bounds[0] + x_offset,
             bounds[1] + y_offset,
@@ -2957,11 +2963,13 @@ def find_bottom_left_position_with_obstacles(
         ):
             continue
 
-        # Only create translated polygon if all checks pass
+        # Create translated polygon
         test_polygon = translate_polygon(polygon, x_offset, y_offset)
 
-        # STRtree cached collision check
-        collision = check_collision_with_strtree(test_polygon, obstacles)
+        # FAST: Use cached STRtree with intersects only
+        collision = check_collision_fast_indexed_intersects_only(
+            test_polygon, _global_spatial_cache
+        )
 
         if not collision:
             return x, y
