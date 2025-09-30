@@ -354,3 +354,81 @@ def extract_bounds_array(polygons):
         bounds_array[i] = [b[0], b[1], b[2], b[3]]
 
     return bounds_array
+
+
+@jit(nopython=True, cache=True, fastmath=True)
+def quick_bounds_check_batch(
+    candidate_positions, poly_width, poly_height,
+    sheet_width, sheet_height, poly_bounds
+):
+    """Fast batch boundary checking for candidate positions.
+
+    Returns array of booleans indicating valid positions.
+    """
+    n = len(candidate_positions)
+    valid = np.ones(n, dtype=np.bool_)
+
+    for i in range(n):
+        x, y = candidate_positions[i]
+
+        # Check sheet boundaries
+        if x + poly_width > sheet_width + 0.1 or y + poly_height > sheet_height + 0.1:
+            valid[i] = False
+            continue
+        if x < -0.1 or y < -0.1:
+            valid[i] = False
+            continue
+
+        # Check translated bounds
+        x_offset = x - poly_bounds[0]
+        y_offset = y - poly_bounds[1]
+
+        test_minx = poly_bounds[0] + x_offset
+        test_miny = poly_bounds[1] + y_offset
+        test_maxx = poly_bounds[2] + x_offset
+        test_maxy = poly_bounds[3] + y_offset
+
+        if (test_minx < -0.1 or test_miny < -0.1 or
+            test_maxx > sheet_width + 0.1 or test_maxy > sheet_height + 0.1):
+            valid[i] = False
+
+    return valid
+
+
+@jit(nopython=True, cache=True, fastmath=True, parallel=True)
+def quick_bounds_check_batch_parallel(
+    candidate_positions, poly_width, poly_height,
+    sheet_width, sheet_height, poly_bounds
+):
+    """Parallel version of boundary checking (for large candidate sets).
+
+    Returns array of booleans indicating valid positions.
+    """
+    n = len(candidate_positions)
+    valid = np.ones(n, dtype=np.bool_)
+
+    for i in prange(n):
+        x, y = candidate_positions[i]
+
+        # Check sheet boundaries
+        if x + poly_width > sheet_width + 0.1 or y + poly_height > sheet_height + 0.1:
+            valid[i] = False
+            continue
+        if x < -0.1 or y < -0.1:
+            valid[i] = False
+            continue
+
+        # Check translated bounds
+        x_offset = x - poly_bounds[0]
+        y_offset = y - poly_bounds[1]
+
+        test_minx = poly_bounds[0] + x_offset
+        test_miny = poly_bounds[1] + y_offset
+        test_maxx = poly_bounds[2] + x_offset
+        test_maxy = poly_bounds[3] + y_offset
+
+        if (test_minx < -0.1 or test_miny < -0.1 or
+            test_maxx > sheet_width + 0.1 or test_maxy > sheet_height + 0.1):
+            valid[i] = False
+
+    return valid

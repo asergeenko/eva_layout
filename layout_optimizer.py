@@ -21,6 +21,8 @@ from fast_geometry import (
     bounds_within_sheet,
     translate_bounds,
     remove_duplicate_positions,
+    quick_bounds_check_batch,
+    quick_bounds_check_batch_parallel,
 )
 
 # Настройка логирования
@@ -2916,72 +2918,82 @@ def find_ultra_tight_position(
 def find_bottom_left_position_with_obstacles(
     polygon: Polygon, obstacles: list[Polygon], sheet_width: float, sheet_height: float
 ) -> tuple[float | None, float | None]:
-    """OPTIMIZED bottom-left position finder using Numba-accelerated checks."""
-    # Try ultra-tight algorithm first
-    result = find_ultra_tight_position(polygon, obstacles, sheet_width, sheet_height)
-    if result[0] is not None:
-        return result
-
-    # Fallback to optimized algorithm
+    """ULTRA-OPTIMIZED: Original algorithm with STRtree cache and Numba JIT."""
     bounds = polygon.bounds
     poly_width = bounds[2] - bounds[0]
     poly_height = bounds[3] - bounds[1]
 
-    # Update spatial cache for fast collision checks
-    global _global_spatial_cache
-    _global_spatial_cache.update(obstacles)
-
-    # Extract bounds as numpy array for fast filtering
-    obstacles_bounds = extract_bounds_array(obstacles)
-    poly_bounds = (bounds[0], bounds[1], bounds[2], bounds[3])
-
-    # ADAPTIVE STEP: Fine grid for small polygons, moderate for large ones
+    # ORIGINAL: Adaptive grid step
     polygon_size = poly_width * poly_height
     is_small = polygon_size < 10000  # 100mm x 100mm
-    grid_step = 1.5 if is_small else 5.0  # Finer steps for better quality
+    grid_step = 2.0 if is_small else 15.0
 
-    # Generate candidate positions using optimized function
-    candidates = generate_candidate_positions(
-        poly_width, poly_height, sheet_width, sheet_height,
-        obstacles_bounds, step_size=grid_step, max_candidates=3000  # More candidates
-    )
+    # ORIGINAL: Generate candidate positions
+    candidate_positions = []
 
-    if len(candidates) == 0:
-        return None, None
+    # Bottom edge positions
+    for x in np.arange(0, sheet_width - poly_width + 1, grid_step):
+        candidate_positions.append((x, 0))
 
-    # Remove duplicates for efficiency
-    candidates = remove_duplicate_positions(candidates, precision=0.5)
+    # Left edge positions
+    for y in np.arange(0, sheet_height - poly_height + 1, grid_step):
+        candidate_positions.append((0, y))
 
-    # Fast pre-filter using Numba-accelerated bounding box checks
-    # Use looser gap for pre-filter
+    # Positions based on existing obstacles
+    for obstacle in obstacles:
+        obstacle_bounds = obstacle.bounds
+
+        # Right of obstacle
+        x = obstacle_bounds[2] + 3
+        if x + poly_width <= sheet_width:
+            candidate_positions.append((x, obstacle_bounds[1]))
+            candidate_positions.append((x, 0))
+
+        # Above obstacle
+        y = obstacle_bounds[3] + 3
+        if y + poly_height <= sheet_height:
+            candidate_positions.append((obstacle_bounds[0], y))
+            candidate_positions.append((0, y))
+
+    # ORIGINAL: Remove duplicates and sort
+    candidate_positions = list(set(candidate_positions))
+    candidate_positions.sort(key=lambda pos: (pos[1], pos[0]))
+
+    # OPTIMIZATION 1: Convert to numpy array for Numba
+    candidates_array = np.array(candidate_positions, dtype=np.float64)
+
+    # OPTIMIZATION 2: Fast bounding box pre-filter with Numba
+    obstacles_bounds = extract_bounds_array(obstacles)
+    poly_bounds_tuple = (bounds[0], bounds[1], bounds[2], bounds[3])
+
+    # Parallel Numba filtering for obstacle collisions
     valid_mask = filter_positions_by_bounds(
-        candidates, poly_bounds, obstacles_bounds,
-        sheet_width, sheet_height, min_gap=1.0  # Looser for pre-filter
+        candidates_array, poly_bounds_tuple, obstacles_bounds,
+        sheet_width, sheet_height, min_gap=0.1
     )
 
-    # Get valid candidate positions
-    valid_candidates = candidates[valid_mask]
+    valid_candidates = candidates_array[valid_mask]
 
     if len(valid_candidates) == 0:
         return None, None
 
-    # Sort by bottom-left preference (y first, then x)
-    sort_indices = np.lexsort((valid_candidates[:, 0], valid_candidates[:, 1]))
-    valid_candidates = valid_candidates[sort_indices]
+    # OPTIMIZATION 3: Update spatial cache ONCE for precise collision checks
+    global _global_spatial_cache
+    _global_spatial_cache.update(obstacles)
 
-    # Test more candidates with precise collision detection
-    x_offset_base = -bounds[0]
-    y_offset_base = -bounds[1]
+    # Test valid candidates with precise collision detection
+    for x, y in valid_candidates:
+        # Pre-calculate translation offset
+        x_offset = x - bounds[0]
+        y_offset = y - bounds[1]
 
-    max_test = min(300, len(valid_candidates))  # Test up to 300 candidates
-    for x, y in valid_candidates[:max_test]:
-        # Translate polygon
-        x_offset = x + x_offset_base
-        y_offset = y + y_offset_base
+        # Only create translated polygon for passing candidates
         test_polygon = translate_polygon(polygon, x_offset, y_offset)
 
-        # Precise collision check using cached spatial index
-        if not check_collision_fast_indexed(test_polygon, _global_spatial_cache, min_gap=0.1):
+        # OPTIMIZATION 4: Use cached STRtree for precise check
+        collision = check_collision_fast_indexed(test_polygon, _global_spatial_cache, min_gap=0.1)
+
+        if not collision:
             return x, y
 
     return None, None
@@ -3039,7 +3051,7 @@ def find_quick_position(
 def find_bottom_left_position(
     polygon: Polygon, placed_polygons, sheet_width: float, sheet_height: float
 ):
-    """OPTIMIZED bottom-left placement using Numba-accelerated checks."""
+    """OPTIMIZED with Numba pre-filtering and STRtree cache."""
 
     # First placement - always bottom-left corner
     if not placed_polygons:
@@ -3049,71 +3061,81 @@ def find_bottom_left_position(
     poly_width = bounds[2] - bounds[0]
     poly_height = bounds[3] - bounds[1]
 
-    # Extract obstacle polygons
-    obstacles = [placed_poly.polygon for placed_poly in placed_polygons]
+    # Generate candidate positions (same as original logic)
+    step = max(10.0, min(poly_width, poly_height) / 3)
 
-    # Update spatial cache for fast collision checks
-    global _global_spatial_cache
-    _global_spatial_cache.update(obstacles)
+    candidate_positions = []
 
-    # Extract bounds as numpy array for fast filtering
-    obstacles_bounds = extract_bounds_array(obstacles)
-    poly_bounds = (bounds[0], bounds[1], bounds[2], bounds[3])
+    # Bottom edge
+    for x in np.arange(0, sheet_width - poly_width + 1, max(5, int(step))):
+        candidate_positions.append((x, 0))
 
-    # Generate smart candidate positions with fine step
-    step = max(2.0, min(poly_width, poly_height) / 5)  # Finer step for better quality
-    candidates = generate_candidate_positions(
-        poly_width, poly_height, sheet_width, sheet_height,
-        obstacles_bounds, step_size=step, max_candidates=2000
-    )
+    # Positions based on existing polygons
+    for placed_poly in placed_polygons:
+        other_bounds = placed_poly.polygon.bounds
+        y = other_bounds[3] + 2.0  # Above with 2mm gap
+        if y + poly_height <= sheet_height:
+            for x in np.arange(0, sheet_width - poly_width + 1, max(10, int(step))):
+                candidate_positions.append((x, y))
 
-    if len(candidates) == 0:
+    if len(candidate_positions) == 0:
         return None, None
 
-    # Remove duplicates for efficiency
-    candidates = remove_duplicate_positions(candidates, precision=0.5)
+    # Remove duplicates and sort by (y, x)
+    candidate_positions = list(set(candidate_positions))
+    candidate_positions.sort(key=lambda pos: (pos[1], pos[0]))
 
-    # Fast pre-filter using Numba-accelerated bounding box checks
-    # Use looser gap for pre-filter, precise check later
+    # OPTIMIZATION 1: Numba pre-filtering
+    obstacles = [placed_poly.polygon for placed_poly in placed_polygons]
+    obstacles_bounds = extract_bounds_array(obstacles)
+    poly_bounds_tuple = (bounds[0], bounds[1], bounds[2], bounds[3])
+
+    candidates_array = np.array(candidate_positions, dtype=np.float64)
+
     valid_mask = filter_positions_by_bounds(
-        candidates, poly_bounds, obstacles_bounds,
+        candidates_array, poly_bounds_tuple, obstacles_bounds,
         sheet_width, sheet_height, min_gap=1.0  # Looser for pre-filter
     )
 
-    # Get valid candidate positions
-    valid_candidates = candidates[valid_mask]
+    valid_candidates = candidates_array[valid_mask]
 
     if len(valid_candidates) == 0:
-        # Fallback: try fine grid
-        fallback_candidates = []
-        for y in range(0, int(sheet_height - poly_height), 10):  # Finer grid
-            for x in range(0, int(sheet_width - poly_width), 10):
-                fallback_candidates.append((x, y))
+        return None, None
 
-        if not fallback_candidates:
-            return None, None
+    # OPTIMIZATION 2: STRtree cache for precise checks
+    global _global_spatial_cache
+    _global_spatial_cache.update(obstacles)
 
-        valid_candidates = np.array(fallback_candidates, dtype=np.float64)
-
-    # Sort by bottom-left preference (y first, then x)
-    # Convert to structured array for sorting
-    sort_indices = np.lexsort((valid_candidates[:, 0], valid_candidates[:, 1]))
-    valid_candidates = valid_candidates[sort_indices]
-
-    # Test more candidates with precise collision detection
-    x_offset_base = -bounds[0]
-    y_offset_base = -bounds[1]
-
-    max_test = min(200, len(valid_candidates))  # Test up to 200 candidates
-    for x, y in valid_candidates[:max_test]:
-        # Translate polygon
-        x_offset = x + x_offset_base
-        y_offset = y + y_offset_base
+    # Test valid candidates with precise collision detection
+    for x, y in valid_candidates:
+        x_offset = x - bounds[0]
+        y_offset = y - bounds[1]
         test_polygon = translate_polygon(polygon, x_offset, y_offset)
 
-        # Precise collision check using cached spatial index
-        if not check_collision_fast_indexed(test_polygon, _global_spatial_cache, min_gap=2.0):
-            return x, y
+        # Precise collision check with cached STRtree
+        collision = check_collision_fast_indexed(
+            test_polygon, _global_spatial_cache, min_gap=2.0
+        )
+
+        if not collision:
+            return (x, y)
+
+    return None, None
+
+    # ORIGINAL: Simple fallback - try grid positions
+    for y in range(0, int(sheet_height - poly_height), 20):
+        for x in range(0, int(sheet_width - poly_width), 20):
+            x_offset = x - bounds[0]
+            y_offset = y - bounds[1]
+            test_polygon = translate_polygon(polygon, x_offset, y_offset)
+
+            # OPTIMIZATION: Use cached STRtree instead of loop
+            collision = check_collision_fast_indexed(
+                test_polygon, _global_spatial_cache, min_gap=2.0
+            )
+
+            if not collision:
+                return x, y
 
     return None, None
 
