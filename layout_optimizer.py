@@ -513,9 +513,15 @@ def post_placement_optimize_aggressive(
             # Bottom-left позиции
             from layout_optimizer import find_bottom_left_position_with_obstacles
 
+            t1 = time.time()
             best_x, best_y = find_bottom_left_position_with_obstacles(
                 rotated_polygon, obstacles, sheet_width_mm, sheet_height_mm
             )
+            logger.info(
+                "find_bottom_left_position_with_obstacles took %.2f seconds",
+                time.time() - t1,
+            )
+
             if best_x is not None:
                 test_positions.append((best_x, best_y))
 
@@ -947,9 +953,14 @@ def bin_packing_with_existing(
             if rotated_width > sheet_width_mm or rotated_height > sheet_height_mm:
                 continue
 
+            t1 = time.time()
             # Find position using Tetris gravity algorithm
             best_x, best_y = find_bottom_left_position_with_obstacles(
                 rotated, obstacles, sheet_width_mm, sheet_height_mm
+            )
+            logger.info(
+                "find_bottom_left_position_with_obstacles took %.2f seconds",
+                time.time() - t1,
             )
 
             if best_x is not None and best_y is not None:
@@ -1569,9 +1580,11 @@ def bin_packing(
                 continue
 
             # Use Tetris gravity algorithm for placement
+            t1 = time.time()
             best_x, best_y = find_bottom_left_position(
                 rotated, placed, sheet_width_mm, sheet_height_mm
             )
+            logger.info("find_bottom_left_position took %.2f seconds", time.time() - t1)
 
             if best_x is not None and best_y is not None:
                 # TRUE TETRIS STRATEGY: Minimize global maximum height, not individual positions!
