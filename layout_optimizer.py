@@ -16,12 +16,14 @@ from fast_geometry import (
     SpatialIndexCache,
     check_collision_fast_indexed,
     extract_bounds_array,
-    filter_positions_by_bounds,
+    filter_positions_by_bounds_only,
 )
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
 
+# OPTIMIZATION: Global STRtree cache for fast collision detection
+_global_spatial_cache = SpatialIndexCache()
 
 logging.getLogger("ezdxf").setLevel(logging.ERROR)
 
@@ -41,16 +43,12 @@ _rotation_cache: dict[
 ] = {}  # carpet_id -> {angle: rotated_polygon}
 _original_polygons: dict[int, Polygon] = {}  # carpet_id -> original_polygon
 
-# Глобальный кэш для STRtree spatial index
-_global_spatial_cache = SpatialIndexCache()
-
 
 def clear_optimization_caches():
     """Очистить все кэши оптимизации."""
-    global _rotation_cache, _original_polygons, _global_spatial_cache
+    global _rotation_cache, _original_polygons, _trapped_space_cache, _spatial_index
     _rotation_cache.clear()
     _original_polygons.clear()
-    _global_spatial_cache = SpatialIndexCache()
 
 
 def cache_original_polygons(carpets: list[Carpet]) -> None:
@@ -499,6 +497,10 @@ def post_placement_optimize_aggressive(
 
         # АГРЕССИВНАЯ СТРАТЕГИЯ: Пробуем ВСЕ ориентации + ВСЕ позиции
         for test_angle in [0, 90, 180, 270]:
+            # angle = test_angle - current_carpet.angle
+            # if angle < 0:
+            #    angle += 360
+            # rotated_polygon = get_cached_rotation(current_carpet, angle)
             rotated_polygon = (
                 rotate_polygon(original_polygon, test_angle)
                 if test_angle != 0
@@ -519,8 +521,13 @@ def post_placement_optimize_aggressive(
             # Bottom-left позиции
             from layout_optimizer import find_bottom_left_position_with_obstacles
 
+            t1 = time.time()
             best_x, best_y = find_bottom_left_position_with_obstacles(
                 rotated_polygon, obstacles, sheet_width_mm, sheet_height_mm
+            )
+            logger.info(
+                "find_bottom_left_position_with_obstacles took %.2f seconds",
+                time.time() - t1,
             )
 
             if best_x is not None:
@@ -532,9 +539,11 @@ def post_placement_optimize_aggressive(
             for test_x in range(0, int(sheet_width_mm - rot_width), int(step_x)):
                 for test_y in range(0, int(sheet_height_mm - rot_height), int(step_y)):
                     test_positions.append((test_x, test_y))
-                    if len(test_positions) > 20:
+                    if (
+                        len(test_positions) > 15
+                    ):  # Уменьшили лимит для ускорения (было 20)
                         break
-                if len(test_positions) > 20:
+                if len(test_positions) > 15:
                     break
 
             # Тестируем каждую позицию
@@ -661,6 +670,12 @@ def post_placement_optimize(
                     current_carpet.polygon, -current_carpet.angle
                 )  # Возвращаем к 0°
                 rotated_polygon = rotate_polygon(original_polygon, test_angle)
+
+                # Создаем тестовый ковер с новым углом
+                # angle = test_angle - current_carpet.angle
+                # if angle < 0:
+                #    angle += 360
+                # rotated_polygon = get_cached_rotation(current_carpet, angle)
 
                 # Пробуем разместить в той же позиции
                 bounds = rotated_polygon.bounds
@@ -823,39 +838,19 @@ def apply_placement_transform(
 
 
 def check_collision_with_strtree(
-    polygon: Polygon, placed_polygons: list[Polygon], use_cache=True
+    polygon: Polygon, placed_polygons: list[Polygon]
 ) -> bool:
-    """Ultra-fast collision check using cached STRtree spatial index.
-
-    Args:
-        polygon: Polygon to test for collision
-        placed_polygons: List of already placed polygons (obstacles)
-        use_cache: If True, use global spatial cache (much faster)
-
-    Returns:
-        True if collision detected, False otherwise
-    """
+    """Ultra-fast collision check using CACHED STRtree spatial index."""
     if not placed_polygons:
         return False
 
     if not polygon.is_valid:
         return True
 
-    if use_cache:
-        # Update cache if needed
-        global _global_spatial_cache
-        _global_spatial_cache.update(placed_polygons)
-        return check_collision_fast_indexed(polygon, _global_spatial_cache, min_gap=0.1)
-    else:
-        # Fallback to non-cached version (slower)
-        tree = STRtree(placed_polygons)
-        possible_indices = list(tree.query(polygon))
-
-        for idx in possible_indices:
-            if polygon.intersects(placed_polygons[idx]):
-                return True
-
-        return False
+    # OPTIMIZATION: Use cached STRtree instead of rebuilding every time
+    global _global_spatial_cache
+    _global_spatial_cache.update(placed_polygons)
+    return check_collision_fast_indexed(polygon, _global_spatial_cache, min_gap=0.1)
 
 
 def check_collision_fast(
@@ -958,9 +953,14 @@ def bin_packing_with_existing(
             if rotated_width > sheet_width_mm or rotated_height > sheet_height_mm:
                 continue
 
+            t1 = time.time()
             # Find position using Tetris gravity algorithm
             best_x, best_y = find_bottom_left_position_with_obstacles(
                 rotated, obstacles, sheet_width_mm, sheet_height_mm
+            )
+            logger.info(
+                "find_bottom_left_position_with_obstacles took %.2f seconds",
+                time.time() - t1,
             )
 
             if best_x is not None and best_y is not None:
@@ -1277,7 +1277,7 @@ def simple_compaction(
         # Simple down movement
         for i in range(n):
             poly = current_polys[i]
-            step = 2.0  # Increased from 2.0 for speed
+            step = 3.0  # Increased from 2.0 for speed
 
             while True:
                 test = translate_polygon(poly, 0, -step)
@@ -1386,7 +1386,7 @@ def fast_edge_snap(
             poly = current_polys[i]
 
             # Try to move down
-            step = 2.0  # Large step for speed
+            step = 5.0  # Large step for speed
             test = translate_polygon(poly, 0, -step)
             if test.bounds[1] >= 0:
                 # Quick collision check - only intersections
@@ -1580,9 +1580,11 @@ def bin_packing(
                 continue
 
             # Use Tetris gravity algorithm for placement
+            t1 = time.time()
             best_x, best_y = find_bottom_left_position(
                 rotated, placed, sheet_width_mm, sheet_height_mm
             )
+            logger.info("find_bottom_left_position took %.2f seconds", time.time() - t1)
 
             if best_x is not None and best_y is not None:
                 # TRUE TETRIS STRATEGY: Minimize global maximum height, not individual positions!
@@ -1857,28 +1859,28 @@ def bin_packing(
             f"📊 Обработано {processed_count} из {total_carpet_count} ковров, пропущено {skipped_count}, размещено {len(placed)}, в unplaced {len(unplaced)}"
         )
 
-    # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
-    if len(placed) <= 20:  # Optimize most reasonable sets
-    # Ultra-aggressive left compaction to squeeze everything left - ТЕСТИРУЕМ
-        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.4)
-
-    # Simple compaction with aggressive left push - ТЕСТИРУЕМ
-        #placed = simple_compaction(placed, sheet_size, min_gap=1.0)
-
-    # Additional edge snapping for maximum left compaction - ТЕСТИРУЕМ
-        #placed = fast_edge_snap(placed, sheet_size)
-
-    # Final ultra-left compaction - ТЕСТИРУЕМ
-        #placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.5)
-
-    # Light tightening to clean up - ТЕСТИРУЕМ
-        placed = tighten_layout(placed, sheet_size, min_gap=1.0, step=2.0, max_passes=1)
-    elif len(placed) <= 35:  # For larger sets, still do aggressive compaction - ТЕСТИРУЕМ
-        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.6)
-        #placed = simple_compaction(placed, sheet_size)
-        #placed = fast_edge_snap(placed, sheet_size)
-
-    # No optimization for very large sets
+    # # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
+    # if len(placed) <= 20:  # Optimize most reasonable sets
+    #     # Ultra-aggressive left compaction to squeeze everything left - ТЕСТИРУЕМ
+    #     placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.4)
+    #
+    #     # Simple compaction with aggressive left push - ТЕСТИРУЕМ
+    #     placed = simple_compaction(placed, sheet_size)
+    #
+    #     # Additional edge snapping for maximum left compaction - ТЕСТИРУЕМ
+    #     placed = fast_edge_snap(placed, sheet_size)
+    #
+    #     # Final ultra-left compaction - ТЕСТИРУЕМ
+    #     placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.5)
+    #
+    #     # Light tightening to clean up - ТЕСТИРУЕМ
+    #     placed = tighten_layout(placed, sheet_size, min_gap=0.5, step=2.0, max_passes=1)
+    # elif len(placed) <= 35:  # For larger sets, still do aggressive compaction - ТЕСТИРУЕМ
+    #     placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.6)
+    #     placed = simple_compaction(placed, sheet_size)
+    #     placed = fast_edge_snap(placed, sheet_size)
+    #
+    # # No optimization for very large sets
 
     # POST-OPTIMIZATION: Gravity compaction - ОТКЛЮЧЕНО (создает пересечения)
     # if placed:
@@ -2841,18 +2843,16 @@ def find_ultra_tight_position(
     small_polygon = polygon_size < 10000  # 100mm x 100mm
 
     if small_polygon:
-        step_size = 0.5  # 1.0  # Increased from 0.5 for speed
+        step_size = 1.0  # Increased from 0.5 for speed
     elif len(obstacles) <= 5:
-        step_size = 1.0  # 2.0  # Increased from 1.0 for speed
+        step_size = 2.0  # Increased from 1.0 for speed
     else:
-        step_size = 2.0  # 3.0  # Increased from 2.0 for speed
+        step_size = 3.0  # Increased from 2.0 for speed
 
     candidates = []
 
     # Grid search with adaptive limits (reduced for performance)
-    max_candidates = (
-        1000 if small_polygon else 500
-    )  # 500 if small_polygon else 250  # Reduced for speed
+    max_candidates = 500 if small_polygon else 250  # Reduced for speed
 
     for x in np.arange(0, sheet_width - poly_width + 1, step_size):
         for y in np.arange(0, sheet_height - poly_height + 1, step_size):
@@ -2890,18 +2890,19 @@ def find_ultra_tight_position(
 def find_bottom_left_position_with_obstacles(
     polygon: Polygon, obstacles: list[Polygon], sheet_width: float, sheet_height: float
 ) -> tuple[float | None, float | None]:
-    """ULTRA-OPTIMIZED: Original algorithm with STRtree cache and Numba JIT."""
+    """Find the bottom-left position using ORIGINAL algorithm with STRtree cache."""
     bounds = polygon.bounds
     poly_width = bounds[2] - bounds[0]
     poly_height = bounds[3] - bounds[1]
 
-    # ORIGINAL: Adaptive grid step
+    # Try positions along bottom and left edges first
+    candidate_positions = []
+
+    # ADAPTIVE STEP: Fine grid for small polygons, coarse for large ones
     polygon_size = poly_width * poly_height
     is_small = polygon_size < 10000  # 100mm x 100mm
-    grid_step = 2.0 if is_small else 15.0
 
-    # ORIGINAL: Generate candidate positions
-    candidate_positions = []
+    grid_step = 2.0 if is_small else 15  # Fine step for small polygons
 
     # Bottom edge positions
     for x in np.arange(0, sheet_width - poly_width + 1, grid_step):
@@ -2911,65 +2912,58 @@ def find_bottom_left_position_with_obstacles(
     for y in np.arange(0, sheet_height - poly_height + 1, grid_step):
         candidate_positions.append((0, y))
 
-    # Positions based on existing obstacles
+    # Positions based on existing obstacles (bottom-left principle)
     for obstacle in obstacles:
         obstacle_bounds = obstacle.bounds
 
-        # Right of obstacle
-        x = obstacle_bounds[2] + 3
+        # Try position to the right of existing obstacle
+        x = obstacle_bounds[2] + 3  # 3mm gap for safety
         if x + poly_width <= sheet_width:
-            candidate_positions.append((x, obstacle_bounds[1]))
-            candidate_positions.append((x, 0))
+            candidate_positions.append((x, obstacle_bounds[1]))  # Same Y as existing
+            candidate_positions.append((x, 0))  # Bottom edge
 
-        # Above obstacle
-        y = obstacle_bounds[3] + 3
+        # Try position above existing obstacle
+        y = obstacle_bounds[3] + 3  # 3mm gap for safety
         if y + poly_height <= sheet_height:
-            candidate_positions.append((obstacle_bounds[0], y))
-            candidate_positions.append((0, y))
+            candidate_positions.append((obstacle_bounds[0], y))  # Same X as existing
+            candidate_positions.append((0, y))  # Left edge
 
     # ORIGINAL: Remove duplicates and sort
     candidate_positions = list(set(candidate_positions))
     candidate_positions.sort(key=lambda pos: (pos[1], pos[0]))
 
-    # OPTIMIZATION 1: Convert to numpy array for Numba
-    candidates_array = np.array(candidate_positions, dtype=np.float64)
+    # Test each position with STRtree cached collision detection
+    for x, y in candidate_positions:
+        # OPTIMIZATION: Fast boundary pre-check without polygon creation
+        if x + poly_width > sheet_width + 0.1 or y + poly_height > sheet_height + 0.1:
+            continue
+        if x < -0.1 or y < -0.1:
+            continue
 
-    # OPTIMIZATION 2: Fast bounding box pre-filter with Numba
-    obstacles_bounds = extract_bounds_array(obstacles)
-    poly_bounds_tuple = (bounds[0], bounds[1], bounds[2], bounds[3])
-
-    # Parallel Numba filtering for obstacle collisions
-    valid_mask = filter_positions_by_bounds(
-        candidates_array,
-        poly_bounds_tuple,
-        obstacles_bounds,
-        sheet_width,
-        sheet_height,
-        min_gap=0.1,
-    )
-
-    valid_candidates = candidates_array[valid_mask]
-
-    if len(valid_candidates) == 0:
-        return None, None
-
-    # OPTIMIZATION 3: Update spatial cache ONCE for precise collision checks
-    global _global_spatial_cache
-    _global_spatial_cache.update(obstacles)
-
-    # Test valid candidates with precise collision detection
-    for x, y in valid_candidates:
         # Pre-calculate translation offset
         x_offset = x - bounds[0]
         y_offset = y - bounds[1]
 
-        # Only create translated polygon for passing candidates
+        # OPTIMIZATION: Check if bounds would be valid after translation
+        test_bounds = (
+            bounds[0] + x_offset,
+            bounds[1] + y_offset,
+            bounds[2] + x_offset,
+            bounds[3] + y_offset,
+        )
+        if (
+            test_bounds[0] < -0.1
+            or test_bounds[1] < -0.1
+            or test_bounds[2] > sheet_width + 0.1
+            or test_bounds[3] > sheet_height + 0.1
+        ):
+            continue
+
+        # Only create translated polygon if all checks pass
         test_polygon = translate_polygon(polygon, x_offset, y_offset)
 
-        # OPTIMIZATION 4: Use cached STRtree for precise check
-        collision = check_collision_fast_indexed(
-            test_polygon, _global_spatial_cache, min_gap=0.1
-        )
+        # STRtree cached collision check
+        collision = check_collision_with_strtree(test_polygon, obstacles)
 
         if not collision:
             return x, y
@@ -3029,7 +3023,7 @@ def find_quick_position(
 def find_bottom_left_position(
     polygon: Polygon, placed_polygons, sheet_width: float, sheet_height: float
 ):
-    """OPTIMIZED with Numba pre-filtering and STRtree cache."""
+    """FAST Simple bottom-left placement - prioritize speed over perfect density."""
 
     # First placement - always bottom-left corner
     if not placed_polygons:
@@ -3039,13 +3033,14 @@ def find_bottom_left_position(
     poly_width = bounds[2] - bounds[0]
     poly_height = bounds[3] - bounds[1]
 
-    # ORIGINAL: FAST SCAN - Use large steps for speed
-    step = max(10.0, min(poly_width, poly_height) / 3)
+    # FAST SCAN: Use large steps for speed
+    step = max(10.0, min(poly_width, poly_height) / 3)  # Large adaptive step for speed
 
     best_y = None
     best_positions = []
 
-    # ORIGINAL: PRIORITY LEFT SCAN - try left positions first
+    # PRIORITY LEFT SCAN - try left positions first for maximum compaction
+    # Create X positions with strong preference for left side
     x_positions = []
     for x in range(0, int(sheet_width - poly_width), max(5, int(step))):
         x_positions.append(x)
@@ -3053,20 +3048,12 @@ def find_bottom_left_position(
     # Sort to prioritize leftmost positions
     x_positions.sort()
 
-    # OPTIMIZATION: Cache obstacles and STRtree ONCE
-    obstacles = [placed_poly.polygon for placed_poly in placed_polygons]
-    global _global_spatial_cache
-    _global_spatial_cache.update(obstacles)
-
-    # ORIGINAL: Limit for speed but favor left
-    for test_x in x_positions[:15]:
+    for test_x in x_positions[:15]:  # Limit for speed but favor left
         # Test only a few Y positions per X for speed
         test_y_positions = [0]  # Always try bottom
 
-        # ORIGINAL: Add positions based on existing polygons (very limited)
-        for placed_poly in placed_polygons[
-            :2
-        ]:  # ORIGINAL: Only first 2 polygons for speed
+        # Add positions based on existing polygons (very limited)
+        for placed_poly in placed_polygons[:2]:  # Only first 2 polygons for speed
             other_bounds = placed_poly.polygon.bounds
             test_y_positions.append(other_bounds[3] + 2.0)  # Above with 2mm gap
 
@@ -3090,10 +3077,14 @@ def find_bottom_left_position(
             ):
                 continue
 
-            # OPTIMIZATION: Use cached STRtree instead of loop
-            collision = check_collision_fast_indexed(
-                test_polygon, _global_spatial_cache, min_gap=2.0
-            )
+            # CRITICAL FIX: Use proper collision detection with minimum gap
+            collision = False
+            for placed_poly in placed_polygons:
+                if check_collision(
+                    test_polygon, placed_poly.polygon, min_gap=2.0
+                ):  # 2mm minimum gap
+                    collision = True
+                    break
 
             if not collision:
                 if best_y is None or test_y < best_y:
@@ -3107,6 +3098,24 @@ def find_bottom_left_position(
     if best_positions:
         best_positions.sort()
         return best_positions[0]
+
+    # Simple fallback - try grid positions
+    for y in range(0, int(sheet_height - poly_height), 20):
+        for x in range(0, int(sheet_width - poly_width), 20):
+            x_offset = x - bounds[0]
+            y_offset = y - bounds[1]
+            test_polygon = translate_polygon(polygon, x_offset, y_offset)
+
+            collision = False
+            for placed_poly in placed_polygons:
+                if check_collision(
+                    test_polygon, placed_poly.polygon, min_gap=2.0
+                ):  # 2mm minimum gap
+                    collision = True
+                    break
+
+            if not collision:
+                return x, y
 
     return None, None
 

@@ -125,6 +125,43 @@ def filter_positions_by_bounds(
 
 
 @jit(nopython=True, cache=True, fastmath=True)
+def filter_positions_by_bounds_only(
+    positions, poly_bounds, obstacles_bounds, sheet_width, sheet_height
+):
+    """Filter positions using ONLY bounding box overlap (no gap).
+
+    This is less aggressive - only removes positions that clearly overlap.
+    Precise collision detection with gap will be done later.
+
+    Returns array of valid position indices.
+    """
+    n_positions = len(positions)
+    n_obstacles = len(obstacles_bounds)
+    valid = np.ones(n_positions, dtype=np.bool_)
+
+    poly_width = poly_bounds[2] - poly_bounds[0]
+    poly_height = poly_bounds[3] - poly_bounds[1]
+
+    for i in range(n_positions):
+        x, y = positions[i]
+
+        # Check sheet boundaries
+        test_bounds = (x, y, x + poly_width, y + poly_height)
+        if not bounds_within_sheet(test_bounds, sheet_width, sheet_height):
+            valid[i] = False
+            continue
+
+        # Check ONLY for actual bounding box overlap (no gap tolerance)
+        # This is fast but conservative - leaves more candidates for precise check
+        for j in range(n_obstacles):
+            if bounds_intersect(test_bounds, obstacles_bounds[j], gap=0.0):
+                valid[i] = False
+                break
+
+    return valid
+
+
+@jit(nopython=True, cache=True, fastmath=True)
 def generate_candidate_positions(
     poly_width,
     poly_height,
