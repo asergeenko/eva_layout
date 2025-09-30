@@ -28,14 +28,11 @@ def create_real_scenario(n_obstacles=50):
 
         poly = box(x, y, x + w, y + h)
         obstacles.append(poly)
-        placed.append(PlacedCarpet(
-            polygon=poly,
-            carpet_id=i,
-            priority=0,
-            x_offset=x,
-            y_offset=y,
-            angle=0
-        ))
+        placed.append(
+            PlacedCarpet(
+                polygon=poly, carpet_id=i, priority=0, x_offset=x, y_offset=y, angle=0
+            )
+        )
 
     return obstacles, placed, sheet_width, sheet_height
 
@@ -89,9 +86,7 @@ def profile_simple():
 
         # Warmup
         for _ in range(3):
-            find_bottom_left_position(
-                test_poly, placed, sheet_width, sheet_height
-            )
+            find_bottom_left_position(test_poly, placed, sheet_width, sheet_height)
 
         # Measure
         times = []

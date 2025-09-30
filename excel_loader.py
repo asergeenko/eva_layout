@@ -172,6 +172,12 @@ def get_dxf_files_for_product_type(
             if target_file.exists():
                 found_files.append(target_file)
 
+        elif product_type == "пассажирский":
+            # Only 2.dxf
+            target_file = base_folder / "2.dxf"
+            if target_file.exists():
+                found_files.append(target_file)
+
         elif product_type == "передние":
             # 1.dxf and 2.dxf
             for i in [1, 2]:
@@ -179,9 +185,54 @@ def get_dxf_files_for_product_type(
                 if target_file.exists():
                     found_files.append(target_file)
 
+        elif product_type == "задний левый":
+            # Only 3.dxf
+            target_file = base_folder / "3.dxf"
+            if target_file.exists():
+                found_files.append(target_file)
+
+        elif product_type == "задний правый":
+            # Only 4.dxf
+            target_file = base_folder / "4.dxf"
+            if target_file.exists():
+                found_files.append(target_file)
+
+        elif product_type == "перемычка":
+            # Only 5.dxf
+            target_file = base_folder / "5.dxf"
+            if target_file.exists():
+                found_files.append(target_file)
+
+        elif product_type == "доп перемычка":
+            # Only 6.dxf
+            target_file = base_folder / "6.dxf"
+            if target_file.exists():
+                found_files.append(target_file)
+
+        elif product_type == "третий ряд":
+            # Files 7.dxf to 9.dxf
+            for i in range(7, 10):
+                target_file = base_folder / f"{i}.dxf"
+                if target_file.exists():
+                    found_files.append(target_file)
+
         elif product_type == "багажник":
             # Files 10.dxf to 16.dxf
             for i in range(10, 17):
+                target_file = base_folder / f"{i}.dxf"
+                if target_file.exists():
+                    found_files.append(target_file)
+
+        elif product_type == "спинки":
+            # Files 17.dxf to 22.dxf
+            for i in range(17, 23):
+                target_file = base_folder / f"{i}.dxf"
+                if target_file.exists():
+                    found_files.append(target_file)
+
+        elif product_type == "багажник + спинки":
+            # Files 10.dxf to 22.dxf
+            for i in range(10, 23):
                 target_file = base_folder / f"{i}.dxf"
                 if target_file.exists():
                     found_files.append(target_file)

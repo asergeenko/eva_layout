@@ -45,7 +45,9 @@ def test_ultra_tight_only():
     times = []
     for _ in range(20):
         start = time.perf_counter()
-        result = find_ultra_tight_position(test_poly, obstacles, sheet_width, sheet_height)
+        result = find_ultra_tight_position(
+            test_poly, obstacles, sheet_width, sheet_height
+        )
         elapsed = time.perf_counter() - start
         times.append(elapsed * 1000)
 
@@ -65,13 +67,17 @@ def test_full_function():
 
     # Warmup
     for _ in range(3):
-        find_bottom_left_position_with_obstacles(test_poly, obstacles, sheet_width, sheet_height)
+        find_bottom_left_position_with_obstacles(
+            test_poly, obstacles, sheet_width, sheet_height
+        )
 
     # Measure
     times = []
     for _ in range(20):
         start = time.perf_counter()
-        result = find_bottom_left_position_with_obstacles(test_poly, obstacles, sheet_width, sheet_height)
+        result = find_bottom_left_position_with_obstacles(
+            test_poly, obstacles, sheet_width, sheet_height
+        )
         elapsed = time.perf_counter() - start
         times.append(elapsed * 1000)
 

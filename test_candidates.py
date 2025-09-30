@@ -29,8 +29,13 @@ def test_candidate_count():
     grid_step = 2.0 if is_small else 15.0
 
     candidates = generate_candidate_positions(
-        poly_width, poly_height, sheet_width, sheet_height,
-        obstacles_bounds, step_size=grid_step, max_candidates=2000
+        poly_width,
+        poly_height,
+        sheet_width,
+        sheet_height,
+        obstacles_bounds,
+        step_size=grid_step,
+        max_candidates=2000,
     )
 
     print(f"Grid step: {grid_step}")

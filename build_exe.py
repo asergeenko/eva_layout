@@ -14,7 +14,7 @@ def run_command(cmd, description):
     print(f"Выполнение команды: {' '.join(cmd) if isinstance(cmd, list) else cmd}")
 
     try:
-        result = subprocess.run(cmd, check=True, shell=isinstance(cmd, str))
+        subprocess.run(cmd, check=True, shell=isinstance(cmd, str))
         print(f"✅ {description} завершено успешно")
         return True
     except subprocess.CalledProcessError as e:

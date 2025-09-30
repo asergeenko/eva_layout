@@ -2,7 +2,7 @@
 
 import time
 import numpy as np
-from shapely.geometry import Polygon, box
+from shapely.geometry import box
 
 # Import original and optimized functions
 from layout_optimizer import (
@@ -32,14 +32,11 @@ def create_test_obstacles(n_obstacles=10, sheet_width=1000, sheet_height=1000):
 
         poly = box(x, y, x + w, y + h)
         obstacles.append(poly)
-        placed.append(PlacedCarpet(
-            polygon=poly,
-            carpet_id=i,
-            priority=0,
-            x_offset=x,
-            y_offset=y,
-            angle=0
-        ))
+        placed.append(
+            PlacedCarpet(
+                polygon=poly, carpet_id=i, priority=0, x_offset=x, y_offset=y, angle=0
+            )
+        )
 
     return obstacles, placed
 
@@ -72,8 +69,12 @@ def benchmark_collision_check(n_tests=100):
 
     print(f"Tests: {n_tests}")
     print(f"Obstacles: {len(obstacles)}")
-    print(f"Time WITH cache:    {time_with_cache:.4f}s ({time_with_cache/n_tests*1000:.2f}ms per test)")
-    print(f"Time WITHOUT cache: {time_without_cache:.4f}s ({time_without_cache/n_tests*1000:.2f}ms per test)")
+    print(
+        f"Time WITH cache:    {time_with_cache:.4f}s ({time_with_cache/n_tests*1000:.2f}ms per test)"
+    )
+    print(
+        f"Time WITHOUT cache: {time_without_cache:.4f}s ({time_without_cache/n_tests*1000:.2f}ms per test)"
+    )
     print(f"Speedup: {time_without_cache/time_with_cache:.2f}x")
     print()
 
@@ -134,9 +135,7 @@ def benchmark_find_position_simple(n_tests=20):
 
         # Warmup
         for _ in range(3):
-            find_bottom_left_position(
-                test_poly, placed, sheet_width, sheet_height
-            )
+            find_bottom_left_position(test_poly, placed, sheet_width, sheet_height)
 
         # Benchmark
         start = time.time()

@@ -2,7 +2,6 @@
 
 import numpy as np
 from numba import jit, prange
-from shapely.geometry import Polygon
 from shapely.strtree import STRtree
 
 
@@ -45,10 +44,12 @@ def point_in_bounds(x, y, bounds):
 @jit(nopython=True, cache=True, fastmath=True)
 def bounds_within_sheet(bounds, sheet_width, sheet_height, tolerance=0.1):
     """Check if bounds fit within sheet dimensions."""
-    return (bounds[0] >= -tolerance and
-            bounds[1] >= -tolerance and
-            bounds[2] <= sheet_width + tolerance and
-            bounds[3] <= sheet_height + tolerance)
+    return (
+        bounds[0] >= -tolerance
+        and bounds[1] >= -tolerance
+        and bounds[2] <= sheet_width + tolerance
+        and bounds[3] <= sheet_height + tolerance
+    )
 
 
 @jit(nopython=True, cache=True, fastmath=True)
@@ -125,8 +126,13 @@ def filter_positions_by_bounds(
 
 @jit(nopython=True, cache=True, fastmath=True)
 def generate_candidate_positions(
-    poly_width, poly_height, sheet_width, sheet_height,
-    obstacles_bounds, step_size=2.0, max_candidates=2000
+    poly_width,
+    poly_height,
+    sheet_width,
+    sheet_height,
+    obstacles_bounds,
+    step_size=2.0,
+    max_candidates=2000,
 ):
     """Generate candidate positions using smart placement strategy.
 
@@ -138,12 +144,18 @@ def generate_candidate_positions(
     corner_size = min(200, sheet_width / 3, sheet_height / 3)
     x = 0.0
     ultra_fine_step = 1.0  # 1mm steps in critical region
-    while x <= min(corner_size, sheet_width - poly_width) and len(candidates) < max_candidates // 4:
+    while (
+        x <= min(corner_size, sheet_width - poly_width)
+        and len(candidates) < max_candidates // 4
+    ):
         candidates.append((x, 0.0))
         x += ultra_fine_step
 
     y = 0.0
-    while y <= min(corner_size, sheet_height - poly_height) and len(candidates) < max_candidates // 4:
+    while (
+        y <= min(corner_size, sheet_height - poly_height)
+        and len(candidates) < max_candidates // 4
+    ):
         candidates.append((0.0, y))
         y += ultra_fine_step
 
@@ -317,7 +329,12 @@ def check_collision_fast_indexed(polygon, spatial_cache, min_gap=0.1):
     for idx in possible_indices:
         other_poly = spatial_cache.polygons[idx]
         other_bounds = other_poly.bounds
-        other_bounds_tuple = (other_bounds[0], other_bounds[1], other_bounds[2], other_bounds[3])
+        other_bounds_tuple = (
+            other_bounds[0],
+            other_bounds[1],
+            other_bounds[2],
+            other_bounds[3],
+        )
 
         # Fast bounding box distance check
         if bounds_intersect(poly_bounds_tuple, other_bounds_tuple, min_gap):
@@ -358,8 +375,7 @@ def extract_bounds_array(polygons):
 
 @jit(nopython=True, cache=True, fastmath=True)
 def quick_bounds_check_batch(
-    candidate_positions, poly_width, poly_height,
-    sheet_width, sheet_height, poly_bounds
+    candidate_positions, poly_width, poly_height, sheet_width, sheet_height, poly_bounds
 ):
     """Fast batch boundary checking for candidate positions.
 
@@ -388,8 +404,12 @@ def quick_bounds_check_batch(
         test_maxx = poly_bounds[2] + x_offset
         test_maxy = poly_bounds[3] + y_offset
 
-        if (test_minx < -0.1 or test_miny < -0.1 or
-            test_maxx > sheet_width + 0.1 or test_maxy > sheet_height + 0.1):
+        if (
+            test_minx < -0.1
+            or test_miny < -0.1
+            or test_maxx > sheet_width + 0.1
+            or test_maxy > sheet_height + 0.1
+        ):
             valid[i] = False
 
     return valid
@@ -397,8 +417,7 @@ def quick_bounds_check_batch(
 
 @jit(nopython=True, cache=True, fastmath=True, parallel=True)
 def quick_bounds_check_batch_parallel(
-    candidate_positions, poly_width, poly_height,
-    sheet_width, sheet_height, poly_bounds
+    candidate_positions, poly_width, poly_height, sheet_width, sheet_height, poly_bounds
 ):
     """Parallel version of boundary checking (for large candidate sets).
 
@@ -427,8 +446,12 @@ def quick_bounds_check_batch_parallel(
         test_maxx = poly_bounds[2] + x_offset
         test_maxy = poly_bounds[3] + y_offset
 
-        if (test_minx < -0.1 or test_miny < -0.1 or
-            test_maxx > sheet_width + 0.1 or test_maxy > sheet_height + 0.1):
+        if (
+            test_minx < -0.1
+            or test_miny < -0.1
+            or test_maxx > sheet_width + 0.1
+            or test_maxy > sheet_height + 0.1
+        ):
             valid[i] = False
 
     return valid
