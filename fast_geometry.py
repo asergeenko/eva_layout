@@ -391,6 +391,38 @@ def check_collision_fast_indexed(polygon, spatial_cache, min_gap=0.1):
     return False
 
 
+def check_collision_fast_indexed_intersects_only(polygon, spatial_cache):
+    """Fast collision check using ONLY intersects (no min_gap).
+
+    This matches the original bc9bc54 behavior - only checks for actual overlap.
+
+    Args:
+        polygon: Shapely Polygon to test
+        spatial_cache: SpatialIndexCache instance
+
+    Returns:
+        True if collision detected, False otherwise
+    """
+    if spatial_cache.is_empty():
+        return False
+
+    if not polygon.is_valid:
+        return True
+
+    # Query spatial index for nearby polygons
+    possible_indices = list(spatial_cache.query(polygon))
+
+    if not possible_indices:
+        return False
+
+    # Check ONLY for intersections (no distance/gap check)
+    for idx in possible_indices:
+        if polygon.intersects(spatial_cache.polygons[idx]):
+            return True
+
+    return False
+
+
 def extract_bounds_array(polygons):
     """Extract bounding boxes as numpy array for fast operations.
 

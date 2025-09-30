@@ -14,9 +14,7 @@ from carpet import Carpet, PlacedCarpet, UnplacedCarpet, PlacedSheet
 from geometry_utils import translate_polygon, rotate_polygon
 from fast_geometry import (
     SpatialIndexCache,
-    check_collision_fast_indexed,
-    extract_bounds_array,
-    filter_positions_by_bounds_only,
+    check_collision_fast_indexed_intersects_only,
 )
 
 # Настройка логирования
@@ -847,10 +845,10 @@ def check_collision_with_strtree(
     if not polygon.is_valid:
         return True
 
-    # OPTIMIZATION: Use cached STRtree instead of rebuilding every time
+    # OPTIMIZATION: Use cached STRtree with intersects only (bc9bc54 behavior)
     global _global_spatial_cache
     _global_spatial_cache.update(placed_polygons)
-    return check_collision_fast_indexed(polygon, _global_spatial_cache, min_gap=0.1)
+    return check_collision_fast_indexed_intersects_only(polygon, _global_spatial_cache)
 
 
 def check_collision_fast(
