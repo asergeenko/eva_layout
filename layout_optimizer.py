@@ -1858,25 +1858,25 @@ def bin_packing(
         )
 
     # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
-    # if len(placed) <= 20:  # Optimize most reasonable sets
+    if len(placed) <= 20:  # Optimize most reasonable sets
     # Ultra-aggressive left compaction to squeeze everything left - ТЕСТИРУЕМ
-    #    placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.4)
+        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.4)
 
     # Simple compaction with aggressive left push - ТЕСТИРУЕМ
-    #    placed = simple_compaction(placed, sheet_size)
+        #placed = simple_compaction(placed, sheet_size, min_gap=1.0)
 
     # Additional edge snapping for maximum left compaction - ТЕСТИРУЕМ
-    #    placed = fast_edge_snap(placed, sheet_size)
+        #placed = fast_edge_snap(placed, sheet_size)
 
     # Final ultra-left compaction - ТЕСТИРУЕМ
-    #    placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.5)
+        #placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.5)
 
     # Light tightening to clean up - ТЕСТИРУЕМ
-    #    placed = tighten_layout(placed, sheet_size, min_gap=0.5, step=2.0, max_passes=1)
-    # elif len(placed) <= 35:  # For larger sets, still do aggressive compaction - ТЕСТИРУЕМ
-    #    placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.6)
-    #    placed = simple_compaction(placed, sheet_size)
-    #    placed = fast_edge_snap(placed, sheet_size)
+        placed = tighten_layout(placed, sheet_size, min_gap=1.0, step=2.0, max_passes=1)
+    elif len(placed) <= 35:  # For larger sets, still do aggressive compaction - ТЕСТИРУЕМ
+        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.6)
+        #placed = simple_compaction(placed, sheet_size)
+        #placed = fast_edge_snap(placed, sheet_size)
 
     # No optimization for very large sets
 
