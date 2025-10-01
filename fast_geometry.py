@@ -423,6 +423,85 @@ def check_collision_fast_indexed_intersects_only(polygon, spatial_cache):
     return False
 
 
+@jit(nopython=True, cache=True, fastmath=True)
+def filter_candidates_by_bounds(positions, poly_bounds, sheet_width, sheet_height):
+    """Filter candidate positions based on boundary checks only.
+
+    Ultra-fast Numba filtering that doesn't change algorithm behavior.
+    Only filters positions that are definitely out of bounds.
+
+    Args:
+        positions: numpy array of shape (n, 2) with (x, y) positions
+        poly_bounds: tuple (width, height) of polygon
+        sheet_width: sheet width
+        sheet_height: sheet height
+
+    Returns:
+        Boolean array indicating valid positions (True = keep)
+    """
+    n = len(positions)
+    valid = np.ones(n, dtype=np.bool_)
+    poly_width, poly_height = poly_bounds
+
+    for i in range(n):
+        x, y = positions[i]
+
+        # Check basic bounds
+        if x < -0.1 or y < -0.1:
+            valid[i] = False
+            continue
+
+        if x + poly_width > sheet_width + 0.1:
+            valid[i] = False
+            continue
+
+        if y + poly_height > sheet_height + 0.1:
+            valid[i] = False
+            continue
+
+    return valid
+
+
+def batch_check_collisions_cached(polygons, spatial_cache):
+    """Batch collision check for multiple polygons using cached STRtree.
+
+    Much faster than checking one by one when you have many candidates.
+
+    Args:
+        polygons: List of Shapely Polygons to test
+        spatial_cache: SpatialIndexCache instance
+
+    Returns:
+        List of booleans (True = collision detected)
+    """
+    if spatial_cache.is_empty():
+        return [False] * len(polygons)
+
+    results = []
+    for poly in polygons:
+        if not poly.is_valid:
+            results.append(True)
+            continue
+
+        # Query spatial index
+        possible_indices = list(spatial_cache.query(poly))
+
+        if not possible_indices:
+            results.append(False)
+            continue
+
+        # Check for intersections
+        collision = False
+        for idx in possible_indices:
+            if poly.intersects(spatial_cache.polygons[idx]):
+                collision = True
+                break
+
+        results.append(collision)
+
+    return results
+
+
 def extract_bounds_array(polygons):
     """Extract bounding boxes as numpy array for fast operations.
 
