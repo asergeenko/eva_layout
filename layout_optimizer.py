@@ -19,6 +19,7 @@ from fast_geometry import (
     extract_bounds_array,
     filter_positions_by_bounds_only,
     batch_check_collisions_cached,
+    batch_check_collisions_cached_fast,
     filter_candidates_by_bounds,
 )
 
@@ -3070,6 +3071,9 @@ def find_bottom_left_position(
     global _global_spatial_cache
     _global_spatial_cache.update(obstacles)
 
+    # BATCH OPTIMIZATION: Collect ALL candidate positions first
+    all_candidates = []  # (x, y, x_offset, y_offset)
+
     for test_x in x_positions[:15]:  # Limit for speed but favor left
         # Test only a few Y positions per X for speed
         test_y_positions = [0]  # Always try bottom
@@ -3079,58 +3083,68 @@ def find_bottom_left_position(
             other_bounds = placed_poly.polygon.bounds
             test_y_positions.append(other_bounds[3] + 2.0)  # Above with 2mm gap
 
-        # Test positions
+        # Collect valid positions
         for test_y in sorted(set(test_y_positions)):
             if test_y < 0 or test_y + poly_height > sheet_height:
                 continue
 
-            # Quick test
             x_offset = test_x - bounds[0]
             y_offset = test_y - bounds[1]
-            test_polygon = translate_polygon(polygon, x_offset, y_offset)
 
-            # Simple bounds check
-            test_bounds = test_polygon.bounds
-            if (
-                test_bounds[0] < 0
-                or test_bounds[1] < 0
-                or test_bounds[2] > sheet_width
-                or test_bounds[3] > sheet_height
-            ):
-                continue
-
-            # OPTIMIZATION: Use cached STRtree with intersects only (fast + quality)
-            collision = check_collision_fast_indexed_intersects_only(
-                test_polygon, _global_spatial_cache
+            # Quick bounds check
+            test_bounds = (
+                bounds[0] + x_offset,
+                bounds[1] + y_offset,
+                bounds[2] + x_offset,
+                bounds[3] + y_offset,
             )
 
-            if not collision:
-                if best_y is None or test_y < best_y:
-                    best_y = test_y
-                    best_positions = [(test_x, test_y)]
-                elif test_y == best_y:
-                    best_positions.append((test_x, test_y))
+            if (
+                test_bounds[0] >= 0
+                and test_bounds[1] >= 0
+                and test_bounds[2] <= sheet_width
+                and test_bounds[3] <= sheet_height
+            ):
+                all_candidates.append((test_x, test_y, x_offset, y_offset))
+
+    if not all_candidates:
+        # Try fallback immediately if no candidates
+        for y in range(0, int(sheet_height - poly_height), 20):
+            for x in range(0, int(sheet_width - poly_width), 20):
+                x_offset = x - bounds[0]
+                y_offset = y - bounds[1]
+                all_candidates.append((x, y, x_offset, y_offset))
+                if len(all_candidates) >= 50:  # Limit fallback candidates
+                    break
+            if len(all_candidates) >= 50:
                 break
 
-    # Return leftmost position
+    if not all_candidates:
+        return None, None
+
+    # BATCH: Create all translated polygons at once
+    test_polygons = [
+        translate_polygon(polygon, x_off, y_off)
+        for _x, _y, x_off, y_off in all_candidates
+    ]
+
+    # BATCH: Check all collisions at once using fast batch check
+    collisions = batch_check_collisions_cached_fast(test_polygons, _global_spatial_cache)
+
+    # Find first non-colliding position (sorted by Y, then X)
+    for i, has_collision in enumerate(collisions):
+        if not has_collision:
+            x, y, _x_off, _y_off = all_candidates[i]
+            if best_y is None or y < best_y:
+                best_y = y
+                best_positions = [(x, y)]
+            elif y == best_y:
+                best_positions.append((x, y))
+
+    # Return leftmost position at lowest Y
     if best_positions:
         best_positions.sort()
         return best_positions[0]
-
-    # Simple fallback - try grid positions (also using STRtree cache)
-    for y in range(0, int(sheet_height - poly_height), 20):
-        for x in range(0, int(sheet_width - poly_width), 20):
-            x_offset = x - bounds[0]
-            y_offset = y - bounds[1]
-            test_polygon = translate_polygon(polygon, x_offset, y_offset)
-
-            # OPTIMIZATION: Use cached STRtree with intersects only
-            collision = check_collision_fast_indexed_intersects_only(
-                test_polygon, _global_spatial_cache
-            )
-
-            if not collision:
-                return x, y
 
     return None, None
 
