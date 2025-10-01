@@ -1272,12 +1272,14 @@ def simple_compaction(
                 if test.bounds[1] < 0:
                     break
 
-                # Quick collision check - only intersections
+                # Collision check with min_gap
                 collision = False
                 for j in range(n):
-                    if j != i and test.intersects(current_polys[j]):
-                        collision = True
-                        break
+                    if j != i:
+                        # Check both intersection and minimum gap
+                        if test.intersects(current_polys[j]) or test.distance(current_polys[j]) < min_gap:
+                            collision = True
+                            break
 
                 if collision:
                     break
@@ -1317,9 +1319,11 @@ def simple_compaction(
 
                 collision = False
                 for j in range(n):
-                    if j != i and test.intersects(current_polys[j]):
-                        collision = True
-                        break
+                    if j != i:
+                        # Check both intersection and minimum gap
+                        if test.intersects(current_polys[j]) or test.distance(current_polys[j]) < min_gap:
+                            collision = True
+                            break
 
                 if not collision:
                     current_polys[i] = test
@@ -1846,7 +1850,7 @@ def bin_packing(
         )
 
     # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
-    placed = simple_compaction(placed, sheet_size, min_gap=3.0)
+    placed = simple_compaction(placed, sheet_size, min_gap=1.0)
 
     return placed, unplaced
 
