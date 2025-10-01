@@ -7,7 +7,6 @@ import numpy as np
 import time
 
 from shapely.geometry import Polygon, Point
-from shapely.strtree import STRtree
 import logging
 
 from carpet import Carpet, PlacedCarpet, UnplacedCarpet, PlacedSheet
@@ -15,12 +14,8 @@ from geometry_utils import translate_polygon, rotate_polygon
 from fast_geometry import (
     SpatialIndexCache,
     check_collision_fast_indexed_intersects_only,
-    check_collision_fast_indexed,
     extract_bounds_array,
-    filter_positions_by_bounds_only,
-    batch_check_collisions_cached,
     batch_check_collisions_cached_fast,
-    filter_candidates_by_bounds,
 )
 
 # Настройка логирования
@@ -1864,12 +1859,12 @@ def bin_packing(
         )
 
     # # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
-    # if len(placed) <= 20:  # Optimize most reasonable sets
-    #     # Ultra-aggressive left compaction to squeeze everything left - ТЕСТИРУЕМ
-    #     placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.4)
-    #
-    #     # Simple compaction with aggressive left push - ТЕСТИРУЕМ
-    #     placed = simple_compaction(placed, sheet_size)
+    if len(placed) <= 20:  # Optimize most reasonable sets
+        # Ultra-aggressive left compaction to squeeze everything left - ТЕСТИРУЕМ
+        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.4)
+        #
+        #     # Simple compaction with aggressive left push - ТЕСТИРУЕМ
+        placed = simple_compaction(placed, sheet_size)
     #
     #     # Additional edge snapping for maximum left compaction - ТЕСТИРУЕМ
     #     placed = fast_edge_snap(placed, sheet_size)
@@ -1879,9 +1874,11 @@ def bin_packing(
     #
     #     # Light tightening to clean up - ТЕСТИРУЕМ
     #     placed = tighten_layout(placed, sheet_size, min_gap=0.5, step=2.0, max_passes=1)
-    # elif len(placed) <= 35:  # For larger sets, still do aggressive compaction - ТЕСТИРУЕМ
-    #     placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.6)
-    #     placed = simple_compaction(placed, sheet_size)
+    elif (
+        len(placed) <= 35
+    ):  # For larger sets, still do aggressive compaction - ТЕСТИРУЕМ
+        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.6)
+        placed = simple_compaction(placed, sheet_size)
     #     placed = fast_edge_snap(placed, sheet_size)
     #
     # # No optimization for very large sets
@@ -2960,7 +2957,6 @@ def find_bottom_left_position_with_obstacles(
 
     valid_candidates = candidates_array[valid_mask]
 
-
     if len(valid_candidates) == 0:
         return None, None
 
@@ -3129,7 +3125,9 @@ def find_bottom_left_position(
     ]
 
     # BATCH: Check all collisions at once using fast batch check
-    collisions = batch_check_collisions_cached_fast(test_polygons, _global_spatial_cache)
+    collisions = batch_check_collisions_cached_fast(
+        test_polygons, _global_spatial_cache
+    )
 
     # Find first non-colliding position (sorted by Y, then X)
     for i, has_collision in enumerate(collisions):
