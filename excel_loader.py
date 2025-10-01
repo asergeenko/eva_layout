@@ -9,7 +9,7 @@ import streamlit as st
 
 TARGET_SHEET = "ZAKAZ"
 
-DXF_ROOT_DIR = "dxf_samples"
+DXF_ROOT_DIR = "data"
 
 logger = logging.getLogger(__name__)
 

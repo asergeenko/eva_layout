@@ -21,7 +21,7 @@ def test_single_page():
     files = ["SWM G01 1/2.dxf", "TESLA MODEL S 1/3.dxf","Лодка АГУЛ 270/2.dxf","Коврик под миску/1.dxf"]
     priority1_polygons = []
     for group_id, group in enumerate(files, 1):
-        dxf_file = Path('dxf_samples') / group
+        dxf_file = Path('data') / group
 
         try:
             polygon_data = parse_dxf_complete(dxf_file.as_posix(), verbose=False)

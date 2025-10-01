@@ -21,7 +21,7 @@ def test_golf_plus():
     models = ["VOLKSWAGEN GOLF PLUS"]
     priority1_polygons = []
     for group_id, group in enumerate(models, 1):
-        path = Path('dxf_samples') / group
+        path = Path('data') / group
         files = path.rglob("*.dxf", case_sensitive=False)
         for dxf_file in files:
             try:

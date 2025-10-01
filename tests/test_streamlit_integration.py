@@ -3,7 +3,7 @@
 Полный тест интеграции с точно такими же данными как в Streamlit:
 - 20 черных и 20 серых листов 140*200
 - Все 37 заказов из sample_input_test.xlsx
-- 20 серых и 20 черных файлов приоритета 2 из "dxf_samples/ДЕКА KUGOO M4 PRO JILONG/1.dxf"
+- 20 серых и 20 черных файлов приоритета 2 из "data/ДЕКА KUGOO M4 PRO JILONG/1.dxf"
 """
 
 import sys
@@ -88,7 +88,7 @@ def process_orders(orders) -> list[Carpet]:
 def create_priority2_polygons():
     """Создает 20 серых + 20 черных полигонов приоритета 2 из ДЕКА KUGOO M4 PRO JILONG"""
     priority2_polygons = []
-    dxf_file = "dxf_samples/ДЕКА KUGOO M4 PRO JILONG/1.dxf"
+    dxf_file = "data/ДЕКА KUGOO M4 PRO JILONG/1.dxf"
     try:
         # Используем verbose=False чтобы избежать Streamlit вызовов
         polygon_data = parse_dxf_complete(dxf_file, verbose=False)

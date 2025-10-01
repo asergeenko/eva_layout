@@ -7,7 +7,6 @@ import numpy as np
 import time
 
 from shapely.geometry import Polygon, Point
-from shapely.strtree import STRtree
 import logging
 
 from carpet import Carpet, PlacedCarpet, UnplacedCarpet, PlacedSheet
@@ -15,12 +14,8 @@ from geometry_utils import translate_polygon, rotate_polygon
 from fast_geometry import (
     SpatialIndexCache,
     check_collision_fast_indexed_intersects_only,
-    check_collision_fast_indexed,
     extract_bounds_array,
-    filter_positions_by_bounds_only,
-    batch_check_collisions_cached,
-    batch_check_collisions_cached_fast,
-    filter_candidates_by_bounds,
+    batch_check_collisions_cached_fast, filter_positions_by_bounds,
 )
 
 # Настройка логирования
@@ -525,13 +520,8 @@ def post_placement_optimize_aggressive(
             # Bottom-left позиции
             from layout_optimizer import find_bottom_left_position_with_obstacles
 
-            t1 = time.time()
             best_x, best_y = find_bottom_left_position_with_obstacles(
                 rotated_polygon, obstacles, sheet_width_mm, sheet_height_mm
-            )
-            logger.info(
-                "find_bottom_left_position_with_obstacles took %.2f seconds",
-                time.time() - t1,
             )
 
             if best_x is not None:
@@ -957,14 +947,9 @@ def bin_packing_with_existing(
             if rotated_width > sheet_width_mm or rotated_height > sheet_height_mm:
                 continue
 
-            t1 = time.time()
             # Find position using Tetris gravity algorithm
             best_x, best_y = find_bottom_left_position_with_obstacles(
                 rotated, obstacles, sheet_width_mm, sheet_height_mm
-            )
-            logger.info(
-                "find_bottom_left_position_with_obstacles took %.2f seconds",
-                time.time() - t1,
             )
 
             if best_x is not None and best_y is not None:
@@ -1584,11 +1569,9 @@ def bin_packing(
                 continue
 
             # Use Tetris gravity algorithm for placement
-            t1 = time.time()
             best_x, best_y = find_bottom_left_position(
                 rotated, placed, sheet_width_mm, sheet_height_mm
             )
-            logger.info("find_bottom_left_position took %.2f seconds", time.time() - t1)
 
             if best_x is not None and best_y is not None:
                 # TRUE TETRIS STRATEGY: Minimize global maximum height, not individual positions!
@@ -2899,6 +2882,7 @@ def find_bottom_left_position_with_obstacles(
     polygon: Polygon, obstacles: list[Polygon], sheet_width: float, sheet_height: float
 ) -> tuple[float | None, float | None]:
     """Find the bottom-left position using ORIGINAL algorithm with STRtree cache."""
+    raise NotImplementedError
     _Stats.call_counter += 1
     bounds = polygon.bounds
     poly_width = bounds[2] - bounds[0]
@@ -2959,7 +2943,6 @@ def find_bottom_left_position_with_obstacles(
     )
 
     valid_candidates = candidates_array[valid_mask]
-
 
     if len(valid_candidates) == 0:
         return None, None
@@ -3129,7 +3112,9 @@ def find_bottom_left_position(
     ]
 
     # BATCH: Check all collisions at once using fast batch check
-    collisions = batch_check_collisions_cached_fast(test_polygons, _global_spatial_cache)
+    collisions = batch_check_collisions_cached_fast(
+        test_polygons, _global_spatial_cache
+    )
 
     # Find first non-colliding position (sorted by Y, then X)
     for i, has_collision in enumerate(collisions):
