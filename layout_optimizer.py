@@ -16,6 +16,7 @@ from fast_geometry import (
     check_collision_fast_indexed_intersects_only,
     extract_bounds_array,
     batch_check_collisions_cached_fast,
+    filter_positions_by_bounds,
 )
 
 # Настройка логирования
@@ -952,14 +953,9 @@ def bin_packing_with_existing(
             if rotated_width > sheet_width_mm or rotated_height > sheet_height_mm:
                 continue
 
-            t1 = time.time()
             # Find position using Tetris gravity algorithm
             best_x, best_y = find_bottom_left_position_with_obstacles(
                 rotated, obstacles, sheet_width_mm, sheet_height_mm
-            )
-            logger.info(
-                "find_bottom_left_position_with_obstacles took %.2f seconds",
-                time.time() - t1,
             )
 
             if best_x is not None and best_y is not None:
@@ -1579,11 +1575,9 @@ def bin_packing(
                 continue
 
             # Use Tetris gravity algorithm for placement
-            t1 = time.time()
             best_x, best_y = find_bottom_left_position(
                 rotated, placed, sheet_width_mm, sheet_height_mm
             )
-            logger.info("find_bottom_left_position took %.2f seconds", time.time() - t1)
 
             if best_x is not None and best_y is not None:
                 # TRUE TETRIS STRATEGY: Minimize global maximum height, not individual positions!
@@ -1710,13 +1704,13 @@ def bin_packing(
             if len(placed) >= 2:  # Применяем только если есть что оптимизировать
                 try:
                     # Этап 1: АГРЕССИВНАЯ Post-Placement оптимизация (полное переразмещение проблемных ковров)
-                    post_optimized = post_placement_optimize_aggressive(
-                        placed, sheet_width_mm, sheet_height_mm
-                    )
+                    # post_optimized = post_placement_optimize_aggressive(
+                    #    placed, sheet_width_mm, sheet_height_mm
+                    # )
 
                     # Этап 2: Гравитация для финальной компактификации
                     gravity_optimized = apply_tetris_gravity(
-                        post_optimized, sheet_width_mm, sheet_height_mm
+                        placed, sheet_width_mm, sheet_height_mm
                     )
 
                     # Этап 3: НОВОЕ! Сжатие к правому краю (как в настоящем Тетрисе)
