@@ -1711,14 +1711,15 @@ def bin_packing(
                     )
 
                     # Этап 3: НОВОЕ! Сжатие к правому краю (как в настоящем Тетрисе)
-                    right_compacted = apply_tetris_right_compaction(
-                        gravity_optimized, sheet_width_mm, sheet_height_mm
-                    )
+                    #right_compacted = apply_tetris_right_compaction(
+                    #    gravity_optimized, sheet_width_mm, sheet_height_mm
+                    #)
 
                     # Этап 4: Финальная гравитация после сжатия к правому краю
-                    final_optimized = apply_tetris_gravity(
-                        right_compacted, sheet_width_mm, sheet_height_mm
-                    )
+                    #final_optimized = apply_tetris_gravity(
+                    #    right_compacted, sheet_width_mm, sheet_height_mm
+                    #)
+                    final_optimized = gravity_optimized
 
                     # КРИТИЧНО: Проверяем безопасность финального результата с ультра-строгим контролем
                     collision_found = False
@@ -1855,7 +1856,7 @@ def bin_packing(
     # # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
     if len(placed) <= 20:  # Optimize most reasonable sets
         # Ultra-aggressive left compaction to squeeze everything left - ТЕСТИРУЕМ
-        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.4)
+        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.7)
         #
         # Simple compaction with aggressive left push - ТЕСТИРУЕМ
         placed = simple_compaction(placed, sheet_size)
@@ -1871,7 +1872,7 @@ def bin_packing(
     elif (
             len(placed) <= 35
     ):  # For larger sets, still do aggressive compaction - ТЕСТИРУЕМ
-        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.6)
+        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.7)
         placed = simple_compaction(placed, sheet_size)
     #     placed = fast_edge_snap(placed, sheet_size)
     #
