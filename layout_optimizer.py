@@ -1845,32 +1845,8 @@ def bin_packing(
             f"📊 Обработано {processed_count} из {total_carpet_count} ковров, пропущено {skipped_count}, размещено {len(placed)}, в unplaced {len(unplaced)}"
         )
 
-    # # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
-    # if len(placed) <= 20:  # Optimize most reasonable sets
-    #     # Ultra-aggressive left compaction to squeeze everything left - ТЕСТИРУЕМ
-    #     placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.4)
-    #
-    #     # Simple compaction with aggressive left push - ТЕСТИРУЕМ
-    #     placed = simple_compaction(placed, sheet_size)
-    #
-    #     # Additional edge snapping for maximum left compaction - ТЕСТИРУЕМ
-    #     placed = fast_edge_snap(placed, sheet_size)
-    #
-    #     # Final ultra-left compaction - ТЕСТИРУЕМ
-    #     placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.5)
-    #
-    #     # Light tightening to clean up - ТЕСТИРУЕМ
-    #     placed = tighten_layout(placed, sheet_size, min_gap=0.5, step=2.0, max_passes=1)
-    # elif len(placed) <= 35:  # For larger sets, still do aggressive compaction - ТЕСТИРУЕМ
-    #     placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.6)
-    #     placed = simple_compaction(placed, sheet_size)
-    #     placed = fast_edge_snap(placed, sheet_size)
-    #
-    # # No optimization for very large sets
-
-    # POST-OPTIMIZATION: Gravity compaction - ОТКЛЮЧЕНО (создает пересечения)
-    # if placed:
-    #     placed = apply_gravity_optimization(placed, sheet_width_mm, sheet_height_mm)
+    # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
+    placed = simple_compaction(placed, sheet_size, min_gap=3.0)
 
     return placed, unplaced
 
@@ -2706,6 +2682,9 @@ def find_super_dense_position(
     if not all_candidates:
         return None, None
 
+    # CRITICAL: Sort by bottom-left preference (Y first, then X) for proper gravity
+    all_candidates.sort(key=lambda c: (c[1], c[0]))
+
     # BATCH: Create all translated polygons at once
     test_polygons = [
         translate_polygon(polygon, x_off, y_off)
@@ -2721,7 +2700,7 @@ def find_super_dense_position(
         test_polygons, _global_spatial_cache
     )
 
-    # Find first non-colliding position
+    # Find first non-colliding position (already sorted by Y, then X)
     for i, has_collision in enumerate(collisions):
         if not has_collision:
             x, y, _x_off, _y_off = all_candidates[i]
@@ -2822,6 +2801,9 @@ def find_enhanced_contour_following_position(
 
     if not all_candidates:
         return None, None
+
+    # CRITICAL: Sort by bottom-left preference (Y first, then X) for proper gravity
+    all_candidates.sort(key=lambda c: (c[1], c[0]))
 
     # BATCH: Create all translated polygons at once
     test_polygons = [
@@ -2927,6 +2909,9 @@ def find_ultra_tight_position(
     if not all_candidates:
         return None, None
 
+    # CRITICAL: Sort by bottom-left preference (Y first, then X) for proper gravity
+    all_candidates.sort(key=lambda c: (c[1], c[0]))
+
     # BATCH: Create all translated polygons at once
     test_polygons = [
         translate_polygon(polygon, x_off, y_off)
@@ -2942,7 +2927,7 @@ def find_ultra_tight_position(
         test_polygons, _global_spatial_cache
     )
 
-    # Find first non-colliding position
+    # Find first non-colliding position (already sorted by Y, then X)
     for i, has_collision in enumerate(collisions):
         if not has_collision:
             x, y, _x_off, _y_off = all_candidates[i]
