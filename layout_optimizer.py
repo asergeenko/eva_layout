@@ -3333,8 +3333,8 @@ def find_bottom_left_position(
         # Test only a few Y positions per X for speed
         test_y_positions = [0]  # Always try bottom
 
-        # Add positions based on existing polygons - check more for better density
-        for placed_poly in placed_polygons[:10]:  # Check up to 10 polygons for better positions
+        # Add positions based on existing polygons (very limited for performance)
+        for placed_poly in placed_polygons[:2]:  # Only first 2 polygons for speed
             other_bounds = placed_poly.polygon.bounds
             test_y_positions.append(other_bounds[3] + 2.0)  # Above with 2mm gap
 
