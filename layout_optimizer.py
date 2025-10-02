@@ -126,7 +126,7 @@ def apply_tetris_gravity(
     )  # По верхнему краю
 
     movements_made = 0
-    max_movements = len(gravity_carpets) // 2  # Ограничиваем количество движений
+    max_movements = len(gravity_carpets) // 2
 
     # Применяем гравитацию осторожно к верхним коврам
     for i, carpet in enumerate(gravity_carpets):
@@ -336,7 +336,7 @@ def apply_tetris_left_compaction(
     compacted_carpets.sort(key=lambda c: c.polygon.bounds[0], reverse=True)
 
     movements_made = 0
-    max_movements = min(5, len(compacted_carpets))  # Ограничиваем количество движений
+    max_movements = min(5, len(compacted_carpets))
 
     # Применяем сжатие к левому краю
     for i, carpet in enumerate(compacted_carpets):
@@ -1101,8 +1101,13 @@ def bin_packing_with_existing(
                 # SECONDARY SCORE: X position for tie-breaking (prefer left placement)
                 x_position_score = best_x
 
-                # Combined position score prioritizes global compactness
-                position_score = global_height_score + x_position_score
+                # Для совсем малых листов (1-2 ковра) учитываем ширину для компактности
+                if len(placed) <= 2:
+                    max_width_after = max(c.polygon.bounds[2] for c in all_test_placed) if all_test_placed else 0
+                    global_width_score = max_width_after * 3000
+                    position_score = global_height_score + global_width_score + x_position_score
+                else:
+                    position_score = global_height_score + x_position_score
 
                 # УЛУЧШЕННЫЙ ТЕТРИС: Более чувствительная оценка aspect ratio
                 shape_bonus = 0
@@ -1702,12 +1707,18 @@ def bin_packing(
             if rotated_width > sheet_width_mm or rotated_height > sheet_height_mm:
                 continue
 
-            # Use Tetris gravity algorithm for placement
-            best_x, best_y = find_bottom_left_position(
+            # ЧИСТЫЙ BOTTOM-LEFT: размещаем в самой нижней-левой позиции
+            bl_x, bl_y = find_bottom_left_position(
                 rotated, placed, sheet_width_mm, sheet_height_mm
             )
+            if bl_x is None or bl_y is None:
+                continue
 
-            if best_x is not None and best_y is not None:
+            # Используем только одну позицию - bottom-left
+            candidate_positions = [(bl_x, bl_y)]
+
+            # Пробуем эту позицию
+            for best_x, best_y in candidate_positions:
                 # TRUE TETRIS STRATEGY: Minimize global maximum height, not individual positions!
 
                 # Calculate what the maximum height would be after placing this carpet
@@ -1745,8 +1756,13 @@ def bin_packing(
                 # SECONDARY SCORE: X position for tie-breaking (prefer left placement)
                 x_position_score = best_x
 
-                # Combined position score prioritizes global compactness
-                position_score = global_height_score + x_position_score
+                # Для совсем малых листов (1-2 ковра) учитываем ширину для компактности
+                if len(placed) <= 2:
+                    max_width_after = max(c.polygon.bounds[2] for c in all_test_placed) if all_test_placed else 0
+                    global_width_score = max_width_after * 3000
+                    position_score = global_height_score + global_width_score + x_position_score
+                else:
+                    position_score = global_height_score + x_position_score
 
                 # УЛУЧШЕННЫЙ ТЕТРИС: Более чувствительная оценка aspect ratio
                 shape_bonus = 0
@@ -2791,6 +2807,35 @@ def calculate_tetris_quality_bonus(
     bottom_distance = bounds[1]
     bottom_bonus = max(0, (100 - bottom_distance) / 100) if bottom_distance < 100 else 0
 
+    # 6. НОВОЕ: Проверка на создание "карманов" справа (запертого пространства)
+    # Проверяем пространство справа от ковра - доступно ли оно сверху?
+    pocket_penalty = 0
+    right_edge = bounds[2]
+    if right_edge < sheet_width - 50:  # Есть пространство справа (>50мм)
+        # Проверяем точки справа на доступность сверху
+        test_points_right = []
+        for x in np.linspace(right_edge + 10, min(right_edge + 200, sheet_width - 10), 5):
+            for y in np.linspace(bounds[1], bounds[3], 3):
+                test_points_right.append((x, y))
+
+        if test_points_right:
+            blocked_from_top = 0
+            for point in test_points_right:
+                # Проверяем, есть ли ковёр выше этой точки, который блокирует доступ
+                blocked = False
+                for placed_carpet in all_placed:
+                    if hasattr(placed_carpet, "polygon"):
+                        pb = placed_carpet.polygon.bounds
+                        # Если ковёр выше и перекрывает по X
+                        if pb[3] > point[1] and pb[0] <= point[0] <= pb[2]:
+                            blocked = True
+                            break
+                if blocked:
+                    blocked_from_top += 1
+
+            pocket_ratio = blocked_from_top / len(test_points_right) if test_points_right else 0
+            pocket_penalty = pocket_ratio  # 0..1, чем больше тем хуже
+
     # Weighted combination
     tetris_score = (
         fill_ratio * 0.25
@@ -2798,6 +2843,7 @@ def calculate_tetris_quality_bonus(
         + height_efficiency * 0.2
         + base_quality * 0.1
         + bottom_bonus * 0.1
+        - pocket_penalty * 0.3  # Штраф за создание карманов
     )
 
     # Convert to bonus (scale to meaningful range for shape_bonus)
