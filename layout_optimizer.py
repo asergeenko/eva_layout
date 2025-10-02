@@ -306,6 +306,114 @@ def apply_tetris_right_compaction(
     return compacted_carpets
 
 
+def apply_tetris_left_compaction(
+    placed_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float
+) -> list[PlacedCarpet]:
+    """
+    TETRIS-ФУНКЦИЯ: Сжимает ковры к левому краю для плотной упаковки.
+    """
+    if not placed_carpets or len(placed_carpets) < 2:
+        return placed_carpets
+
+    # Создаем копии для безопасности
+    compacted_carpets = []
+    for carpet in placed_carpets:
+        compacted_carpets.append(
+            PlacedCarpet(
+                polygon=carpet.polygon,
+                x_offset=carpet.x_offset,
+                y_offset=carpet.y_offset,
+                angle=carpet.angle,
+                filename=carpet.filename,
+                color=carpet.color,
+                order_id=carpet.order_id,
+                carpet_id=carpet.carpet_id,
+                priority=carpet.priority,
+            )
+        )
+
+    # Сортируем по расстоянию от левого края (дальние сначала)
+    compacted_carpets.sort(key=lambda c: c.polygon.bounds[0], reverse=True)
+
+    movements_made = 0
+    max_movements = min(5, len(compacted_carpets))  # Ограничиваем количество движений
+
+    # Применяем сжатие к левому краю
+    for i, carpet in enumerate(compacted_carpets):
+        if movements_made >= max_movements:
+            break
+
+        # Препятствия = все остальные ковры
+        obstacles = [
+            other.polygon for j, other in enumerate(compacted_carpets) if j != i
+        ]
+
+        # Текущие границы ковра
+        current_bounds = carpet.polygon.bounds
+        current_left = current_bounds[0]
+
+        if current_left <= 10:  # Уже у левого края
+            continue
+
+        # Пробуем сдвинуть влево
+        best_x = current_left
+        improvement_found = False
+
+        # Шагаем влево с шагом 5мм
+        for test_left_x in range(int(current_left) - 5, -1, -5):
+            if test_left_x < 0:
+                break
+
+            # Создаем тестовый полигон
+            x_shift = test_left_x - current_bounds[0]
+            y_shift = 0  # Не двигаем по Y
+            test_polygon = translate_polygon(carpet.polygon, x_shift, y_shift)
+
+            # Проверяем границы листа
+            test_bounds = test_polygon.bounds
+            if (
+                test_bounds[0] < 0
+                or test_bounds[1] < 0
+                or test_bounds[2] > sheet_width_mm
+                or test_bounds[3] > sheet_height_mm
+            ):
+                break
+
+            # Проверяем коллизии
+            collision = False
+            for obstacle in obstacles:
+                if check_collision(test_polygon, obstacle, min_gap=2.0):
+                    collision = True
+                    break
+
+            if not collision:
+                best_x = test_left_x
+                improvement_found = True
+            else:
+                break  # Натолкнулись на препятствие, дальше не двигаемся
+
+        # Применяем улучшение
+        if improvement_found and best_x < current_left - 3:  # Минимум 3мм улучшения
+            x_shift = best_x - current_bounds[0]
+            new_polygon = translate_polygon(carpet.polygon, x_shift, 0)
+
+            # Обновляем ковер
+            compacted_carpets[i] = PlacedCarpet(
+                polygon=new_polygon,
+                x_offset=carpet.x_offset + x_shift,
+                y_offset=carpet.y_offset,
+                angle=carpet.angle,
+                filename=carpet.filename,
+                color=carpet.color,
+                order_id=carpet.order_id,
+                carpet_id=carpet.carpet_id,
+                priority=carpet.priority,
+            )
+            movements_made += 1
+
+    return compacted_carpets
+
+
 def calculate_trapped_space(
     placed_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float
 ) -> float:
@@ -1711,15 +1819,19 @@ def bin_packing(
                     )
 
                     # Этап 3: НОВОЕ! Сжатие к правому краю (как в настоящем Тетрисе)
-                    #right_compacted = apply_tetris_right_compaction(
-                    #    gravity_optimized, sheet_width_mm, sheet_height_mm
-                    #)
+                    right_compacted = apply_tetris_right_compaction(
+                        gravity_optimized, sheet_width_mm, sheet_height_mm
+                    )
 
                     # Этап 4: Финальная гравитация после сжатия к правому краю
-                    #final_optimized = apply_tetris_gravity(
-                    #    right_compacted, sheet_width_mm, sheet_height_mm
-                    #)
-                    final_optimized = gravity_optimized
+                    gravity_optimized2 = apply_tetris_gravity(
+                        right_compacted, sheet_width_mm, sheet_height_mm
+                    )
+
+                    # Этап 5: Сжатие к левому краю для плотной упаковки
+                    final_optimized = apply_tetris_left_compaction(
+                        gravity_optimized2, sheet_width_mm, sheet_height_mm
+                    )
 
                     # КРИТИЧНО: Проверяем безопасность финального результата с ультра-строгим контролем
                     collision_found = False
