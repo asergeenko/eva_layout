@@ -1137,6 +1137,29 @@ def bin_packing_with_existing(
                 )
                 shape_bonus -= tetris_bonus  # Negative is better
 
+                # ANTI-HANGING: Штрафуем "висящие" размещения (высоко от дна без хорошей опоры)
+                test_bounds = test_translated.bounds
+                bottom_y = test_bounds[1]
+
+                if bottom_y > 100:  # Высоко от дна
+                    # Проверяем площадь опоры снизу
+                    support_area = 0
+                    for other in placed:
+                        if other.polygon.bounds[3] <= bottom_y + 5:  # Ковер снизу
+                            # Создаем полигон чуть ниже текущего для проверки опоры
+                            support_test = translate_polygon(test_translated, 0, -3)
+                            if support_test.intersects(other.polygon):
+                                intersection = support_test.intersection(other.polygon)
+                                support_area += intersection.area
+
+                    # Если опора маленькая, это "висящий" ковер - штрафуем
+                    carpet_area = test_translated.area
+                    support_ratio = support_area / carpet_area if carpet_area > 0 else 0
+
+                    if support_ratio < 0.3:  # Менее 30% опоры
+                        hanging_penalty = int((0.3 - support_ratio) * 50000)  # Большой штраф
+                        shape_bonus += hanging_penalty
+
                 total_score = position_score + shape_bonus
 
                 if total_score < best_priority:
@@ -1765,6 +1788,29 @@ def bin_packing(
                     rotated, all_test_placed, sheet_width_mm, sheet_height_mm
                 )
                 shape_bonus -= tetris_bonus  # Negative is better
+
+                # ANTI-HANGING: Штрафуем "висящие" размещения (высоко от дна без хорошей опоры)
+                test_bounds = test_translated.bounds
+                bottom_y = test_bounds[1]
+
+                if bottom_y > 100:  # Высоко от дна
+                    # Проверяем площадь опоры снизу
+                    support_area = 0
+                    for other in placed:
+                        if other.polygon.bounds[3] <= bottom_y + 5:  # Ковер снизу
+                            # Создаем полигон чуть ниже текущего для проверки опоры
+                            support_test = translate_polygon(test_translated, 0, -3)
+                            if support_test.intersects(other.polygon):
+                                intersection = support_test.intersection(other.polygon)
+                                support_area += intersection.area
+
+                    # Если опора маленькая, это "висящий" ковер - штрафуем
+                    carpet_area = test_translated.area
+                    support_ratio = support_area / carpet_area if carpet_area > 0 else 0
+
+                    if support_ratio < 0.3:  # Менее 30% опоры
+                        hanging_penalty = int((0.3 - support_ratio) * 50000)  # Большой штраф
+                        shape_bonus += hanging_penalty
 
                 total_score = position_score + shape_bonus
 
@@ -3287,8 +3333,8 @@ def find_bottom_left_position(
         # Test only a few Y positions per X for speed
         test_y_positions = [0]  # Always try bottom
 
-        # Add positions based on existing polygons (very limited)
-        for placed_poly in placed_polygons[:2]:  # Only first 2 polygons for speed
+        # Add positions based on existing polygons - check more for better density
+        for placed_poly in placed_polygons[:10]:  # Check up to 10 polygons for better positions
             other_bounds = placed_poly.polygon.bounds
             test_y_positions.append(other_bounds[3] + 2.0)  # Above with 2mm gap
 
