@@ -1092,11 +1092,11 @@ def bin_packing_with_existing(
                     else 0
                 )
 
-                # PRIMARY SCORE: Heavily penalize orientations that increase maximum height
-                # This is the core of true Tetris behavior
+                # PRIMARY SCORE: Penalize orientations that increase maximum height
+                # BALANCE: Уменьшен вес для лучшей локальной компактности (было 10000)
                 global_height_score = (
-                    max_height_after * 10000
-                )  # Much higher weight than individual position
+                    max_height_after * 5000
+                )  # Сбалансирован с локальными факторами
 
                 # SECONDARY SCORE: X position for tie-breaking (prefer left placement)
                 x_position_score = best_x
@@ -1142,11 +1142,13 @@ def bin_packing_with_existing(
                 )
                 shape_bonus -= tetris_bonus  # Negative is better
 
-                # ANTI-HANGING: Штрафуем "висящие" размещения (высоко от дна без хорошей опоры)
+                # КРИТИЧЕСКИЙ ANTI-HANGING: Штрафуем "висящие" размещения для максимальной тетрисовости
+                # Ковры ДОЛЖНЫ опираться на дно или другие ковры, иначе блокируют пространство
                 test_bounds = test_translated.bounds
                 bottom_y = test_bounds[1]
 
-                if bottom_y > 100:  # Высоко от дна
+                # УСИЛЕННЫЙ ШТРАФ: даже небольшая высота от дна должна штрафоваться
+                if bottom_y > 50:  # Снижен порог с 100 до 50 для более строгой компактности
                     # Проверяем площадь опоры снизу
                     support_area = 0
                     for other in placed:
@@ -1157,13 +1159,19 @@ def bin_packing_with_existing(
                                 intersection = support_test.intersection(other.polygon)
                                 support_area += intersection.area
 
-                    # Если опора маленькая, это "висящий" ковер - штрафуем
+                    # Если опора маленькая, это "висящий" ковер - КРИТИЧЕСКИЙ штраф
                     carpet_area = test_translated.area
                     support_ratio = support_area / carpet_area if carpet_area > 0 else 0
 
-                    if support_ratio < 0.3:  # Менее 30% опоры
-                        hanging_penalty = int((0.3 - support_ratio) * 50000)  # Большой штраф
+                    # УСИЛЕННЫЕ требования: нужно минимум 40% опоры (было 30%)
+                    if support_ratio < 0.4:
+                        # ОГРОМНЫЙ штраф за висящие ковры - они блокируют пространство!
+                        hanging_penalty = int((0.4 - support_ratio) * 150000)  # Утроен с 50000
                         shape_bonus += hanging_penalty
+
+                    # Дополнительный штраф за саму высоту - чем выше, тем хуже
+                    height_penalty = int(bottom_y * 50)  # Штраф пропорциональный высоте
+                    shape_bonus += height_penalty
 
                 total_score = position_score + shape_bonus
 
@@ -1697,6 +1705,21 @@ def bin_packing(
 
         rotation_angles = [0, 90, 180, 270]
 
+        # ПРИОРИТЕТ ОДИНАКОВОГО УГЛА: Для одинаковых ковров сначала пробуем тот же угол
+        # Это обеспечивает плотную упаковку - одинаковые формы лучше стыкуются
+        same_carpets_placed = [p for p in placed if p.filename == carpet.filename]
+        if len(same_carpets_placed) > 0:
+            # Смотрим какие углы уже использованы
+            used_angles = [p.angle for p in same_carpets_placed]
+
+            # Находим самый популярный угол среди уже размещенных одинаковых ковров
+            angle_counts = {a: used_angles.count(a) for a in [0, 90, 180, 270]}
+            most_common_angle = max(angle_counts.items(), key=lambda x: x[1])[0]
+
+            # Пробуем сначала самый популярный угол, потом все остальные
+            # Это даёт плотную упаковку: одинаковые ковры под одним углом стыкуются лучше
+            rotation_angles = [most_common_angle] + [a for a in [0, 90, 180, 270] if a != most_common_angle]
+
         for angle in rotation_angles:
             rotated = get_cached_rotation(carpet, angle)
             rotated_bounds = rotated.bounds
@@ -1747,11 +1770,11 @@ def bin_packing(
                     else 0
                 )
 
-                # PRIMARY SCORE: Heavily penalize orientations that increase maximum height
-                # This is the core of true Tetris behavior
+                # PRIMARY SCORE: Penalize orientations that increase maximum height
+                # BALANCE: Уменьшен вес для лучшей локальной компактности (было 10000)
                 global_height_score = (
-                    max_height_after * 10000
-                )  # Much higher weight than individual position
+                    max_height_after * 5000
+                )  # Сбалансирован с локальными факторами
 
                 # SECONDARY SCORE: X position for tie-breaking (prefer left placement)
                 x_position_score = best_x
@@ -1805,11 +1828,13 @@ def bin_packing(
                 )
                 shape_bonus -= tetris_bonus  # Negative is better
 
-                # ANTI-HANGING: Штрафуем "висящие" размещения (высоко от дна без хорошей опоры)
+                # КРИТИЧЕСКИЙ ANTI-HANGING: Штрафуем "висящие" размещения для максимальной тетрисовости
+                # Ковры ДОЛЖНЫ опираться на дно или другие ковры, иначе блокируют пространство
                 test_bounds = test_translated.bounds
                 bottom_y = test_bounds[1]
 
-                if bottom_y > 100:  # Высоко от дна
+                # УСИЛЕННЫЙ ШТРАФ: даже небольшая высота от дна должна штрафоваться
+                if bottom_y > 50:  # Снижен порог с 100 до 50 для более строгой компактности
                     # Проверяем площадь опоры снизу
                     support_area = 0
                     for other in placed:
@@ -1820,13 +1845,33 @@ def bin_packing(
                                 intersection = support_test.intersection(other.polygon)
                                 support_area += intersection.area
 
-                    # Если опора маленькая, это "висящий" ковер - штрафуем
+                    # Если опора маленькая, это "висящий" ковер - КРИТИЧЕСКИЙ штраф
                     carpet_area = test_translated.area
                     support_ratio = support_area / carpet_area if carpet_area > 0 else 0
 
-                    if support_ratio < 0.3:  # Менее 30% опоры
-                        hanging_penalty = int((0.3 - support_ratio) * 50000)  # Большой штраф
+                    # УСИЛЕННЫЕ требования: нужно минимум 40% опоры (было 30%)
+                    if support_ratio < 0.4:
+                        # ОГРОМНЫЙ штраф за висящие ковры - они блокируют пространство!
+                        hanging_penalty = int((0.4 - support_ratio) * 150000)  # Утроен с 50000
                         shape_bonus += hanging_penalty
+
+                    # Дополнительный штраф за саму высоту - чем выше, тем хуже
+                    height_penalty = int(bottom_y * 50)  # Штраф пропорциональный высоте
+                    shape_bonus += height_penalty
+
+                # КРИТИЧЕСКИ ВАЖНЫЙ БОНУС ЗА ОДИНАКОВЫЙ УГОЛ: Одинаковые ковры под одним углом упаковываются плотнее
+                # Бонус должен быть ОГРОМНЫМ, чтобы перевесить разницу в позициях
+                same_angle_bonus = 0
+                if len(same_carpets_placed) > 0:
+                    # Проверяем, используется ли уже этот угол для одинаковых ковров
+                    angles_used = [p.angle for p in same_carpets_placed]
+                    if angle in angles_used:
+                        # Чем больше ковров уже под этим углом, тем сильнее бонус
+                        count_at_this_angle = angles_used.count(angle)
+                        # ОГРОМНЫЙ бонус: должен перевесить даже большую разницу в высоте
+                        # global_height_score = max_height * 10000, поэтому наш бонус должен быть сопоставим
+                        same_angle_bonus = -count_at_this_angle * 100000  # КРИТИЧЕСКИЙ бонус для плотности
+                shape_bonus += same_angle_bonus
 
                 total_score = position_score + shape_bonus
 
@@ -1866,6 +1911,7 @@ def bin_packing(
                     order_id=carpet.order_id,
                 )
             )
+
 
             # POST-PLACEMENT OPTIMIZATION
             if len(placed) >= 2:  # Применяем только если есть что оптимизировать
@@ -2836,18 +2882,18 @@ def calculate_tetris_quality_bonus(
             pocket_ratio = blocked_from_top / len(test_points_right) if test_points_right else 0
             pocket_penalty = pocket_ratio  # 0..1, чем больше тем хуже
 
-    # Weighted combination
+    # Weighted combination - увеличен вес штрафа за карманы
     tetris_score = (
         fill_ratio * 0.25
         + accessibility_ratio * 0.35  # Most important - future space
         + height_efficiency * 0.2
         + base_quality * 0.1
         + bottom_bonus * 0.1
-        - pocket_penalty * 0.3  # Штраф за создание карманов
+        - pocket_penalty * 0.5  # Усилен штраф за создание карманов
     )
 
     # Convert to bonus (scale to meaningful range for shape_bonus)
-    bonus = int(tetris_score * 10000)  # Scale to compete with other bonuses
+    bonus = int(tetris_score * 8000)  # Уменьшен для лучшего баланса с другими факторами
 
     return bonus
 
@@ -3375,14 +3421,19 @@ def find_bottom_left_position(
     # BATCH OPTIMIZATION: Collect ALL candidate positions first
     all_candidates = []  # (x, y, x_offset, y_offset)
 
-    for test_x in x_positions[:15]:  # Limit for speed but favor left
+    # УЛУЧШЕНИЕ ПЛОТНОСТИ: Проверяем больше X позиций для лучшей компактности
+    for test_x in x_positions[:30]:  # Увеличено с 15 до 30 для большей плотности
         # Test only a few Y positions per X for speed
         test_y_positions = [0]  # Always try bottom
 
-        # Add positions based on existing polygons (very limited for performance)
-        for placed_poly in placed_polygons[:2]:  # Only first 2 polygons for speed
+        # Add positions based on existing polygons - check ALL polygons for dense packing
+        # КРИТИЧНО для плотности: нужно учитывать ВСЕ размещенные ковры
+        for placed_poly in placed_polygons:  # Проверяем все полигоны
             other_bounds = placed_poly.polygon.bounds
             test_y_positions.append(other_bounds[3] + 2.0)  # Above with 2mm gap
+            # Добавляем также позиции справа от ковров для лучшей компактности
+            test_y_positions.append(other_bounds[1])  # На той же высоте что низ
+            test_y_positions.append(other_bounds[1] + (other_bounds[3] - other_bounds[1]) / 2)  # Посередине
 
         # Collect valid positions
         for test_y in sorted(set(test_y_positions)):
@@ -3414,7 +3465,18 @@ def find_bottom_left_position(
             for x in range(0, int(sheet_width - poly_width), 20):
                 x_offset = x - bounds[0]
                 y_offset = y - bounds[1]
-                all_candidates.append((x, y, x_offset, y_offset))
+
+                # ВАЖНО: Проверяем границы для fallback кандидатов!
+                test_bounds = (
+                    bounds[0] + x_offset,
+                    bounds[1] + y_offset,
+                    bounds[2] + x_offset,
+                    bounds[3] + y_offset,
+                )
+                if (test_bounds[0] >= 0 and test_bounds[1] >= 0 and
+                    test_bounds[2] <= sheet_width and test_bounds[3] <= sheet_height):
+                    all_candidates.append((x, y, x_offset, y_offset))
+
                 if len(all_candidates) >= 50:  # Limit fallback candidates
                     break
             if len(all_candidates) >= 50:
