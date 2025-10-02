@@ -3512,20 +3512,75 @@ def find_bottom_left_position(
         test_polygons, _global_spatial_cache
     )
 
-    # Find first non-colliding position (sorted by Y, then X)
+    # КРИТИЧЕСКОЕ УЛУЧШЕНИЕ: Вместо выбора первой позиции с минимальным Y,
+    # оцениваем ВСЕ валидные позиции и выбираем лучшую по плотности
+
+    valid_positions = []
     for i, has_collision in enumerate(collisions):
         if not has_collision:
-            x, y, _x_off, _y_off = all_candidates[i]
-            if best_y is None or y < best_y:
-                best_y = y
-                best_positions = [(x, y)]
-            elif y == best_y:
-                best_positions.append((x, y))
+            x, y, x_off, y_off = all_candidates[i]
+            test_poly = test_polygons[i]
 
-    # Return leftmost position at lowest Y
-    if best_positions:
-        best_positions.sort()
-        return best_positions[0]
+            # Оцениваем качество позиции для максимальной плотности
+            score = 0
+            bounds = test_poly.bounds
+
+            # 1. ПРИОРИТЕТ НИЗКОЙ ПОЗИЦИИ (основной фактор)
+            score += y * 1000
+
+            # 2. БОНУС ЗА БЛИЗОСТЬ К ЛЕВОМУ КРАЮ (вторичный)
+            score += bounds[0] * 100
+
+            # 3. БОНУС ЗА ПРИЖАТОСТЬ К КРАЯМ ЛИСТА
+            # Левый край
+            if bounds[0] < 10:
+                score -= 50000
+            # Правый край
+            if abs(bounds[2] - sheet_width) < 10:
+                score -= 50000
+
+            # 4. КРИТИЧЕСКИЙ БОНУС: близость к уже размещенным коврам
+            # Ковер должен быть как можно ближе к соседям для плотности
+            min_distance_to_neighbors = float('inf')
+            for placed in placed_polygons:
+                placed_bounds = placed.polygon.bounds
+
+                # Расстояние между boundary boxes
+                dx = max(0, max(bounds[0] - placed_bounds[2], placed_bounds[0] - bounds[2]))
+                dy = max(0, max(bounds[1] - placed_bounds[3], placed_bounds[1] - bounds[3]))
+                dist = (dx*dx + dy*dy) ** 0.5
+                min_distance_to_neighbors = min(min_distance_to_neighbors, dist)
+
+            # Штраф за удаленность от соседей
+            if min_distance_to_neighbors < float('inf'):
+                score += int(min_distance_to_neighbors * 200)
+
+            # 5. ШТРАФ ЗА БЛОКИРОВАНИЕ ПРОСТРАНСТВА
+            # Если ковер висит высоко без опоры снизу - это блокирует пространство
+            bottom_y = bounds[1]
+            if bottom_y > 50:
+                # Проверяем опору снизу
+                support_area = 0
+                for placed in placed_polygons:
+                    if placed.polygon.bounds[3] <= bottom_y + 5:
+                        # Проверяем пересечение снизу
+                        support_test = translate_polygon(test_poly, 0, -3)
+                        if support_test.intersects(placed.polygon):
+                            intersection = support_test.intersection(placed.polygon)
+                            support_area += intersection.area
+
+                support_ratio = support_area / test_poly.area if test_poly.area > 0 else 0
+                if support_ratio < 0.4:
+                    # Висячая позиция - ОГРОМНЫЙ штраф
+                    score += int((0.4 - support_ratio) * 100000)
+
+            valid_positions.append((score, x, y, i))
+
+    # Выбираем позицию с МИНИМАЛЬНЫМ score (лучшая плотность)
+    if valid_positions:
+        valid_positions.sort()  # Сортируем по score
+        best_score, best_x, best_y, best_i = valid_positions[0]
+        return best_x, best_y
 
     return None, None
 
