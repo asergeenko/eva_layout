@@ -19,18 +19,17 @@ def test_volvo_s80():
     # Создаем полигоны приоритета 1
     #########################################
     priority1_polygons = []
-    for group_id in range(1, 9):
-        dxf_file = Path('data/VOLVO S80 1/4.dxf')
-        try:
-            polygon_data = parse_dxf_complete(dxf_file.as_posix(), verbose=False)
-            if polygon_data and polygon_data.get("combined_polygon"):
-                base_polygon = polygon_data["combined_polygon"]
-                for i in range(1, 6):
-                    priority1_polygons.append(Carpet(base_polygon, f"{dxf_file.name}_копия_{i}", "чёрный", f"group_{group_id}", 1))
+    dxf_file = Path('data/VOLVO S80 1/4.dxf')
+    try:
+        polygon_data = parse_dxf_complete(dxf_file.as_posix(), verbose=False)
+        if polygon_data and polygon_data.get("combined_polygon"):
+            base_polygon = polygon_data["combined_polygon"]
+            for i in range(1, 9):
+                priority1_polygons.append(Carpet(base_polygon, f"{dxf_file.name}_копия_{i}", "чёрный", f"group_1", 1))
 
-        except Exception as e:
-            print(f"⚠️ Ошибка загрузки {dxf_file}: {e}")
-            return []
+    except Exception as e:
+        print(f"⚠️ Ошибка загрузки {dxf_file}: {e}")
+        return []
     #########################################
     placed_layouts, unplaced = bin_packing_with_inventory(
         priority1_polygons,
