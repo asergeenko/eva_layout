@@ -3404,14 +3404,30 @@ def find_bottom_left_position(
     best_y = None
     best_positions = []
 
-    # PRIORITY LEFT SCAN - try left positions first for maximum compaction
-    # Create X positions with strong preference for left side
+    # КРИТИЧНО: Генерируем X позиции для МАКСИМАЛЬНОЙ компактности
+    # Проверяем: 0 (левый край), справа от каждого ковра, правый край
     x_positions = []
+
+    # 1. Левый край
+    x_positions.append(0)
+
+    # 2. Позиции справа от каждого размещенного ковра
+    for placed_poly in placed_polygons:
+        right_edge = placed_poly.polygon.bounds[2]
+        if right_edge + poly_width <= sheet_width:
+            x_positions.append(int(right_edge) + 2)  # 2mm gap
+
+    # 3. Правый край листа (прижать к правому краю!)
+    right_aligned_x = int(sheet_width - poly_width)
+    if right_aligned_x >= 0:
+        x_positions.append(right_aligned_x)
+
+    # 4. Дополнительные промежуточные позиции для полноты
     for x in range(0, int(sheet_width - poly_width), max(5, int(step))):
         x_positions.append(x)
 
-    # Sort to prioritize leftmost positions
-    x_positions.sort()
+    # Убираем дубликаты и сортируем (приоритет левым)
+    x_positions = sorted(set(x_positions))
 
     # OPTIMIZATION: Cache obstacles and STRtree ONCE
     obstacles = [placed_poly.polygon for placed_poly in placed_polygons]
