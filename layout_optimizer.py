@@ -1853,19 +1853,62 @@ def bin_packing(
                     height_penalty = int(bottom_y * 50)  # Штраф пропорциональный высоте
                     shape_bonus += height_penalty
 
-                # КРИТИЧЕСКИ ВАЖНЫЙ БОНУС ЗА ОДИНАКОВЫЙ УГОЛ: Одинаковые ковры под одним углом упаковываются плотнее
-                # Бонус должен быть ОГРОМНЫМ, чтобы перевесить разницу в позициях
-                same_angle_bonus = 0
+                # КРИТИЧЕСКИ ВАЖНЫЙ БОНУС ЗА ПРАВИЛЬНУЮ ОРИЕНТАЦИЮ
+                # Для симметричных ковров - одинаковый угол
+                # Для асимметричных - чередующиеся углы (90°↔270°, 0°↔180°) для лучшей стыковки
+                orientation_bonus = 0
                 if len(same_carpets_placed) > 0:
-                    # Проверяем, используется ли уже этот угол для одинаковых ковров
                     angles_used = [p.angle for p in same_carpets_placed]
-                    if angle in angles_used:
-                        # Чем больше ковров уже под этим углом, тем сильнее бонус
-                        count_at_this_angle = angles_used.count(angle)
-                        # ОГРОМНЫЙ бонус: должен перевесить даже большую разницу в высоте
-                        # global_height_score = max_height * 10000, поэтому наш бонус должен быть сопоставим
-                        same_angle_bonus = -count_at_this_angle * 100000  # КРИТИЧЕСКИЙ бонус для плотности
-                shape_bonus += same_angle_bonus
+
+                    # Проверяем асимметричность: сравниваем центроиды при 0° и 180°
+                    rot_0 = get_cached_rotation(carpet, 0)
+                    rot_180 = get_cached_rotation(carpet, 180)
+
+                    # Нормализуем обе формы к одинаковой позиции для сравнения
+                    bounds_0 = rot_0.bounds
+                    bounds_180 = rot_180.bounds
+
+                    # Сдвигаем обе формы в (0,0)
+                    from shapely.affinity import translate as shapely_translate
+                    norm_0 = shapely_translate(rot_0, -bounds_0[0], -bounds_0[1])
+                    norm_180 = shapely_translate(rot_180, -bounds_180[0], -bounds_180[1])
+
+                    # Сравниваем центроиды после нормализации
+                    cent_0 = norm_0.centroid
+                    cent_180 = norm_180.centroid
+
+                    # Если центроиды отличаются >5% от размера - асимметричная
+                    width_0 = bounds_0[2] - bounds_0[0]
+                    height_0 = bounds_0[3] - bounds_0[1]
+                    max_dim = max(width_0, height_0)
+
+                    cent_diff_x = abs(cent_0.x - cent_180.x)
+                    cent_diff_y = abs(cent_0.y - cent_180.y)
+
+                    is_asymmetric = (
+                        cent_diff_x > max_dim * 0.05 or
+                        cent_diff_y > max_dim * 0.05
+                    )
+
+                    if is_asymmetric:
+                        # Для асимметричных: чередуем 90° и 270° (или 0° и 180°)
+                        # Если последний ковер был 270°, текущий должен быть 90° (и наоборот)
+                        last_angle = angles_used[-1]
+
+                        if (last_angle == 270 and angle == 90) or (last_angle == 90 and angle == 270):
+                            orientation_bonus = -200000  # ОГРОМНЫЙ бонус за чередование
+                        elif (last_angle == 0 and angle == 180) or (last_angle == 180 and angle == 0):
+                            orientation_bonus = -200000
+                        elif angle == last_angle:
+                            # Одинаковый угол для асимметричных - ОГРОМНЫЙ штраф
+                            orientation_bonus = +200000
+                    else:
+                        # Для симметричных: одинаковый угол
+                        if angle in angles_used:
+                            count_at_this_angle = angles_used.count(angle)
+                            orientation_bonus = -count_at_this_angle * 100000
+
+                shape_bonus += orientation_bonus
 
                 total_score = position_score + shape_bonus
 
