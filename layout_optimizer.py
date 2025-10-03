@@ -1101,13 +1101,10 @@ def bin_packing_with_existing(
                 # SECONDARY SCORE: X position for tie-breaking (prefer left placement)
                 x_position_score = best_x
 
-                # Для совсем малых листов (1-2 ковра) учитываем ширину для компактности
-                if len(placed) <= 2:
-                    max_width_after = max(c.polygon.bounds[2] for c in all_test_placed) if all_test_placed else 0
-                    global_width_score = max_width_after * 3000
-                    position_score = global_height_score + global_width_score + x_position_score
-                else:
-                    position_score = global_height_score + x_position_score
+                # Для совсем малых листов (1-2 ковра) НЕ минимизируем ширину
+                # так как это блокирует правильное размещение у краев
+                # Вместо этого полагаемся на scoring в find_bottom_left_position
+                position_score = global_height_score + x_position_score
 
                 # УЛУЧШЕННЫЙ ТЕТРИС: Более чувствительная оценка aspect ratio
                 shape_bonus = 0
@@ -1779,13 +1776,10 @@ def bin_packing(
                 # SECONDARY SCORE: X position for tie-breaking (prefer left placement)
                 x_position_score = best_x
 
-                # Для совсем малых листов (1-2 ковра) учитываем ширину для компактности
-                if len(placed) <= 2:
-                    max_width_after = max(c.polygon.bounds[2] for c in all_test_placed) if all_test_placed else 0
-                    global_width_score = max_width_after * 3000
-                    position_score = global_height_score + global_width_score + x_position_score
-                else:
-                    position_score = global_height_score + x_position_score
+                # Для совсем малых листов (1-2 ковра) НЕ минимизируем ширину
+                # так как это блокирует правильное размещение у краев
+                # Вместо этого полагаемся на scoring в find_bottom_left_position
+                position_score = global_height_score + x_position_score
 
                 # УЛУЧШЕННЫЙ ТЕТРИС: Более чувствительная оценка aspect ratio
                 shape_bonus = 0
@@ -2091,9 +2085,10 @@ def bin_packing(
     #     placed = tighten_layout(placed, sheet_size, min_gap=0.5, step=2.0, max_passes=1)
     elif (
             len(placed) <= 35
-    ):  # For larger sets, still do aggressive compaction - ТЕСТИРУЕМ
-        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.7)
-        placed = simple_compaction(placed, sheet_size)
+    ):  # COMPACTION DISABLED - breaks optimal layout from find_bottom_left_position
+        # placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.7)
+        # placed = simple_compaction(placed, sheet_size)
+        pass
     #     placed = fast_edge_snap(placed, sheet_size)
     #
     # # No optimization for very large sets
@@ -3528,16 +3523,30 @@ def find_bottom_left_position(
             # 1. ПРИОРИТЕТ НИЗКОЙ ПОЗИЦИИ (основной фактор)
             score += y * 1000
 
-            # 2. БОНУС ЗА БЛИЗОСТЬ К ЛЕВОМУ КРАЮ (вторичный)
-            score += bounds[0] * 100
+            # 2. КРИТИЧЕСКИЙ: Максимизация открытого пространства
+            # Для первого ковра или малого заполнения - приоритет левому краю
+            # Для последующих - приоритет близости к соседям
+            if len(placed_polygons) <= 1:
+                # Первые ковры: прижимаем к левому краю для максимизации правого пространства
+                score += bounds[0] * 500  # Усилен в 5 раз
+            else:
+                # Последующие: баланс между краями и близостью к соседям
+                score += bounds[0] * 100
 
-            # 3. БОНУС ЗА ПРИЖАТОСТЬ К КРАЯМ ЛИСТА
+            # 3. БОНУС ЗА ПРИЖАТОСТЬ К КРАЯМ ЛИСТА (для любых позиций)
             # Левый край
-            if bounds[0] < 10:
-                score -= 50000
+            left_distance = bounds[0]
+            if left_distance < 5:
+                score -= 80000
+            elif left_distance < 30:
+                score -= int((30 - left_distance) * 2000)
+
             # Правый край
-            if abs(bounds[2] - sheet_width) < 10:
-                score -= 50000
+            right_distance = abs(bounds[2] - sheet_width)
+            if right_distance < 5:
+                score -= 80000
+            elif right_distance < 30:
+                score -= int((30 - right_distance) * 2000)
 
             # 4. КРИТИЧЕСКИЙ БОНУС: близость к уже размещенным коврам
             # Ковер должен быть как можно ближе к соседям для плотности
@@ -3580,6 +3589,7 @@ def find_bottom_left_position(
     if valid_positions:
         valid_positions.sort()  # Сортируем по score
         best_score, best_x, best_y, best_i = valid_positions[0]
+
         return best_x, best_y
 
     return None, None
