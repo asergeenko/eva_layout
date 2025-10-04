@@ -3668,93 +3668,62 @@ def calculate_placement_waste(
 def try_simple_placement(
     carpet: Carpet, existing_placed: list[PlacedCarpet], sheet_size: tuple[float, float]
 ) -> PlacedCarpet | None:
-    """ULTRA-AGGRESSIVE placement with TETRIS QUALITY evaluation."""
+    """FAST placement using find_bottom_left_position for priority2 carpets."""
     import shapely.affinity
 
     # Convert sheet size from cm to mm
     sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
 
-    # Get existing obstacles
-    obstacles = [placed.polygon for placed in existing_placed]
+    # Try all 4 rotations for better placement
+    for angle in [0, 90, 180, 270]:
+        rotated = get_cached_rotation(carpet, angle)
+        bounds = rotated.bounds
+        poly_width = bounds[2] - bounds[0]
+        poly_height = bounds[3] - bounds[1]
 
-    # Try multiple approaches for maximum space utilization
-    placement_strategies = [
-        {
-            "step": 10,
-            "rotations": [0, 90, 180, 270],
-        },  # Увеличен шаг с 5 до 10мм для ускорения
-    ]
+        # Skip if doesn't fit
+        if poly_width > sheet_width_mm or poly_height > sheet_height_mm:
+            continue
 
-    # Cache rotation results to avoid repeated calculations
-    rotation_cache = {}
+        # Use find_bottom_left_position which intelligently checks edges and key positions
+        bl_x, bl_y = find_bottom_left_position(
+            rotated, existing_placed, sheet_width_mm, sheet_height_mm
+        )
 
-    for strategy in placement_strategies:
-        step: int = strategy["step"]
-        rotations = strategy["rotations"]
+        if bl_x is not None and bl_y is not None:
+            # Calculate final position
+            dx = bl_x - bounds[0]
+            dy = bl_y - bounds[1]
+            positioned_polygon = shapely.affinity.translate(rotated, dx, dy)
 
-        # Try different rotations
-        for angle in rotations:
-            # Use cached rotation
-            if angle not in rotation_cache:
-                rotation_cache[angle] = get_cached_rotation(carpet, angle)
-            rotated_polygon = rotation_cache[angle]
-
-            bounds = rotated_polygon.bounds
-            poly_width = bounds[2] - bounds[0]
-            poly_height = bounds[3] - bounds[1]
-
-            # Skip if doesn't fit in sheet
-            if poly_width > sheet_width_mm or poly_height > sheet_height_mm:
+            # Check if it fits in sheet
+            pos_bounds = positioned_polygon.bounds
+            if (pos_bounds[0] < 0 or pos_bounds[1] < 0 or
+                pos_bounds[2] > sheet_width_mm or pos_bounds[3] > sheet_height_mm):
                 continue
 
-            # BOTTOM-LEFT FIRST approach for maximum compaction
-            for y in range(0, int(sheet_height_mm - poly_height + 1), step):
-                for x in range(0, int(sheet_width_mm - poly_width + 1), step):
-                    # Move polygon to position
-                    dx = x - bounds[0]
-                    dy = y - bounds[1]
-                    positioned_polygon = shapely.affinity.translate(
-                        rotated_polygon, dx, dy
-                    )
+            # Check for collisions with existing polygons
+            has_collision = False
+            for placed in existing_placed:
+                if positioned_polygon.intersects(placed.polygon):
+                    intersection = positioned_polygon.intersection(placed.polygon)
+                    if hasattr(intersection, "area") and intersection.area > 0.1:
+                        has_collision = True
+                        break
 
-                    # Check if it fits in sheet
-                    pos_bounds = positioned_polygon.bounds
-                    if (
-                        pos_bounds[0] >= 0
-                        and pos_bounds[1] >= 0
-                        and pos_bounds[2] <= sheet_width_mm
-                        and pos_bounds[3] <= sheet_height_mm
-                    ):
-                        # Check for collisions with existing polygons
-                        has_collision = False
-                        for obstacle in obstacles:
-                            if positioned_polygon.intersects(obstacle):
-                                intersection = positioned_polygon.intersection(obstacle)
-                                if (
-                                    hasattr(intersection, "area")
-                                    and intersection.area > 0.1
-                                ):  # Ultra-tight packing
-                                    has_collision = True
-                                    break
-
-                        if not has_collision:
-                            # For Priority 2, take first valid position for speed
-                            # Calculate correct offsets from original position
-                            original_bounds = carpet.polygon.bounds
-                            final_x_offset = dx + (original_bounds[0] - bounds[0])
-                            final_y_offset = dy + (original_bounds[1] - bounds[1])
-
-                            return PlacedCarpet(
-                                polygon=positioned_polygon,
-                                x_offset=final_x_offset,
-                                y_offset=final_y_offset,
-                                angle=angle,
-                                filename=carpet.filename,
-                                color=carpet.color,
-                                order_id=carpet.order_id,
-                                carpet_id=carpet.carpet_id,
-                                priority=carpet.priority,
-                            )
+            if not has_collision:
+                # Found valid placement - return immediately
+                return PlacedCarpet(
+                    polygon=positioned_polygon,
+                    x_offset=dx,
+                    y_offset=dy,
+                    angle=angle,
+                    filename=carpet.filename,
+                    color=carpet.color,
+                    order_id=carpet.order_id,
+                    carpet_id=carpet.carpet_id,
+                    priority=carpet.priority,
+                )
 
     return None  # No valid placement found
 
