@@ -79,12 +79,21 @@ with col_logo:
     except FileNotFoundError:
         st.title("Wondercraft - Раскрой ковров")
 
+# Initialize clear counter for file uploaders
+if "clear_counter" not in st.session_state:
+    st.session_state.clear_counter = 0
+
 with col_clear:
     st.write("")  # Add some spacing
     st.write("")  # Add some spacing
     if st.button(
         "🗑️ Очистить всё", help="Очистить все данные и начать заново", type="secondary"
     ):
+        # Increment clear counter to reset all file uploaders
+        if "clear_counter" not in st.session_state:
+            st.session_state.clear_counter = 0
+        st.session_state.clear_counter += 1
+
         # Clear all session state
         keys_to_clear = [
             "available_sheets",
@@ -95,7 +104,6 @@ with col_clear:
             "optimization_results",
             "manual_file_settings",
             "current_excel_hash",
-            "excel_upload",
         ]
 
         for key in keys_to_clear:
@@ -106,7 +114,7 @@ with col_clear:
         keys_to_remove = [
             key
             for key in st.session_state.keys()
-            if key.startswith(("order_", "quantity_", "select_", "qty_"))
+            if key.startswith(("order_", "quantity_", "select_", "qty_", "excel_upload", "manual_dxf_"))
         ]
         for key in keys_to_remove:
             del st.session_state[key]
@@ -229,9 +237,9 @@ if "manual_files" not in st.session_state:
     st.session_state.manual_files = []
 
 st.subheader("1. Excel файл")
-# Excel file upload
+# Excel file upload with clear_counter in key to reset on clear
 excel_file = st.file_uploader(
-    "Загрузите файл заказов Excel", type=["xlsx", "xls"], key="excel_upload"
+    "Загрузите файл заказов Excel", type=["xlsx", "xls"], key=f"excel_upload_{st.session_state.clear_counter}"
 )
 
 # Track current Excel file to detect changes
@@ -549,7 +557,7 @@ if "group_counter" not in st.session_state:
 
 # File uploader for new files - each selection creates a new group
 # Use group_counter in key to reset uploader after each group creation
-uploader_key = f"manual_dxf_{len(st.session_state.file_groups)}"
+uploader_key = f"manual_dxf_{st.session_state.clear_counter}_{len(st.session_state.file_groups)}"
 manual_files = st.file_uploader(
     "Выберите DXF файлы (будет создана новая группа). Каждая группа будет иметь свои настройки цвета и количества.",
     type=["dxf"],
