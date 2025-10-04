@@ -750,7 +750,7 @@ if st.button("🚀 Оптимизировать раскрой"):
         status_text = st.empty()
 
         total_orders = len(st.session_state.selected_orders)
-        not_found_orders = []
+        not_found_orders = set()
 
         for i, order in enumerate(st.session_state.selected_orders):
             progress = (i + 1) / total_orders
@@ -789,7 +789,10 @@ if st.button("🚀 Оптимизировать раскрой"):
                     except Exception as e:
                         st.warning(f"⚠️ Ошибка загрузки {file_path}: {e}")
             else:
-                not_found_orders.append(f"{product} (тип: {product_type})")
+                not_found_orders.add(f"{product} (тип: {product_type})")
+
+        # Store not found orders for later deduplication
+        st.session_state.not_found_orders = not_found_orders
 
         # Show single warning for all not found orders
         if not_found_orders:
@@ -819,6 +822,7 @@ if st.button("🚀 Оптимизировать раскрой"):
         st.header("📄 Обработка DXF файлов")
         carpets = []
         original_dxf_data_map = {}  # Store original DXF data for each file
+        parse_warnings = set()  # Collect all parsing warnings
 
         # Parse loaded DXF files
         logger.info("Начинаем парсинг DXF файлов...")
@@ -868,12 +872,21 @@ if st.button("🚀 Оптимизировать раскрой"):
                 # logger.info(f"ДОБАВЛЕН ПОЛИГОН: order_id={carpet.order_id}")
                 # Store original DXF data using display_name as key
                 original_dxf_data_map[display_name] = parsed_data
+            elif parsed_data and parsed_data.get("parse_warning"):
+                # Collect warning with file path
+                parse_warnings.add(f"• `{display_name}`: {parsed_data['parse_warning']}")
 
         # Clear progress indicators
         progress_bar.empty()
         status_text.text(
             f"✅ Обработка завершена. Загружено {len(carpets)} полигонов из {len(dxf_files)} файлов"
         )
+
+        # Show all parsing warnings in one message (deduplicate against not_found_orders)
+        if parse_warnings:
+            # Remove duplicates by converting to set and back to list
+            warning_message = "**⚠️ Некоторые файлы пропущены:**\n\n" + "\n".join(parse_warnings)
+            st.warning(warning_message)
 
         if not carpets:
             st.error("В загруженных DXF файлах не найдено валидных полигонов")
