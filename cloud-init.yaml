@@ -1,0 +1,125 @@
+#cloud-config
+
+# Cloud-init script for deploying Eva Layout Optimizer on Ubuntu 24.04
+# This script will:
+# 1. Update the system
+# 2. Install Python 3.12 and dependencies
+# 3. Clone the application from GitHub
+# 4. Install Python packages
+# 5. Configure systemd service for Streamlit
+# 6. Setup nginx as reverse proxy
+# 7. Configure firewall
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - python3.12
+  - python3.12-venv
+  - python3-pip
+  - git
+  - nginx
+  - ufw
+  - curl
+
+users:
+  - name: eva
+    groups: sudo
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+
+write_files:
+  - path: /etc/systemd/system/eva-layout.service
+    content: |
+      [Unit]
+      Description=Eva Layout Optimizer - Streamlit Application
+      After=network.target
+
+      [Service]
+      Type=simple
+      User=eva
+      WorkingDirectory=/home/eva/eva_layout
+      Environment="PATH=/home/eva/eva_layout/venv/bin"
+      ExecStart=/home/eva/eva_layout/venv/bin/streamlit run streamlit_demo.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
+      Restart=always
+      RestartSec=10
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/nginx/sites-available/eva-layout
+    content: |
+      server {
+          listen 80;
+          server_name _;
+
+          location / {
+              proxy_pass http://localhost:8501;
+              proxy_http_version 1.1;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection "upgrade";
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_read_timeout 86400;
+          }
+      }
+
+runcmd:
+  # Setup GitHub access for private repository
+  - sudo -u eva mkdir -p /home/eva/.ssh
+  - sudo -u eva chmod 700 /home/eva/.ssh
+
+  # Clone repository (using deploy key for private repo)
+  - sudo -u eva git clone https://github.com/asergeenko/eva_layout.git /home/eva/eva_layout
+
+  # Create Python virtual environment
+  - sudo -u eva python3.12 -m venv /home/eva/eva_layout/venv
+
+  # Install Python dependencies
+  - sudo -u eva /home/eva/eva_layout/venv/bin/pip install --upgrade pip
+  - sudo -u eva /home/eva/eva_layout/venv/bin/pip install -r /home/eva/eva_layout/requirements.txt
+
+  # Create necessary directories
+  - sudo -u eva mkdir -p /home/eva/eva_layout/data
+  - sudo -u eva mkdir -p /home/eva/eva_layout/tmp_test
+  - sudo -u eva mkdir -p /home/eva/eva_layout/logs
+
+  # Configure nginx
+  - rm -f /etc/nginx/sites-enabled/default
+  - ln -s /etc/nginx/sites-available/eva-layout /etc/nginx/sites-enabled/
+  - nginx -t
+  - systemctl restart nginx
+
+  # Configure firewall
+  - ufw allow 22/tcp
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw --force enable
+
+  # Enable and start the application
+  - systemctl daemon-reload
+  - systemctl enable eva-layout.service
+  - systemctl start eva-layout.service
+
+  # Set correct permissions
+  - chown -R eva:eva /home/eva/eva_layout
+
+final_message: |
+  Eva Layout Optimizer has been successfully deployed!
+
+  The application is running on port 80 via nginx reverse proxy.
+  Access it at: http://YOUR_SERVER_IP
+
+  Service management:
+    - View status: sudo systemctl status eva-layout
+    - View logs: sudo journalctl -u eva-layout -f
+    - Restart: sudo systemctl restart eva-layout
+
+  Application directory: /home/eva/eva_layout
+  User: eva
+
+  To update the application:
+    sudo -u eva git -C /home/eva/eva_layout pull
+    sudo systemctl restart eva-layout

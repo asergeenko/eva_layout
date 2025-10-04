@@ -123,7 +123,7 @@ with col_clear:
         st.rerun()
 
 # Sheet Inventory Section
-st.header("📋 Настройка доступных листов")
+st.header("📋 Настройка листов")
 st.write("Укажите какие листы у вас есть в наличии и их количество.")
 
 # Initialize session state for sheets
@@ -167,7 +167,7 @@ with col1:
 
 with col2:
     sheet_count = st.number_input(
-        "Количество листов", min_value=1, max_value=500, value=5, key="sheet_count"
+        "Количество листов", min_value=1, max_value=1000, value=5, key="sheet_count"
     )
     # Color selection
     sheet_color = st.selectbox("Цвет листа", ["чёрный", "серый"], key="sheet_color")
@@ -430,7 +430,7 @@ if excel_file is not None:
                             quantity = st.number_input(
                                 f"Количество для заказа {actual_idx + 1}",
                                 min_value=1,
-                                max_value=100,
+                                max_value=1000,
                                 value=st.session_state.get(f"quantity_{actual_idx}", 1),
                                 key=f"qty_{actual_idx}",
                                 label_visibility="collapsed",
@@ -588,7 +588,7 @@ if manual_files:
         group_quantity = st.number_input(
             "Количество копий:",
             min_value=1,
-            max_value=50,
+            max_value=1000,
             value=1,
             key=f"qty_{current_group_key}",
             help="Копий каждого файла",
@@ -750,6 +750,8 @@ if st.button("🚀 Оптимизировать раскрой"):
         status_text = st.empty()
 
         total_orders = len(st.session_state.selected_orders)
+        not_found_orders = []
+
         for i, order in enumerate(st.session_state.selected_orders):
             progress = (i + 1) / total_orders
             progress_bar.progress(progress)
@@ -787,9 +789,14 @@ if st.button("🚀 Оптимизировать раскрой"):
                     except Exception as e:
                         st.warning(f"⚠️ Ошибка загрузки {file_path}: {e}")
             else:
-                st.warning(
-                    f"⚠️ Не найдены DXF файлы для заказа: {product} (тип: {product_type})"
-                )
+                not_found_orders.append(f"{product} (тип: {product_type})")
+
+        # Show single warning for all not found orders
+        if not_found_orders:
+            st.warning(
+                f"⚠️ Не найдены DXF файлы для следующих заказов:\n" +
+                "\n".join(f"• {order}" for order in not_found_orders)
+            )
 
         # Load manual files if any (already configured with colors and quantities)
         if hasattr(st.session_state, "manual_files") and st.session_state.manual_files:
