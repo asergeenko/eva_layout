@@ -150,7 +150,9 @@ def save_dxf_layout_complete(
 
             if original_data["original_entities"] and original_data["combined_polygon"]:
                 original_polygon = original_data["combined_polygon"]
-                orig_bounds = original_polygon.bounds
+                # Use original_bounds if available (before normalization to 0,0)
+                # Otherwise use polygon bounds (for backward compatibility)
+                orig_bounds = original_data.get("original_bounds", original_polygon.bounds)
                 target_bounds = transformed_polygon.bounds
 
                 # Calculate uniform scale factor to avoid distortion
