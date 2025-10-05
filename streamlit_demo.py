@@ -79,12 +79,21 @@ with col_logo:
     except FileNotFoundError:
         st.title("Wondercraft - Раскрой ковров")
 
+# Initialize clear counter for file uploaders
+if "clear_counter" not in st.session_state:
+    st.session_state.clear_counter = 0
+
 with col_clear:
     st.write("")  # Add some spacing
     st.write("")  # Add some spacing
     if st.button(
         "🗑️ Очистить всё", help="Очистить все данные и начать заново", type="secondary"
     ):
+        # Increment clear counter to reset all file uploaders
+        if "clear_counter" not in st.session_state:
+            st.session_state.clear_counter = 0
+        st.session_state.clear_counter += 1
+
         # Clear all session state
         keys_to_clear = [
             "available_sheets",
@@ -95,7 +104,6 @@ with col_clear:
             "optimization_results",
             "manual_file_settings",
             "current_excel_hash",
-            "excel_upload",
         ]
 
         for key in keys_to_clear:
@@ -106,7 +114,7 @@ with col_clear:
         keys_to_remove = [
             key
             for key in st.session_state.keys()
-            if key.startswith(("order_", "quantity_", "select_", "qty_"))
+            if key.startswith(("order_", "quantity_", "select_", "qty_", "excel_upload", "manual_dxf_"))
         ]
         for key in keys_to_remove:
             del st.session_state[key]
@@ -115,7 +123,7 @@ with col_clear:
         st.rerun()
 
 # Sheet Inventory Section
-st.header("📋 Настройка доступных листов")
+st.header("📋 Настройка листов")
 st.write("Укажите какие листы у вас есть в наличии и их количество.")
 
 # Initialize session state for sheets
@@ -159,7 +167,7 @@ with col1:
 
 with col2:
     sheet_count = st.number_input(
-        "Количество листов", min_value=1, max_value=500, value=5, key="sheet_count"
+        "Количество листов", min_value=1, max_value=1000, value=5, key="sheet_count"
     )
     # Color selection
     sheet_color = st.selectbox("Цвет листа", ["чёрный", "серый"], key="sheet_color")
@@ -229,9 +237,9 @@ if "manual_files" not in st.session_state:
     st.session_state.manual_files = []
 
 st.subheader("1. Excel файл")
-# Excel file upload
+# Excel file upload with clear_counter in key to reset on clear
 excel_file = st.file_uploader(
-    "Загрузите файл заказов Excel", type=["xlsx", "xls"], key="excel_upload"
+    "Загрузите файл заказов Excel", type=["xlsx", "xls"], key=f"excel_upload_{st.session_state.clear_counter}"
 )
 
 # Track current Excel file to detect changes
@@ -345,153 +353,88 @@ if excel_file is not None:
                 # Interactive table with controls for each row
                 st.markdown("**Выберите заказы для раскроя:**")
 
-                # Prepare data for DataFrame display
+                # ОПТИМИЗАЦИЯ: Используем st.data_editor для быстрой работы с большими таблицами
+                import pandas as pd
+
+                # Prepare data for DataFrame
                 orders_data = []
                 for i, order in enumerate(orders_to_show):
                     actual_idx = start_idx + i
-
-                    # Get current selection state and quantity
                     is_selected = st.session_state.get(f"order_{actual_idx}", False)
                     current_qty = st.session_state.get(f"quantity_{actual_idx}", 1)
 
-                    # Color emoji
                     color = order.get("color", "серый")
-                    color_emoji = (
-                        "⚫"
-                        if color == "чёрный"
-                        else "⚪"
-                        if color == "серый"
-                        else "🔘"
-                    )
+                    color_emoji = "⚫" if color == "чёрный" else "⚪" if color == "серый" else "🔘"
 
-                    orders_data.append(
-                        {
-                            "№": actual_idx + 1,
-                            "Выбрать": "✓" if is_selected else "",
-                            "Кол-во": current_qty,
-                            "Артикул": order["article"],
-                            "Товар": order["product"][:40] + "..."
-                            if len(order["product"]) > 40
-                            else order["product"],
-                            "Тип": order.get("product_type", ""),
-                            "Цвет": color_emoji,
-                            "Дата": order.get("date", "")[:10]
-                            if order.get("date", "")
-                            else "",
-                            "Кант цвет": order.get("border_color", ""),
-                            "Маркетплейс": order.get("marketplace", ""),
-                        }
-                    )
+                    orders_data.append({
+                        "Выбрать": is_selected,
+                        "Кол-во": current_qty,
+                        "Артикул": order["article"],
+                        "Товар": order["product"][:40] + "..." if len(order["product"]) > 40 else order["product"],
+                        "Тип": order.get("product_type", ""),
+                        "Цвет": color_emoji,
+                        "Кант": order.get("border_color", ""),
+                        "Маркетплейс": order.get("marketplace", ""),
+                    })
 
-                ###########################################33
-                with st.container(height=400):
-                    cols = st.columns([1, 2, 10, 6, 3, 3, 3])
-                    with cols[1]:
-                        st.write("**Количество**")
-                    with cols[2]:
-                        st.write("**Артикул**")
-                    with cols[3]:
-                        st.write("**Товар**")
-                    with cols[4]:
-                        st.write("**Изделие**")
-                    with cols[5]:
-                        st.write("**Кант цвет**")
-                    with cols[6]:
-                        st.write("**Маркетплейс**")
+                df = pd.DataFrame(orders_data)
 
-                    # Create columns for interactive controls
-                    for i, order in enumerate(orders_to_show):
-                        actual_idx = start_idx + i
+                # Use data_editor for fast rendering
+                edited_df = st.data_editor(
+                    df,
+                    hide_index=True,
+                    use_container_width=True,
+                    height=400,
+                    column_config={
+                        "Выбрать": st.column_config.CheckboxColumn("Выбрать", default=False),
+                        "Кол-во": st.column_config.NumberColumn("Кол-во", min_value=1, max_value=1000, default=1),
+                        "Артикул": st.column_config.TextColumn("Артикул", disabled=True),
+                        "Товар": st.column_config.TextColumn("Товар", disabled=True),
+                        "Тип": st.column_config.TextColumn("Тип", disabled=True),
+                        "Цвет": st.column_config.TextColumn("Цвет", disabled=True),
+                        "Кант": st.column_config.TextColumn("Кант", disabled=True),
+                        "Маркетплейс": st.column_config.TextColumn("Маркетплейс", disabled=True),
+                    },
+                )
 
-                        cols = st.columns([1, 2, 10, 6, 3, 3, 3])
-
-                        # Selection checkbox
-                        with cols[0]:
-                            is_selected = st.checkbox(
-                                f"№{actual_idx + 1}",
-                                value=st.session_state.get(
-                                    f"order_{actual_idx}", False
-                                ),
-                                key=f"select_{actual_idx}",
-                                label_visibility="collapsed",
-                            )
-                            st.session_state[f"order_{actual_idx}"] = is_selected
-
-                        # Quantity number input
-                        with cols[1]:
-                            quantity = st.number_input(
-                                f"Количество для заказа {actual_idx + 1}",
-                                min_value=1,
-                                max_value=100,
-                                value=st.session_state.get(f"quantity_{actual_idx}", 1),
-                                key=f"qty_{actual_idx}",
-                                label_visibility="collapsed",
-                            )
-                            st.session_state[f"quantity_{actual_idx}"] = quantity
-
-                        # Display order info for reference
-                        with cols[2]:
-                            st.write(f"**{order['article']}**")
-
-                        with cols[3]:
-                            product_text = (
-                                order["product"][:30] + "..."
-                                if len(order["product"]) > 30
-                                else order["product"]
-                            )
-                            st.write(product_text)
-
-                        with cols[4]:
-                            color = order.get("color", "серый")
-                            color_emoji = (
-                                "⚫"
-                                if color == "чёрный"
-                                else "⚪"
-                                if color == "серый"
-                                else "🔘"
-                            )
-                            st.write(f"{color_emoji} {order.get('product_type', '')}")
-
-                        with cols[5]:
-                            st.write(order.get("border_color", ""))
-
-                        with cols[6]:
-                            st.write(order.get("marketplace", ""))
-                ####################################################
+                # Update session state from edited dataframe
+                for i in range(len(edited_df)):
+                    actual_idx = start_idx + i
+                    st.session_state[f"order_{actual_idx}"] = edited_df.iloc[i]["Выбрать"]
+                    st.session_state[f"quantity_{actual_idx}"] = edited_df.iloc[i]["Кол-во"]
 
                 # Bulk controls
                 col1, col2 = st.columns([1, 1])
                 with col1:
                     if st.button("✅ Выбрать все", key="select_all_orders"):
-                        for i in range(len(orders_to_show)):
-                            st.session_state[f"order_{start_idx + i}"] = True
+                        for i in range(len(display_orders)):
+                            st.session_state[f"order_{i}"] = True
                         st.rerun()
 
                 with col2:
                     if st.button("❌ Снять выбор", key="deselect_all_orders"):
-                        deselect(orders_to_show, start_idx)
+                        for i in range(len(display_orders)):
+                            st.session_state[f"order_{i}"] = False
+                        st.rerun()
 
             # Collect all selected orders, multiplying by quantity
-            all_selected_orders = []
-            for i in range(len(display_orders)):
-                if st.session_state.get(f"order_{i}", False):
-                    order = display_orders[i]
-                    quantity = st.session_state.get(f"quantity_{i}", 1)
-
-                    # Add the order multiple times based on quantity
-                    for repeat_num in range(quantity):
-                        # Create a copy of the order with a unique identifier
-                        repeated_order = order.copy()
-                        repeated_order["repeat_index"] = repeat_num + 1
-                        repeated_order["original_index"] = i
-
-                        # Make order_id unique for each repeat
-                        if quantity > 1:
-                            repeated_order["order_id"] = (
-                                f"{order['order_id']}_повтор_{repeat_num + 1}"
-                            )
-
-                        all_selected_orders.append(repeated_order)
+            # ОПТИМИЗАЦИЯ: Используем list comprehension для скорости
+            all_selected_orders = [
+                {
+                    **order,
+                    "repeat_index": repeat_num + 1,
+                    "original_index": i,
+                    "order_id": (
+                        f"{order['order_id']}_повтор_{repeat_num + 1}"
+                        if quantity > 1
+                        else order["order_id"]
+                    ),
+                }
+                for i, order in enumerate(display_orders)
+                if st.session_state.get(f"order_{i}", False)
+                for quantity in [st.session_state.get(f"quantity_{i}", 1)]
+                for repeat_num in range(quantity)
+            ]
 
             if all_selected_orders:
                 # Count unique orders
@@ -549,7 +492,7 @@ if "group_counter" not in st.session_state:
 
 # File uploader for new files - each selection creates a new group
 # Use group_counter in key to reset uploader after each group creation
-uploader_key = f"manual_dxf_{len(st.session_state.file_groups)}"
+uploader_key = f"manual_dxf_{st.session_state.clear_counter}_{len(st.session_state.file_groups)}"
 manual_files = st.file_uploader(
     "Выберите DXF файлы (будет создана новая группа). Каждая группа будет иметь свои настройки цвета и количества.",
     type=["dxf"],
@@ -580,7 +523,7 @@ if manual_files:
         group_quantity = st.number_input(
             "Количество копий:",
             min_value=1,
-            max_value=50,
+            max_value=1000,
             value=1,
             key=f"qty_{current_group_key}",
             help="Копий каждого файла",
@@ -742,6 +685,8 @@ if st.button("🚀 Оптимизировать раскрой"):
         status_text = st.empty()
 
         total_orders = len(st.session_state.selected_orders)
+        not_found_orders = set()
+
         for i, order in enumerate(st.session_state.selected_orders):
             progress = (i + 1) / total_orders
             progress_bar.progress(progress)
@@ -779,9 +724,17 @@ if st.button("🚀 Оптимизировать раскрой"):
                     except Exception as e:
                         st.warning(f"⚠️ Ошибка загрузки {file_path}: {e}")
             else:
-                st.warning(
-                    f"⚠️ Не найдены DXF файлы для заказа: {product} (тип: {product_type})"
-                )
+                not_found_orders.add(f"{product} (тип: {product_type})")
+
+        # Store not found orders for later deduplication
+        st.session_state.not_found_orders = not_found_orders
+
+        # Show single warning for all not found orders
+        if not_found_orders:
+            st.warning(
+                f"⚠️ Не найдены DXF файлы для следующих заказов:\n" +
+                "\n".join(f"• {order}" for order in not_found_orders)
+            )
 
         # Load manual files if any (already configured with colors and quantities)
         if hasattr(st.session_state, "manual_files") and st.session_state.manual_files:
@@ -804,6 +757,7 @@ if st.button("🚀 Оптимизировать раскрой"):
         st.header("📄 Обработка DXF файлов")
         carpets = []
         original_dxf_data_map = {}  # Store original DXF data for each file
+        parse_warnings = set()  # Collect all parsing warnings
 
         # Parse loaded DXF files
         logger.info("Начинаем парсинг DXF файлов...")
@@ -853,12 +807,21 @@ if st.button("🚀 Оптимизировать раскрой"):
                 # logger.info(f"ДОБАВЛЕН ПОЛИГОН: order_id={carpet.order_id}")
                 # Store original DXF data using display_name as key
                 original_dxf_data_map[display_name] = parsed_data
+            elif parsed_data and parsed_data.get("parse_warning"):
+                # Collect warning with file path
+                parse_warnings.add(f"• `{display_name}`: {parsed_data['parse_warning']}")
 
         # Clear progress indicators
         progress_bar.empty()
         status_text.text(
             f"✅ Обработка завершена. Загружено {len(carpets)} полигонов из {len(dxf_files)} файлов"
         )
+
+        # Show all parsing warnings in one message (deduplicate against not_found_orders)
+        if parse_warnings:
+            # Remove duplicates by converting to set and back to list
+            warning_message = "**⚠️ Некоторые файлы пропущены:**\n\n" + "\n".join(parse_warnings)
+            st.warning(warning_message)
 
         if not carpets:
             st.error("В загруженных DXF файлах не найдено валидных полигонов")

@@ -6,7 +6,7 @@ import pytest
 from dxf_utils import parse_dxf_complete
 from layout_optimizer import Carpet, bin_packing_with_inventory
 
-@pytest.mark.skip
+#@pytest.mark.skip
 def test_priority2_placement():
     # Создаем листы
     available_sheets = [{

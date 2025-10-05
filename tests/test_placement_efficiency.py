@@ -22,7 +22,7 @@ def test_placement_efficiency():
     models = ["AUDI Q7 (4L) 1", "BMW X5 E53 1 и рестайлинг", "BMW X5 G05-G18 4 и рестайлинг"]
     priority1_polygons = []
     for group_id, group in enumerate(models, 1):
-        path = Path('dxf_samples') / group
+        path = Path('data') / group
         files = path.rglob("*.dxf", case_sensitive=False)
         for dxf_file in files:
             try:

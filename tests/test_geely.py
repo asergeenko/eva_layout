@@ -5,7 +5,7 @@ from dxf_utils import parse_dxf_complete
 from layout_optimizer import Carpet, bin_packing_with_inventory
 
 
-def test_solaris():
+def test_geely():
     # Создаем листы
     available_sheets = [{
         "name": f"Черный лист",
@@ -18,21 +18,21 @@ def test_solaris():
 
     # Создаем полигоны приоритета 1
     #########################################
-    models = ["HYUNDAI SOLARIS 1"]
+    file_paths = ["GEELY EMGRAND 7 EC/3.dxf"]
     priority1_polygons = []
-    for group_id, group in enumerate(models, 1):
-        path = Path('data') / group
-        files = path.rglob("*.dxf", case_sensitive=False)
-        for dxf_file in files:
-            try:
-                polygon_data = parse_dxf_complete(dxf_file.as_posix(), verbose=False)
-                if polygon_data and polygon_data.get("combined_polygon"):
-                    base_polygon = polygon_data["combined_polygon"]
-                    priority1_polygons.append(Carpet(base_polygon, f"{dxf_file.name}", "чёрный", f"group_{group_id}", 1))
+    for group_id, group in enumerate(file_paths, 1):
+        dxf_file = Path('data') / group
 
-            except Exception as e:
-                print(f"⚠️ Ошибка загрузки {dxf_file}: {e}")
-                return []
+        try:
+            polygon_data = parse_dxf_complete(dxf_file.as_posix(), verbose=False)
+            if polygon_data and polygon_data.get("combined_polygon"):
+                base_polygon = polygon_data["combined_polygon"]
+                for i in range(1, 18):
+                    priority1_polygons.append(Carpet(base_polygon, f"{dxf_file.name}_копия_{i}", "чёрный", f"group_{group_id}", 1))
+
+        except Exception as e:
+            print(f"⚠️ Ошибка загрузки {dxf_file}: {e}")
+            return []
     #########################################
     placed_layouts, unplaced = bin_packing_with_inventory(
         priority1_polygons,
@@ -82,15 +82,16 @@ def test_solaris():
 
     # Оценка эффективности
     print(f"\n🎯 ОЦЕНКА ЭФФЕКТИВНОСТИ:")
-    if len(placed_layouts) == 1 and len(unplaced) == 0:
+    if len(placed_layouts) <= 3 and len(unplaced) == 0:
+        print("   ✅ ОТЛИЧНО! Цель достигнута: ≤3 листа, все ковры размещены")
         efficiency_score = "A+"
     else:
-        print("   ❌ ПЛОХО! >1 листа и низкое использование материала")
+        print("   ❌ ПЛОХО! >3 листов и низкое использование материала")
         efficiency_score = "D"
 
     print(f"   Оценка эффективности: {efficiency_score}")
 
-    client_goal_achieved = (len(placed_layouts) == 1 and
+    client_goal_achieved = (len(placed_layouts) <= 3 and
                             len(unplaced) == 0
                             )
 
@@ -101,7 +102,7 @@ def test_solaris():
 
     # Проверяем улучшение плотности по сравнению с базовым уровнем
     assert len(unplaced) == 0, f"Все ковры должны быть размещены, неразмещенных: {len(unplaced)}"
-    assert len(placed_layouts) == 1, f"Нужно разместить заказы на 1 листе: {len(placed_layouts)}"
+    assert len(placed_layouts) <= 3, f"Нужно разместить заказы на 3 листах: {len(placed_layouts)}"
 
     return {
         'sheets_used': len(placed_layouts),

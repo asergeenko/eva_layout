@@ -150,7 +150,9 @@ def save_dxf_layout_complete(
 
             if original_data["original_entities"] and original_data["combined_polygon"]:
                 original_polygon = original_data["combined_polygon"]
-                orig_bounds = original_polygon.bounds
+                # Use original_bounds if available (before normalization to 0,0)
+                # Otherwise use polygon bounds (for backward compatibility)
+                orig_bounds = original_data.get("original_bounds", original_polygon.bounds)
                 target_bounds = transformed_polygon.bounds
 
                 # Calculate uniform scale factor to avoid distortion
@@ -770,6 +772,31 @@ def parse_dxf_complete(file: BytesIO | str, verbose: bool = True):
                 result["combined_polygon"] = combined
     else:
         result["combined_polygon"] = None
+
+    # Проверка: если combined_polygon слишком маленький (незамкнутый контур),
+    # выдаем предупреждение и возвращаем None
+    if result["combined_polygon"] and result["combined_polygon"].area < 10000:
+        # Проверяем количество SPLINE в файле
+        spline_count = sum(1 for e in result["original_entities"] if e["type"] == "SPLINE")
+        if spline_count > 10:
+            bounds = result["combined_polygon"].bounds
+            size = f"{bounds[2]-bounds[0]:.0f}x{bounds[3]-bounds[1]:.0f}"
+            logger.info(f"⚠️  ПРЕДУПРЕЖДЕНИЕ: Файл содержит {spline_count} SPLINE, но получен очень маленький полигон ({size} мм, area={result['combined_polygon'].area:.0f} мм²)")
+            logger.info(f"   Возможно контур не замкнут или содержит только текст/надписи")
+            logger.info(f"   Файл будет пропущен при раскладке")
+            result["combined_polygon"] = None
+            result["parse_warning"] = "незамкнутый контур или только текст"
+
+    # ВАЖНО: Нормализуем combined_polygon к координатам (0,0)
+    # чтобы избежать проблем с отрицательными координатами
+    if result["combined_polygon"]:
+        from shapely.affinity import translate as shapely_translate
+
+        bounds = result["combined_polygon"].bounds
+        result["original_bounds"] = bounds  # Сохраняем оригинальные границы
+        result["combined_polygon"] = shapely_translate(
+            result["combined_polygon"], -bounds[0], -bounds[1]
+        )
 
     # Calculate real bounds of SPLINE elements for accurate transformation
     spline_entities = [

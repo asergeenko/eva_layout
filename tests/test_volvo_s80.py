@@ -5,34 +5,31 @@ from dxf_utils import parse_dxf_complete
 from layout_optimizer import Carpet, bin_packing_with_inventory
 
 
-def test_solaris():
+def test_volvo_s80():
     # Создаем листы
     available_sheets = [{
         "name": f"Черный лист",
         "width": 140,
         "height": 200,
         "color": "чёрный",
-        "count": 5,
+        "count": 2,
         "used": 0
     }]
 
     # Создаем полигоны приоритета 1
     #########################################
-    models = ["HYUNDAI SOLARIS 1"]
     priority1_polygons = []
-    for group_id, group in enumerate(models, 1):
-        path = Path('data') / group
-        files = path.rglob("*.dxf", case_sensitive=False)
-        for dxf_file in files:
-            try:
-                polygon_data = parse_dxf_complete(dxf_file.as_posix(), verbose=False)
-                if polygon_data and polygon_data.get("combined_polygon"):
-                    base_polygon = polygon_data["combined_polygon"]
-                    priority1_polygons.append(Carpet(base_polygon, f"{dxf_file.name}", "чёрный", f"group_{group_id}", 1))
+    dxf_file = Path('data/VOLVO S80 1/4.dxf')
+    try:
+        polygon_data = parse_dxf_complete(dxf_file.as_posix(), verbose=False)
+        if polygon_data and polygon_data.get("combined_polygon"):
+            base_polygon = polygon_data["combined_polygon"]
+            for i in range(1, 7):
+                priority1_polygons.append(Carpet(base_polygon, f"{dxf_file.name}_копия_{i}", "чёрный", f"group_1", 1))
 
-            except Exception as e:
-                print(f"⚠️ Ошибка загрузки {dxf_file}: {e}")
-                return []
+    except Exception as e:
+        print(f"⚠️ Ошибка загрузки {dxf_file}: {e}")
+        return []
     #########################################
     placed_layouts, unplaced = bin_packing_with_inventory(
         priority1_polygons,
@@ -83,6 +80,7 @@ def test_solaris():
     # Оценка эффективности
     print(f"\n🎯 ОЦЕНКА ЭФФЕКТИВНОСТИ:")
     if len(placed_layouts) == 1 and len(unplaced) == 0:
+        print("   ✅ ОТЛИЧНО! Цель достигнута: 1 лист, все ковры размещены")
         efficiency_score = "A+"
     else:
         print("   ❌ ПЛОХО! >1 листа и низкое использование материала")

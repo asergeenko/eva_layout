@@ -3,7 +3,7 @@
 Полный тест интеграции с точно такими же данными как в Streamlit:
 - 20 черных и 20 серых листов 140*200
 - Все 37 заказов из sample_input_test.xlsx
-- 20 серых и 20 черных файлов приоритета 2 из "dxf_samples/ДЕКА KUGOO M4 PRO JILONG/1.dxf"
+- 20 серых и 20 черных файлов приоритета 2 из "data/ДЕКА KUGOO M4 PRO JILONG/1.dxf"
 """
 
 import sys
@@ -55,14 +55,15 @@ def create_available_sheets():
     
     return sheets
 
-def process_orders(orders) -> list[Carpet]:
+def process_orders(orders) -> tuple[list[Carpet], dict]:
     polygons = []
-    
+    dxf_data_map = {}
+
     for order in orders:
         order_id = order["order_id"]  # +2 для соответствия нумерации
         article = order["article"]
         product_name = order["product"]
-        
+
         color = order["color"]
 
         # Ищем DXF файлы для этого товара
@@ -79,16 +80,18 @@ def process_orders(orders) -> list[Carpet]:
                         # Добавляем уникальный суффикс для различения файлов
                         unique_filename = f"{product_name}_{os.path.splitext(filename)[0]}.dxf"
                         polygons.append(Carpet(polygon, unique_filename, color, order_id))
+                        dxf_data_map[unique_filename] = polygon_data
                 except Exception as e:
                     print(f"⚠️ Ошибка обработки {dxf_file}: {e}")
                     continue
-    
-    return polygons
 
-def create_priority2_polygons():
+    return polygons, dxf_data_map
+
+def create_priority2_polygons() -> tuple[list[Carpet], dict]:
     """Создает 20 серых + 20 черных полигонов приоритета 2 из ДЕКА KUGOO M4 PRO JILONG"""
     priority2_polygons = []
-    dxf_file = "dxf_samples/ДЕКА KUGOO M4 PRO JILONG/1.dxf"
+    dxf_data_map = {}
+    dxf_file = "data/ДЕКА KUGOO M4 PRO JILONG/1.dxf"
     try:
         # Используем verbose=False чтобы избежать Streamlit вызовов
         polygon_data = parse_dxf_complete(dxf_file, verbose=False)
@@ -99,19 +102,20 @@ def create_priority2_polygons():
             for i in range(9):
                 filename = f"ДЕКА_KUGOO_M4_PRO_JILONG_черный_{i+1}.dxf"
                 priority2_polygons.append(Carpet(base_polygon, filename, "чёрный", "group_1",2))
+                dxf_data_map[filename] = polygon_data
 
             # 20 серых полигонов приоритета 2
             for i in range(20):
                 filename = f"ДЕКА_KUGOO_M4_PRO_JILONG_серый_{i+1}.dxf"
                 priority2_polygons.append(Carpet(base_polygon, filename, "серый", "group_2",2))
+                dxf_data_map[filename] = polygon_data
     except Exception as e:
         print(f"⚠️ Ошибка загрузки {dxf_file}: {e}")
-        return []
-    
-    return priority2_polygons
+        return [], {}
+
+    return priority2_polygons, dxf_data_map
 
 
-@pytest.mark.skip
 def test_streamlit_integration():
     """Основной тест с точно такими же данными как в Streamlit"""
     print("=== ТЕСТ ИНТЕГРАЦИИ STREAMLIT ===")
@@ -124,14 +128,17 @@ def test_streamlit_integration():
     #########################
     excel_data = load_excel_file(open("tests/sample_input_test.xlsx","rb").read())
     orders = parse_orders_from_excel(excel_data)
-    polygons = process_orders(orders)
+    polygons, dxf_data_map = process_orders(orders)
     #########################
     # Обрабатываем заказы из Excel
     print(f"🔧 Создано {len(orders)} полигонов из заказов Excel")
-    
+
     # Создаем полигоны приоритета 2
-    priority2_polygons = create_priority2_polygons()
+    priority2_polygons, priority2_dxf_data = create_priority2_polygons()
     print(f"➕ Создано {len(priority2_polygons)} полигонов приоритета 2 (20 черных + 20 серых)")
+
+    # Объединяем DXF данные
+    dxf_data_map.update(priority2_dxf_data)
     
     # Объединяем все полигоны
     all_polygons = polygons + priority2_polygons
@@ -273,6 +280,128 @@ def test_streamlit_integration():
             problems.append(f"Не все Excel заказы размещены: {missing_orders} не размещено (неожиданно)")
     else:
         print("✅ Все Excel заказы успешно размещены")
+
+    # КРИТИЧЕСКАЯ ПРОВЕРКА: проверяем пересечения ковров на каждом листе
+    print("\n=== ПРОВЕРКА ПЕРЕСЕЧЕНИЙ ===")
+    for i, layout in enumerate(placed_layouts, 1):
+        polygons_on_sheet = layout.placed_polygons
+
+        # Проверяем каждую пару полигонов
+        for idx1, p1 in enumerate(polygons_on_sheet):
+            for idx2, p2 in enumerate(polygons_on_sheet[idx1+1:], idx1+1):
+                if p1.polygon.intersects(p2.polygon):
+                    intersection = p1.polygon.intersection(p2.polygon)
+                    # Check ANY intersection, even tiny ones (changed from 0.1 to 0.01)
+                    if hasattr(intersection, 'area') and intersection.area > 0.01:
+                        error_msg = (
+                            f"Лист {i}: ПЕРЕСЕЧЕНИЕ найдено!\n"
+                            f"   '{p1.filename}' (pos={p1.polygon.bounds[:2]}, angle={p1.angle}°)\n"
+                            f"   пересекается с\n"
+                            f"   '{p2.filename}' (pos={p2.polygon.bounds[:2]}, angle={p2.angle}°)\n"
+                            f"   Площадь пересечения: {intersection.area:.1f} мм²"
+                        )
+                        problems.append(error_msg)
+                        print(f"❌ {error_msg}")
+
+    if not problems:
+        print("✅ Пересечений не найдено")
+
+    # Экспорт в DXF для проверки
+    print("\n=== ЭКСПОРТ В DXF ДЛЯ ПРОВЕРКИ ===")
+    from dxf_utils import save_dxf_layout_complete
+    import os
+
+    # Создаем директорию если нужно
+    os.makedirs("tmp_test", exist_ok=True)
+
+    # Экспортируем лист 16 для проверки
+    if len(placed_layouts) >= 16:
+        sheet_16 = placed_layouts[15]  # 0-indexed
+        output_path = "tmp_test/test_sheet_16.dxf"
+
+        print(f"Экспортирую лист 16 в {output_path}")
+        print(f"Полигонов на листе: {len(sheet_16.placed_polygons)}")
+
+        # Показываем полигоны на листе 16
+        for p in sheet_16.placed_polygons:
+            print(f"  • {p.filename} (pos={p.polygon.bounds[:2]}, angle={p.angle}°)")
+
+        # Проверяем пересечения SUBARU XV 1_3 и VOLKSWAGEN TIGUAN 2_4
+        subaru = None
+        tiguan = None
+        for p in sheet_16.placed_polygons:
+            if "SUBARU XV 1_3" in p.filename:
+                subaru = p
+            if "VOLKSWAGEN TIGUAN 2_4" in p.filename:
+                tiguan = p
+
+        if subaru and tiguan:
+            print(f"\n=== ПРОВЕРКА ПЕРЕСЕЧЕНИЯ В ПАМЯТИ ===")
+            print(f"SUBARU XV 1_3 bounds: {subaru.polygon.bounds}")
+            print(f"VOLKSWAGEN TIGUAN 2_4 bounds: {tiguan.polygon.bounds}")
+            print(f"Shapely intersects(): {subaru.polygon.intersects(tiguan.polygon)}")
+            distance = subaru.polygon.distance(tiguan.polygon)
+            print(f"Shapely distance(): {distance:.6f} mm")
+            print(f"Shapely touches(): {subaru.polygon.touches(tiguan.polygon)}")
+
+            # Найдем ближайшие точки
+            from shapely.ops import nearest_points
+            p1, p2 = nearest_points(subaru.polygon, tiguan.polygon)
+            print(f"Nearest point on SUBARU: ({p1.x:.2f}, {p1.y:.2f})")
+            print(f"Nearest point on TIGUAN: ({p2.x:.2f}, {p2.y:.2f})")
+
+            if subaru.polygon.intersects(tiguan.polygon):
+                intersection = subaru.polygon.intersection(tiguan.polygon)
+                print(f"Intersection type: {type(intersection).__name__}")
+                if hasattr(intersection, 'area'):
+                    print(f"Intersection area: {intersection.area:.6f}")
+            else:
+                print(f"NO INTERSECTION - minimum gap is {distance:.2f}mm")
+
+            # Проверка пересечения bounding boxes
+            s_minx, s_miny, s_maxx, s_maxy = subaru.polygon.bounds
+            t_minx, t_miny, t_maxx, t_maxy = tiguan.polygon.bounds
+            bbox_overlap = not (s_maxx < t_minx or t_maxx < s_minx or s_maxy < t_miny or t_maxy < s_miny)
+            print(f"Bounding boxes overlap: {bbox_overlap}")
+
+            if bbox_overlap:
+                print(f"  SUBARU XV Y range: {s_miny:.1f} - {s_maxy:.1f}")
+                print(f"  TIGUAN Y range: {t_miny:.1f} - {t_maxy:.1f}")
+                if s_maxy > t_miny and s_miny < t_maxy:
+                    overlap_y = min(s_maxy, t_maxy) - max(s_miny, t_miny)
+                    print(f"  Y overlap: {overlap_y:.1f}mm (от {max(s_miny, t_miny):.1f} до {min(s_maxy, t_maxy):.1f})")
+
+            # Визуализация polygons из памяти
+            import matplotlib.pyplot as plt
+            fig, ax = plt.subplots(figsize=(10, 8))
+
+            # SUBARU XV
+            if subaru.polygon.exterior:
+                xs, ys = subaru.polygon.exterior.xy
+                ax.plot(xs, ys, 'b-', linewidth=2, label=f'SUBARU XV (angle={subaru.angle}°)')
+                ax.fill(xs, ys, alpha=0.3, color='blue')
+
+            # TIGUAN
+            if tiguan.polygon.exterior:
+                xs, ys = tiguan.polygon.exterior.xy
+                ax.plot(xs, ys, 'r-', linewidth=2, label=f'TIGUAN 2_4 (angle={tiguan.angle}°)')
+                ax.fill(xs, ys, alpha=0.3, color='red')
+
+            ax.set_aspect('equal')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            ax.set_title('Polygons from MEMORY (PlacedCarpet.polygon)')
+            plt.savefig('tmp_test/memory_polygons.png', dpi=150, bbox_inches='tight')
+            print(f"  Saved visualization: tmp_test/memory_polygons.png")
+
+        # Сохраняем DXF
+        save_dxf_layout_complete(
+            sheet_16.placed_polygons,
+            (sheet_16.sheet_size[0], sheet_16.sheet_size[1]),
+            output_path,
+            dxf_data_map
+        )
+        print(f"✅ DXF файл сохранен: {output_path}")
 
     # Финальная проверка
     if problems:

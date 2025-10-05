@@ -14,7 +14,6 @@ from geometry_utils import translate_polygon, rotate_polygon
 from fast_geometry import (
     SpatialIndexCache,
     check_collision_fast_indexed_intersects_only,
-    extract_bounds_array,
     batch_check_collisions_cached_fast,
     filter_positions_by_bounds,
 )
@@ -128,7 +127,7 @@ def apply_tetris_gravity(
     )  # По верхнему краю
 
     movements_made = 0
-    max_movements = len(gravity_carpets) // 2  # Ограничиваем количество движений
+    max_movements = len(gravity_carpets) // 2
 
     # Применяем гравитацию осторожно к верхним коврам
     for i, carpet in enumerate(gravity_carpets):
@@ -276,7 +275,7 @@ def apply_tetris_right_compaction(
             # Проверяем коллизии
             collision = False
             for obstacle in obstacles:
-                if check_collision(test_polygon, obstacle, min_gap=2.0):
+                if check_collision(test_polygon, obstacle, min_gap=10.0):
                     collision = True
                     break
 
@@ -288,6 +287,114 @@ def apply_tetris_right_compaction(
 
         # Применяем улучшение
         if improvement_found and best_x > current_left + 3:  # Минимум 3мм улучшения
+            x_shift = best_x - current_bounds[0]
+            new_polygon = translate_polygon(carpet.polygon, x_shift, 0)
+
+            # Обновляем ковер
+            compacted_carpets[i] = PlacedCarpet(
+                polygon=new_polygon,
+                x_offset=carpet.x_offset + x_shift,
+                y_offset=carpet.y_offset,
+                angle=carpet.angle,
+                filename=carpet.filename,
+                color=carpet.color,
+                order_id=carpet.order_id,
+                carpet_id=carpet.carpet_id,
+                priority=carpet.priority,
+            )
+            movements_made += 1
+
+    return compacted_carpets
+
+
+def apply_tetris_left_compaction(
+    placed_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float
+) -> list[PlacedCarpet]:
+    """
+    TETRIS-ФУНКЦИЯ: Сжимает ковры к левому краю для плотной упаковки.
+    """
+    if not placed_carpets or len(placed_carpets) < 2:
+        return placed_carpets
+
+    # Создаем копии для безопасности
+    compacted_carpets = []
+    for carpet in placed_carpets:
+        compacted_carpets.append(
+            PlacedCarpet(
+                polygon=carpet.polygon,
+                x_offset=carpet.x_offset,
+                y_offset=carpet.y_offset,
+                angle=carpet.angle,
+                filename=carpet.filename,
+                color=carpet.color,
+                order_id=carpet.order_id,
+                carpet_id=carpet.carpet_id,
+                priority=carpet.priority,
+            )
+        )
+
+    # Сортируем по расстоянию от левого края (дальние сначала)
+    compacted_carpets.sort(key=lambda c: c.polygon.bounds[0], reverse=True)
+
+    movements_made = 0
+    max_movements = min(5, len(compacted_carpets))
+
+    # Применяем сжатие к левому краю
+    for i, carpet in enumerate(compacted_carpets):
+        if movements_made >= max_movements:
+            break
+
+        # Препятствия = все остальные ковры
+        obstacles = [
+            other.polygon for j, other in enumerate(compacted_carpets) if j != i
+        ]
+
+        # Текущие границы ковра
+        current_bounds = carpet.polygon.bounds
+        current_left = current_bounds[0]
+
+        if current_left <= 10:  # Уже у левого края
+            continue
+
+        # Пробуем сдвинуть влево
+        best_x = current_left
+        improvement_found = False
+
+        # Шагаем влево с шагом 5мм
+        for test_left_x in range(int(current_left) - 5, -1, -5):
+            if test_left_x < 0:
+                break
+
+            # Создаем тестовый полигон
+            x_shift = test_left_x - current_bounds[0]
+            y_shift = 0  # Не двигаем по Y
+            test_polygon = translate_polygon(carpet.polygon, x_shift, y_shift)
+
+            # Проверяем границы листа
+            test_bounds = test_polygon.bounds
+            if (
+                test_bounds[0] < 0
+                or test_bounds[1] < 0
+                or test_bounds[2] > sheet_width_mm
+                or test_bounds[3] > sheet_height_mm
+            ):
+                break
+
+            # Проверяем коллизии
+            collision = False
+            for obstacle in obstacles:
+                if check_collision(test_polygon, obstacle, min_gap=10.0):
+                    collision = True
+                    break
+
+            if not collision:
+                best_x = test_left_x
+                improvement_found = True
+            else:
+                break  # Натолкнулись на препятствие, дальше не двигаемся
+
+        # Применяем улучшение
+        if improvement_found and best_x < current_left - 3:  # Минимум 3мм улучшения
             x_shift = best_x - current_bounds[0]
             new_polygon = translate_polygon(carpet.polygon, x_shift, 0)
 
@@ -521,13 +628,8 @@ def post_placement_optimize_aggressive(
             # Bottom-left позиции
             from layout_optimizer import find_bottom_left_position_with_obstacles
 
-            t1 = time.time()
             best_x, best_y = find_bottom_left_position_with_obstacles(
                 rotated_polygon, obstacles, sheet_width_mm, sheet_height_mm
-            )
-            logger.info(
-                "find_bottom_left_position_with_obstacles took %.2f seconds",
-                time.time() - t1,
             )
 
             if best_x is not None:
@@ -888,8 +990,11 @@ def check_collision_fast(
         return True
 
 
-def check_collision(polygon1: Polygon, polygon2: Polygon, min_gap: float = 0.1) -> bool:
-    """Check if two polygons collide using TRUE GEOMETRIC distance with speed optimization."""
+def check_collision(polygon1: Polygon, polygon2: Polygon, min_gap: float = 10.0) -> bool:
+    """Check if two polygons collide using TRUE GEOMETRIC distance with speed optimization.
+
+    min_gap=10.0mm чтобы компенсировать погрешность при экспорте SPLINE entities в DXF.
+    """
     return check_collision_fast(polygon1, polygon2, min_gap)
 
 
@@ -991,16 +1096,18 @@ def bin_packing_with_existing(
                     else 0
                 )
 
-                # PRIMARY SCORE: Heavily penalize orientations that increase maximum height
-                # This is the core of true Tetris behavior
+                # PRIMARY SCORE: Penalize orientations that increase maximum height
+                # BALANCE: Уменьшен вес для лучшей локальной компактности (было 10000)
                 global_height_score = (
-                    max_height_after * 10000
-                )  # Much higher weight than individual position
+                    max_height_after * 5000
+                )  # Сбалансирован с локальными факторами
 
                 # SECONDARY SCORE: X position for tie-breaking (prefer left placement)
                 x_position_score = best_x
 
-                # Combined position score prioritizes global compactness
+                # Для совсем малых листов (1-2 ковра) НЕ минимизируем ширину
+                # так как это блокирует правильное размещение у краев
+                # Вместо этого полагаемся на scoring в find_bottom_left_position
                 position_score = global_height_score + x_position_score
 
                 # УЛУЧШЕННЫЙ ТЕТРИС: Более чувствительная оценка aspect ratio
@@ -1035,6 +1142,37 @@ def bin_packing_with_existing(
                     rotated, all_test_placed, sheet_width_mm, sheet_height_mm
                 )
                 shape_bonus -= tetris_bonus  # Negative is better
+
+                # КРИТИЧЕСКИЙ ANTI-HANGING: Штрафуем "висящие" размещения для максимальной тетрисовости
+                # Ковры ДОЛЖНЫ опираться на дно или другие ковры, иначе блокируют пространство
+                test_bounds = test_translated.bounds
+                bottom_y = test_bounds[1]
+
+                # УСИЛЕННЫЙ ШТРАФ: даже небольшая высота от дна должна штрафоваться
+                if bottom_y > 50:  # Снижен порог с 100 до 50 для более строгой компактности
+                    # Проверяем площадь опоры снизу
+                    support_area = 0
+                    for other in placed:
+                        if other.polygon.bounds[3] <= bottom_y + 5:  # Ковер снизу
+                            # Создаем полигон чуть ниже текущего для проверки опоры
+                            support_test = translate_polygon(test_translated, 0, -3)
+                            if support_test.intersects(other.polygon):
+                                intersection = support_test.intersection(other.polygon)
+                                support_area += intersection.area
+
+                    # Если опора маленькая, это "висящий" ковер - КРИТИЧЕСКИЙ штраф
+                    carpet_area = test_translated.area
+                    support_ratio = support_area / carpet_area if carpet_area > 0 else 0
+
+                    # УСИЛЕННЫЕ требования: нужно минимум 40% опоры (было 30%)
+                    if support_ratio < 0.4:
+                        # ОГРОМНЫЙ штраф за висящие ковры - они блокируют пространство!
+                        hanging_penalty = int((0.4 - support_ratio) * 150000)  # Утроен с 50000
+                        shape_bonus += hanging_penalty
+
+                    # Дополнительный штраф за саму высоту - чем выше, тем хуже
+                    height_penalty = int(bottom_y * 50)  # Штраф пропорциональный высоте
+                    shape_bonus += height_penalty
 
                 total_score = position_score + shape_bonus
 
@@ -1100,7 +1238,7 @@ def bin_packing_with_existing(
                             if check_collision(
                                 improved_placed[i].polygon,
                                 improved_placed[j].polygon,
-                                min_gap=2.0,  # Строгий 2мм зазор
+                                min_gap=10.0,  # Строгий 2мм зазор
                             ):
                                 safe = False
                                 break
@@ -1279,12 +1417,14 @@ def simple_compaction(
                 if test.bounds[1] < 0:
                     break
 
-                # Quick collision check - only intersections
+                # Collision check with min_gap
                 collision = False
                 for j in range(n):
-                    if j != i and test.intersects(current_polys[j]):
-                        collision = True
-                        break
+                    if j != i:
+                        # Check both intersection and minimum gap
+                        if test.intersects(current_polys[j]) or test.distance(current_polys[j]) < min_gap:
+                            collision = True
+                            break
 
                 if collision:
                     break
@@ -1324,9 +1464,11 @@ def simple_compaction(
 
                 collision = False
                 for j in range(n):
-                    if j != i and test.intersects(current_polys[j]):
-                        collision = True
-                        break
+                    if j != i:
+                        # Check both intersection and minimum gap
+                        if test.intersects(current_polys[j]) or test.distance(current_polys[j]) < min_gap:
+                            collision = True
+                            break
 
                 if not collision:
                     current_polys[i] = test
@@ -1564,6 +1706,21 @@ def bin_packing(
 
         rotation_angles = [0, 90, 180, 270]
 
+        # ПРИОРИТЕТ ОДИНАКОВОГО УГЛА: Для одинаковых ковров сначала пробуем тот же угол
+        # Это обеспечивает плотную упаковку - одинаковые формы лучше стыкуются
+        same_carpets_placed = [p for p in placed if p.filename == carpet.filename]
+        if len(same_carpets_placed) > 0:
+            # Смотрим какие углы уже использованы
+            used_angles = [p.angle for p in same_carpets_placed]
+
+            # Находим самый популярный угол среди уже размещенных одинаковых ковров
+            angle_counts = {a: used_angles.count(a) for a in [0, 90, 180, 270]}
+            most_common_angle = max(angle_counts.items(), key=lambda x: x[1])[0]
+
+            # Пробуем сначала самый популярный угол, потом все остальные
+            # Это даёт плотную упаковку: одинаковые ковры под одним углом стыкуются лучше
+            rotation_angles = [most_common_angle] + [a for a in [0, 90, 180, 270] if a != most_common_angle]
+
         for angle in rotation_angles:
             rotated = get_cached_rotation(carpet, angle)
             rotated_bounds = rotated.bounds
@@ -1574,12 +1731,18 @@ def bin_packing(
             if rotated_width > sheet_width_mm or rotated_height > sheet_height_mm:
                 continue
 
-            # Use Tetris gravity algorithm for placement
-            best_x, best_y = find_bottom_left_position(
+            # ЧИСТЫЙ BOTTOM-LEFT: размещаем в самой нижней-левой позиции
+            bl_x, bl_y = find_bottom_left_position(
                 rotated, placed, sheet_width_mm, sheet_height_mm
             )
+            if bl_x is None or bl_y is None:
+                continue
 
-            if best_x is not None and best_y is not None:
+            # Используем только одну позицию - bottom-left
+            candidate_positions = [(bl_x, bl_y)]
+
+            # Пробуем эту позицию
+            for best_x, best_y in candidate_positions:
                 # TRUE TETRIS STRATEGY: Minimize global maximum height, not individual positions!
 
                 # Calculate what the maximum height would be after placing this carpet
@@ -1608,16 +1771,18 @@ def bin_packing(
                     else 0
                 )
 
-                # PRIMARY SCORE: Heavily penalize orientations that increase maximum height
-                # This is the core of true Tetris behavior
+                # PRIMARY SCORE: Penalize orientations that increase maximum height
+                # BALANCE: Уменьшен вес для лучшей локальной компактности (было 10000)
                 global_height_score = (
-                    max_height_after * 10000
-                )  # Much higher weight than individual position
+                    max_height_after * 5000
+                )  # Сбалансирован с локальными факторами
 
                 # SECONDARY SCORE: X position for tie-breaking (prefer left placement)
                 x_position_score = best_x
 
-                # Combined position score prioritizes global compactness
+                # Для совсем малых листов (1-2 ковра) НЕ минимизируем ширину
+                # так как это блокирует правильное размещение у краев
+                # Вместо этого полагаемся на scoring в find_bottom_left_position
                 position_score = global_height_score + x_position_score
 
                 # УЛУЧШЕННЫЙ ТЕТРИС: Более чувствительная оценка aspect ratio
@@ -1661,6 +1826,94 @@ def bin_packing(
                 )
                 shape_bonus -= tetris_bonus  # Negative is better
 
+                # КРИТИЧЕСКИЙ ANTI-HANGING: Штрафуем "висящие" размещения для максимальной тетрисовости
+                # Ковры ДОЛЖНЫ опираться на дно или другие ковры, иначе блокируют пространство
+                test_bounds = test_translated.bounds
+                bottom_y = test_bounds[1]
+
+                # УСИЛЕННЫЙ ШТРАФ: даже небольшая высота от дна должна штрафоваться
+                if bottom_y > 50:  # Снижен порог с 100 до 50 для более строгой компактности
+                    # Проверяем площадь опоры снизу
+                    support_area = 0
+                    for other in placed:
+                        if other.polygon.bounds[3] <= bottom_y + 5:  # Ковер снизу
+                            # Создаем полигон чуть ниже текущего для проверки опоры
+                            support_test = translate_polygon(test_translated, 0, -3)
+                            if support_test.intersects(other.polygon):
+                                intersection = support_test.intersection(other.polygon)
+                                support_area += intersection.area
+
+                    # Если опора маленькая, это "висящий" ковер - КРИТИЧЕСКИЙ штраф
+                    carpet_area = test_translated.area
+                    support_ratio = support_area / carpet_area if carpet_area > 0 else 0
+
+                    # УСИЛЕННЫЕ требования: нужно минимум 40% опоры (было 30%)
+                    if support_ratio < 0.4:
+                        # ОГРОМНЫЙ штраф за висящие ковры - они блокируют пространство!
+                        hanging_penalty = int((0.4 - support_ratio) * 150000)  # Утроен с 50000
+                        shape_bonus += hanging_penalty
+
+                    # Дополнительный штраф за саму высоту - чем выше, тем хуже
+                    height_penalty = int(bottom_y * 50)  # Штраф пропорциональный высоте
+                    shape_bonus += height_penalty
+
+                # КРИТИЧЕСКИ ВАЖНЫЙ БОНУС ЗА ПРАВИЛЬНУЮ ОРИЕНТАЦИЮ
+                # Для симметричных ковров - одинаковый угол
+                # Для асимметричных - чередующиеся углы (90°↔270°, 0°↔180°) для лучшей стыковки
+                orientation_bonus = 0
+                if len(same_carpets_placed) > 0:
+                    angles_used = [p.angle for p in same_carpets_placed]
+
+                    # Проверяем асимметричность: сравниваем центроиды при 0° и 180°
+                    rot_0 = get_cached_rotation(carpet, 0)
+                    rot_180 = get_cached_rotation(carpet, 180)
+
+                    # Нормализуем обе формы к одинаковой позиции для сравнения
+                    bounds_0 = rot_0.bounds
+                    bounds_180 = rot_180.bounds
+
+                    # Сдвигаем обе формы в (0,0)
+                    from shapely.affinity import translate as shapely_translate
+                    norm_0 = shapely_translate(rot_0, -bounds_0[0], -bounds_0[1])
+                    norm_180 = shapely_translate(rot_180, -bounds_180[0], -bounds_180[1])
+
+                    # Сравниваем центроиды после нормализации
+                    cent_0 = norm_0.centroid
+                    cent_180 = norm_180.centroid
+
+                    # Если центроиды отличаются >5% от размера - асимметричная
+                    width_0 = bounds_0[2] - bounds_0[0]
+                    height_0 = bounds_0[3] - bounds_0[1]
+                    max_dim = max(width_0, height_0)
+
+                    cent_diff_x = abs(cent_0.x - cent_180.x)
+                    cent_diff_y = abs(cent_0.y - cent_180.y)
+
+                    is_asymmetric = (
+                        cent_diff_x > max_dim * 0.05 or
+                        cent_diff_y > max_dim * 0.05
+                    )
+
+                    if is_asymmetric:
+                        # Для асимметричных: чередуем 90° и 270° (или 0° и 180°)
+                        # Если последний ковер был 270°, текущий должен быть 90° (и наоборот)
+                        last_angle = angles_used[-1]
+
+                        if (last_angle == 270 and angle == 90) or (last_angle == 90 and angle == 270):
+                            orientation_bonus = -200000  # ОГРОМНЫЙ бонус за чередование
+                        elif (last_angle == 0 and angle == 180) or (last_angle == 180 and angle == 0):
+                            orientation_bonus = -200000
+                        elif angle == last_angle:
+                            # Одинаковый угол для асимметричных - ОГРОМНЫЙ штраф
+                            orientation_bonus = +200000
+                    else:
+                        # Для симметричных: одинаковый угол
+                        if angle in angles_used:
+                            count_at_this_angle = angles_used.count(angle)
+                            orientation_bonus = -count_at_this_angle * 100000
+
+                shape_bonus += orientation_bonus
+
                 total_score = position_score + shape_bonus
 
                 if total_score < best_score:
@@ -1700,8 +1953,11 @@ def bin_packing(
                 )
             )
 
-            # POST-PLACEMENT OPTIMIZATION
-            if len(placed) >= 2:  # Применяем только если есть что оптимизировать
+
+            # POST-PLACEMENT OPTIMIZATION - DISABLED
+            # Эта оптимизация переразмещает ковры и ломает правильную раскладку
+            # из find_bottom_left_position с улучшенным scoring
+            if False and len(placed) >= 2:  # ОТКЛЮЧЕНО
                 try:
                     # Этап 1: АГРЕССИВНАЯ Post-Placement оптимизация (полное переразмещение проблемных ковров)
                     # post_optimized = post_placement_optimize_aggressive(
@@ -1719,8 +1975,13 @@ def bin_packing(
                     )
 
                     # Этап 4: Финальная гравитация после сжатия к правому краю
-                    final_optimized = apply_tetris_gravity(
+                    gravity_optimized2 = apply_tetris_gravity(
                         right_compacted, sheet_width_mm, sheet_height_mm
+                    )
+
+                    # Этап 5: Сжатие к левому краю для плотной упаковки
+                    final_optimized = apply_tetris_left_compaction(
+                        gravity_optimized2, sheet_width_mm, sheet_height_mm
                     )
 
                     # КРИТИЧНО: Проверяем безопасность финального результата с ультра-строгим контролем
@@ -1730,7 +1991,7 @@ def bin_packing(
                             if check_collision(
                                 final_optimized[i].polygon,
                                 final_optimized[j].polygon,
-                                min_gap=2.0,  # Строгий 2мм зазор
+                                min_gap=10.0,  # Строгий 2мм зазор
                             ):
                                 collision_found = True
                                 break
@@ -1852,12 +2113,15 @@ def bin_packing(
             f"📊 Обработано {processed_count} из {total_carpet_count} ковров, пропущено {skipped_count}, размещено {len(placed)}, в unplaced {len(unplaced)}"
         )
 
+    # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
+    #placed = simple_compaction(placed, sheet_size, min_gap=1.0)
+
     # # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
     if len(placed) <= 20:  # Optimize most reasonable sets
         # Ultra-aggressive left compaction to squeeze everything left - ТЕСТИРУЕМ
-        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.4)
+        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.7)
         #
-        #     # Simple compaction with aggressive left push - ТЕСТИРУЕМ
+        # Simple compaction with aggressive left push - ТЕСТИРУЕМ
         placed = simple_compaction(placed, sheet_size)
     #
     #     # Additional edge snapping for maximum left compaction - ТЕСТИРУЕМ
@@ -1869,10 +2133,11 @@ def bin_packing(
     #     # Light tightening to clean up - ТЕСТИРУЕМ
     #     placed = tighten_layout(placed, sheet_size, min_gap=0.5, step=2.0, max_passes=1)
     elif (
-        len(placed) <= 35
-    ):  # For larger sets, still do aggressive compaction - ТЕСТИРУЕМ
-        placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.6)
-        placed = simple_compaction(placed, sheet_size)
+            len(placed) <= 35
+    ):  # COMPACTION DISABLED - breaks optimal layout from find_bottom_left_position
+        # placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.7)
+        # placed = simple_compaction(placed, sheet_size)
+        pass
     #     placed = fast_edge_snap(placed, sheet_size)
     #
     # # No optimization for very large sets
@@ -2632,17 +2897,47 @@ def calculate_tetris_quality_bonus(
     bottom_distance = bounds[1]
     bottom_bonus = max(0, (100 - bottom_distance) / 100) if bottom_distance < 100 else 0
 
-    # Weighted combination
+    # 6. НОВОЕ: Проверка на создание "карманов" справа (запертого пространства)
+    # Проверяем пространство справа от ковра - доступно ли оно сверху?
+    pocket_penalty = 0
+    right_edge = bounds[2]
+    if right_edge < sheet_width - 50:  # Есть пространство справа (>50мм)
+        # Проверяем точки справа на доступность сверху
+        test_points_right = []
+        for x in np.linspace(right_edge + 10, min(right_edge + 200, sheet_width - 10), 5):
+            for y in np.linspace(bounds[1], bounds[3], 3):
+                test_points_right.append((x, y))
+
+        if test_points_right:
+            blocked_from_top = 0
+            for point in test_points_right:
+                # Проверяем, есть ли ковёр выше этой точки, который блокирует доступ
+                blocked = False
+                for placed_carpet in all_placed:
+                    if hasattr(placed_carpet, "polygon"):
+                        pb = placed_carpet.polygon.bounds
+                        # Если ковёр выше и перекрывает по X
+                        if pb[3] > point[1] and pb[0] <= point[0] <= pb[2]:
+                            blocked = True
+                            break
+                if blocked:
+                    blocked_from_top += 1
+
+            pocket_ratio = blocked_from_top / len(test_points_right) if test_points_right else 0
+            pocket_penalty = pocket_ratio  # 0..1, чем больше тем хуже
+
+    # Weighted combination - увеличен вес штрафа за карманы
     tetris_score = (
         fill_ratio * 0.25
         + accessibility_ratio * 0.35  # Most important - future space
         + height_efficiency * 0.2
         + base_quality * 0.1
         + bottom_bonus * 0.1
+        - pocket_penalty * 0.5  # Усилен штраф за создание карманов
     )
 
     # Convert to bonus (scale to meaningful range for shape_bonus)
-    bonus = int(tetris_score * 10000)  # Scale to compete with other bonuses
+    bonus = int(tetris_score * 8000)  # Уменьшен для лучшего баланса с другими факторами
 
     return bonus
 
@@ -2674,8 +2969,8 @@ def find_super_dense_position(
             occupied_regions.append(obs_bounds)
 
     # Search in expanding rings from bottom-left
-    max_candidates = 1200  # Reduced from 2000 for speed
-    tested = 0
+    max_candidates = 600  # Balanced for speed and quality
+    all_candidates = []  # (x, y, x_offset, y_offset)
 
     for ring in range(20):  # Maximum 20 rings
         ring_step = step * (1 + ring * 0.5)  # Coarser at distance
@@ -2690,28 +2985,54 @@ def find_super_dense_position(
 
             x_offset = x - bounds[0]
             y_offset = y - bounds[1]
-            test_polygon = translate_polygon(polygon, x_offset, y_offset)
 
             # Quick bounds check
-            test_bounds = test_polygon.bounds
+            test_bounds = (
+                bounds[0] + x_offset,
+                bounds[1] + y_offset,
+                bounds[2] + x_offset,
+                bounds[3] + y_offset,
+            )
             if (
                 test_bounds[0] >= -0.01
                 and test_bounds[1] >= -0.01
                 and test_bounds[2] <= sheet_width + 0.01
                 and test_bounds[3] <= sheet_height + 0.01
             ):
-                # Ultra-fast collision check with STRtree
-                collision = check_collision_with_strtree(test_polygon, obstacles)
+                all_candidates.append((x, y, x_offset, y_offset))
 
-                if not collision:
-                    return x, y
-
-            tested += 1
-            if tested > max_candidates:
+            if len(all_candidates) > max_candidates:
                 break
 
-        if tested > max_candidates:
+        if len(all_candidates) > max_candidates:
             break
+
+    if not all_candidates:
+        return None, None
+
+    # CRITICAL: Sort by bottom-left preference (Y first, then X) for proper gravity
+    all_candidates.sort(key=lambda c: (c[1], c[0]))
+
+    # BATCH: Create all translated polygons at once
+    test_polygons = [
+        translate_polygon(polygon, x_off, y_off)
+        for _x, _y, x_off, y_off in all_candidates
+    ]
+
+    # OPTIMIZATION: Update STRtree cache ONCE
+    global _global_spatial_cache
+    _global_spatial_cache.update(obstacles)
+
+    # BATCH: Check all collisions at once using fast batch check
+    collisions = batch_check_collisions_cached_fast(
+        test_polygons, _global_spatial_cache
+    )
+
+    # Find first non-colliding position (already sorted by Y, then X)
+    for i, has_collision in enumerate(collisions):
+        if not has_collision:
+            x, y, _x_off, _y_off = all_candidates[i]
+            return x, y
 
     return None, None
 
@@ -2727,12 +3048,14 @@ def find_enhanced_contour_following_position(
     candidates = []
 
     # Strategy 1: Follow obstacle contours (limit for performance)
-    for obstacle in obstacles[: min(len(obstacles), 10)]:  # Reasonable limit
+    for obstacle in obstacles[: min(len(obstacles), 5)]:  # Reduced for speed
         if hasattr(obstacle.exterior, "coords"):
             contour_points = list(obstacle.exterior.coords)
 
-            # Much denser sampling along contour
-            for i, (cx, cy) in enumerate(contour_points[:-1]):
+            # Sample contour points with stride for speed
+            for i, (cx, cy) in enumerate(
+                contour_points[:-1:5]
+            ):  # Every 5th point for speed
                 # More test positions around each contour point
                 test_positions = [
                     # Right side positions (multiple heights)
@@ -2764,14 +3087,14 @@ def find_enhanced_contour_following_position(
                     ):
                         candidates.append((test_x, test_y))
 
-    # Strategy 2: Sheet edges with very fine step
-    fine_step = 0.05
-    for x in np.arange(0, sheet_width - poly_width + fine_step, fine_step):
+    # Strategy 2: Sheet edges with coarser step for speed
+    edge_step = 1.0  # Increased from 0.05 for much better speed
+    for x in np.arange(0, sheet_width - poly_width + edge_step, edge_step):
         candidates.append((x, 0))  # Bottom edge
         if sheet_height - poly_height > 0:
             candidates.append((x, sheet_height - poly_height))  # Top edge
 
-    for y in np.arange(0, sheet_height - poly_height + fine_step, fine_step):
+    for y in np.arange(0, sheet_height - poly_height + edge_step, edge_step):
         candidates.append((0, y))  # Left edge
         if sheet_width - poly_width > 0:
             candidates.append((sheet_width - poly_width, y))  # Right edge
@@ -2780,14 +3103,20 @@ def find_enhanced_contour_following_position(
     candidates = list(set(candidates))
     candidates.sort(key=lambda pos: (pos[1], pos[0]))
 
-    # Test each position
-    for x, y in candidates[:2000]:  # Reasonable limit for performance
+    # BATCH OPTIMIZATION: Collect all valid candidates with offsets
+    all_candidates = []  # (x, y, x_offset, y_offset)
+
+    for x, y in candidates[:600]:  # Balanced for speed and quality
         x_offset = x - bounds[0]
         y_offset = y - bounds[1]
-        test_polygon = translate_polygon(polygon, x_offset, y_offset)
 
         # Bounds check
-        test_bounds = test_polygon.bounds
+        test_bounds = (
+            bounds[0] + x_offset,
+            bounds[1] + y_offset,
+            bounds[2] + x_offset,
+            bounds[3] + y_offset,
+        )
         if (
             test_bounds[0] < -0.01
             or test_bounds[1] < -0.01
@@ -2796,16 +3125,40 @@ def find_enhanced_contour_following_position(
         ):
             continue
 
-        # Collision check
-        collision = False
-        for obstacle in obstacles:
-            if check_collision(
-                test_polygon, obstacle, min_gap=1.0
-            ):  # Увеличили для предотвращения пересечений
-                collision = True
-                break
+        all_candidates.append((x, y, x_offset, y_offset))
 
-        if not collision:
+    if not all_candidates:
+        return None, None
+
+    # CRITICAL: Sort by bottom-left preference (Y first, then X) for proper gravity
+    all_candidates.sort(key=lambda c: (c[1], c[0]))
+
+    # BATCH: Create all translated polygons at once
+    test_polygons = [
+        translate_polygon(polygon, x_off, y_off)
+        for _x, _y, x_off, y_off in all_candidates
+    ]
+
+    # OPTIMIZATION: Update STRtree cache ONCE
+    global _global_spatial_cache
+    _global_spatial_cache.update(obstacles)
+
+    # BATCH: Check all collisions at once using fast batch check with 1mm gap
+    # Create buffered obstacles for min_gap check
+    buffered_obstacles = [obs.buffer(1.0) for obs in obstacles] if obstacles else []
+
+    # Update STRtree with buffered obstacles
+    _global_spatial_cache.update(buffered_obstacles)
+
+    # BATCH: Check all collisions at once
+    collisions = batch_check_collisions_cached_fast(
+        test_polygons, _global_spatial_cache
+    )
+
+    # Find first non-colliding position
+    for i, has_collision in enumerate(collisions):
+        if not has_collision:
+            x, y, _x_off, _y_off = all_candidates[i]
             return x, y
 
     return None, None
@@ -2847,7 +3200,7 @@ def find_ultra_tight_position(
     candidates = []
 
     # Grid search with adaptive limits (reduced for performance)
-    max_candidates = 500 if small_polygon else 250  # Reduced for speed
+    max_candidates = 350 if small_polygon else 200  # Balanced for speed and quality
 
     for x in np.arange(0, sheet_width - poly_width + 1, step_size):
         for y in np.arange(0, sheet_height - poly_height + 1, step_size):
@@ -2857,14 +3210,20 @@ def find_ultra_tight_position(
         if len(candidates) >= max_candidates:
             break
 
-    # Test positions using pure geometric collision detection
+    # BATCH OPTIMIZATION: Collect all valid candidates with offsets
+    all_candidates = []  # (x, y, x_offset, y_offset)
+
     for x, y in candidates:
         x_offset = x - bounds[0]
         y_offset = y - bounds[1]
-        test_polygon = translate_polygon(polygon, x_offset, y_offset)
 
         # CRITICAL FIX: Check sheet boundaries first
-        test_bounds = test_polygon.bounds
+        test_bounds = (
+            bounds[0] + x_offset,
+            bounds[1] + y_offset,
+            bounds[2] + x_offset,
+            bounds[3] + y_offset,
+        )
         if (
             test_bounds[0] < -0.1
             or test_bounds[1] < -0.1
@@ -2873,10 +3232,33 @@ def find_ultra_tight_position(
         ):
             continue
 
-        # STRtree collision check
-        collision = check_collision_with_strtree(test_polygon, obstacles)
+        all_candidates.append((x, y, x_offset, y_offset))
 
-        if not collision:
+    if not all_candidates:
+        return None, None
+
+    # CRITICAL: Sort by bottom-left preference (Y first, then X) for proper gravity
+    all_candidates.sort(key=lambda c: (c[1], c[0]))
+
+    # BATCH: Create all translated polygons at once
+    test_polygons = [
+        translate_polygon(polygon, x_off, y_off)
+        for _x, _y, x_off, y_off in all_candidates
+    ]
+
+    # OPTIMIZATION: Update STRtree cache ONCE
+    global _global_spatial_cache
+    _global_spatial_cache.update(obstacles)
+
+    # BATCH: Check all collisions at once using fast batch check
+    collisions = batch_check_collisions_cached_fast(
+        test_polygons, _global_spatial_cache
+    )
+
+    # Find first non-colliding position (already sorted by Y, then X)
+    for i, has_collision in enumerate(collisions):
+        if not has_collision:
+            x, y, _x_off, _y_off = all_candidates[i]
             return x, y
 
     return None, None
@@ -2889,19 +3271,23 @@ class _Stats:
 def find_bottom_left_position_with_obstacles(
     polygon: Polygon, obstacles: list[Polygon], sheet_width: float, sheet_height: float
 ) -> tuple[float | None, float | None]:
-    """Find the bottom-left position using ORIGINAL algorithm with STRtree cache."""
-    _Stats.call_counter += 1
+    """Find the bottom-left position using FAST batch algorithm with tight packing."""
+    # Try ultra-tight algorithm first
+    result = find_ultra_tight_position(polygon, obstacles, sheet_width, sheet_height)
+    if result[0] is not None:
+        return result
+
+    # Fallback to improved algorithm
     bounds = polygon.bounds
     poly_width = bounds[2] - bounds[0]
     poly_height = bounds[3] - bounds[1]
 
-    # Try positions along bottom and left edges first
+    # Generate candidate positions - ORIGINAL algorithm logic
     candidate_positions = []
 
     # ADAPTIVE STEP: Fine grid for small polygons, coarse for large ones
     polygon_size = poly_width * poly_height
     is_small = polygon_size < 10000  # 100mm x 100mm
-
     grid_step = 2.0 if is_small else 15  # Fine step for small polygons
 
     # Bottom edge positions
@@ -2928,51 +3314,66 @@ def find_bottom_left_position_with_obstacles(
             candidate_positions.append((obstacle_bounds[0], y))  # Same X as existing
             candidate_positions.append((0, y))  # Left edge
 
-    # ORIGINAL: Remove duplicates and sort
+    # Remove duplicates and sort by bottom-left preference (Y first, then X)
     candidate_positions = list(set(candidate_positions))
     candidate_positions.sort(key=lambda pos: (pos[1], pos[0]))
 
-    # NUMBA OPTIMIZATION 1: Convert to numpy array
-    candidates_array = np.array(candidate_positions, dtype=np.float64)
-
-    # NUMBA OPTIMIZATION 2: Fast bbox pre-filter (rejects ~90% of candidates)
-    obstacles_bounds = extract_bounds_array(obstacles)
-    poly_bounds_tuple = (bounds[0], bounds[1], bounds[2], bounds[3])
-
-    # Use min_gap=0.1 for FAST filtering (will verify with precise check after)
-    valid_mask = filter_positions_by_bounds(
-        candidates_array,
-        poly_bounds_tuple,
-        obstacles_bounds,
-        sheet_width,
-        sheet_height,
-        min_gap=0.1,
-    )
-
-    valid_candidates = candidates_array[valid_mask]
-
-    if len(valid_candidates) == 0:
+    if not candidate_positions:
         return None, None
 
-    # OPTIMIZATION 3: Update STRtree cache ONCE for precise checks
-    global _global_spatial_cache
-    _global_spatial_cache.update(obstacles)
+    # BATCH OPTIMIZATION: Collect all valid candidates with offsets
+    all_candidates = []  # (x, y, x_offset, y_offset)
 
-    # PRECISE CHECK: Test remaining candidates with intersects() only
-    for x, y in valid_candidates:
+    for x, y in candidate_positions:
+        # Fast boundary pre-check
+        if x + poly_width > sheet_width + 0.1 or y + poly_height > sheet_height + 0.1:
+            continue
+        if x < -0.1 or y < -0.1:
+            continue
+
         # Pre-calculate translation offset
         x_offset = x - bounds[0]
         y_offset = y - bounds[1]
 
-        # Create translated polygon (expensive, but only for filtered candidates)
-        test_polygon = translate_polygon(polygon, x_offset, y_offset)
-
-        # PRECISE: Use cached STRtree with intersects only (NO min_gap)
-        collision = check_collision_fast_indexed_intersects_only(
-            test_polygon, _global_spatial_cache
+        # Check if bounds would be valid after translation
+        test_bounds = (
+            bounds[0] + x_offset,
+            bounds[1] + y_offset,
+            bounds[2] + x_offset,
+            bounds[3] + y_offset,
         )
+        if (
+            test_bounds[0] < -0.1
+            or test_bounds[1] < -0.1
+            or test_bounds[2] > sheet_width + 0.1
+            or test_bounds[3] > sheet_height + 0.1
+        ):
+            continue
 
-        if not collision:
+        all_candidates.append((x, y, x_offset, y_offset))
+
+    if not all_candidates:
+        return None, None
+
+    # BATCH: Create all translated polygons at once
+    test_polygons = [
+        translate_polygon(polygon, x_off, y_off)
+        for _x, _y, x_off, y_off in all_candidates
+    ]
+
+    # OPTIMIZATION: Update STRtree cache ONCE
+    global _global_spatial_cache
+    _global_spatial_cache.update(obstacles)
+
+    # BATCH: Check all collisions at once using fast batch check
+    collisions = batch_check_collisions_cached_fast(
+        test_polygons, _global_spatial_cache
+    )
+
+    # Find first non-colliding position (already sorted by Y, then X for bottom-left)
+    for i, has_collision in enumerate(collisions):
+        if not has_collision:
+            x, y, _x_off, _y_off = all_candidates[i]
             return x, y
 
     return None, None
@@ -3016,7 +3417,7 @@ def find_quick_position(
             collision = False
             for placed_poly in placed_polygons:
                 if check_collision(
-                    test_polygon, placed_poly.polygon, min_gap=2.0
+                    test_polygon, placed_poly.polygon, min_gap=10.0
                 ):  # Looser gap
                     collision = True
                     break
@@ -3047,14 +3448,30 @@ def find_bottom_left_position(
     best_y = None
     best_positions = []
 
-    # PRIORITY LEFT SCAN - try left positions first for maximum compaction
-    # Create X positions with strong preference for left side
+    # КРИТИЧНО: Генерируем X позиции для МАКСИМАЛЬНОЙ компактности
+    # Проверяем: 0 (левый край), справа от каждого ковра, правый край
     x_positions = []
+
+    # 1. Левый край
+    x_positions.append(0)
+
+    # 2. Позиции справа от каждого размещенного ковра
+    for placed_poly in placed_polygons:
+        right_edge = placed_poly.polygon.bounds[2]
+        if right_edge + poly_width <= sheet_width:
+            x_positions.append(int(right_edge) + 2)  # 2mm gap
+
+    # 3. Правый край листа (прижать к правому краю!)
+    right_aligned_x = int(sheet_width - poly_width)
+    if right_aligned_x >= 0:
+        x_positions.append(right_aligned_x)
+
+    # 4. Дополнительные промежуточные позиции для полноты
     for x in range(0, int(sheet_width - poly_width), max(5, int(step))):
         x_positions.append(x)
 
-    # Sort to prioritize leftmost positions
-    x_positions.sort()
+    # Убираем дубликаты и сортируем (приоритет левым)
+    x_positions = sorted(set(x_positions))
 
     # OPTIMIZATION: Cache obstacles and STRtree ONCE
     obstacles = [placed_poly.polygon for placed_poly in placed_polygons]
@@ -3064,14 +3481,19 @@ def find_bottom_left_position(
     # BATCH OPTIMIZATION: Collect ALL candidate positions first
     all_candidates = []  # (x, y, x_offset, y_offset)
 
-    for test_x in x_positions[:15]:  # Limit for speed but favor left
+    # УЛУЧШЕНИЕ ПЛОТНОСТИ: Проверяем больше X позиций для лучшей компактности
+    for test_x in x_positions[:30]:  # Увеличено с 15 до 30 для большей плотности
         # Test only a few Y positions per X for speed
         test_y_positions = [0]  # Always try bottom
 
-        # Add positions based on existing polygons (very limited)
-        for placed_poly in placed_polygons[:2]:  # Only first 2 polygons for speed
+        # Add positions based on existing polygons - check ALL polygons for dense packing
+        # КРИТИЧНО для плотности: нужно учитывать ВСЕ размещенные ковры
+        for placed_poly in placed_polygons:  # Проверяем все полигоны
             other_bounds = placed_poly.polygon.bounds
             test_y_positions.append(other_bounds[3] + 2.0)  # Above with 2mm gap
+            # Добавляем также позиции справа от ковров для лучшей компактности
+            test_y_positions.append(other_bounds[1])  # На той же высоте что низ
+            test_y_positions.append(other_bounds[1] + (other_bounds[3] - other_bounds[1]) / 2)  # Посередине
 
         # Collect valid positions
         for test_y in sorted(set(test_y_positions)):
@@ -3103,7 +3525,18 @@ def find_bottom_left_position(
             for x in range(0, int(sheet_width - poly_width), 20):
                 x_offset = x - bounds[0]
                 y_offset = y - bounds[1]
-                all_candidates.append((x, y, x_offset, y_offset))
+
+                # ВАЖНО: Проверяем границы для fallback кандидатов!
+                test_bounds = (
+                    bounds[0] + x_offset,
+                    bounds[1] + y_offset,
+                    bounds[2] + x_offset,
+                    bounds[3] + y_offset,
+                )
+                if (test_bounds[0] >= 0 and test_bounds[1] >= 0 and
+                    test_bounds[2] <= sheet_width and test_bounds[3] <= sheet_height):
+                    all_candidates.append((x, y, x_offset, y_offset))
+
                 if len(all_candidates) >= 50:  # Limit fallback candidates
                     break
             if len(all_candidates) >= 50:
@@ -3123,20 +3556,85 @@ def find_bottom_left_position(
         test_polygons, _global_spatial_cache
     )
 
-    # Find first non-colliding position (sorted by Y, then X)
+    # КРИТИЧЕСКОЕ УЛУЧШЕНИЕ: Вместо выбора первой позиции с минимальным Y,
+    # оцениваем ВСЕ валидные позиции и выбираем лучшую по плотности
+
+    valid_positions = []
     for i, has_collision in enumerate(collisions):
         if not has_collision:
-            x, y, _x_off, _y_off = all_candidates[i]
-            if best_y is None or y < best_y:
-                best_y = y
-                best_positions = [(x, y)]
-            elif y == best_y:
-                best_positions.append((x, y))
+            x, y, x_off, y_off = all_candidates[i]
+            test_poly = test_polygons[i]
 
-    # Return leftmost position at lowest Y
-    if best_positions:
-        best_positions.sort()
-        return best_positions[0]
+            # Оцениваем качество позиции для максимальной плотности
+            score = 0
+            bounds = test_poly.bounds
+
+            # 1. ПРИОРИТЕТ НИЗКОЙ ПОЗИЦИИ (основной фактор)
+            score += y * 1000
+
+            # 2. ШТРАФ за удаленность от левого края (меньше X = лучше)
+            # Градиентный штраф: чем правее, тем хуже
+            score += bounds[0] * 50  # Умеренный штраф за X-позицию
+
+            # 3. КРИТИЧЕСКИЙ БОНУС ЗА ПРИЖАТОСТЬ К КРАЯМ ЛИСТА
+            # Левый край - ОГРОМНЫЙ приоритет для максимизации открытого пространства
+            left_distance = bounds[0]
+            if left_distance < 5:
+                score -= 300000  # Идеальная прижатость к левому краю
+            elif left_distance < 50:
+                # Сильный градиентный бонус: ближе = значительно лучше
+                score -= int((50 - left_distance) * 5000)
+
+            # Правый край - тоже важен, но менее приоритетен чем левый
+            right_distance = abs(bounds[2] - sheet_width)
+            if right_distance < 5:
+                score -= 200000  # Прижатость к правому краю
+            elif right_distance < 50:
+                score -= int((50 - right_distance) * 3000)
+
+            # 4. КРИТИЧЕСКИЙ БОНУС: близость к уже размещенным коврам
+            # Ковер должен быть как можно ближе к соседям для плотности
+            min_distance_to_neighbors = float('inf')
+            for placed in placed_polygons:
+                placed_bounds = placed.polygon.bounds
+
+                # Расстояние между boundary boxes
+                dx = max(0, max(bounds[0] - placed_bounds[2], placed_bounds[0] - bounds[2]))
+                dy = max(0, max(bounds[1] - placed_bounds[3], placed_bounds[1] - bounds[3]))
+                dist = (dx*dx + dy*dy) ** 0.5
+                min_distance_to_neighbors = min(min_distance_to_neighbors, dist)
+
+            # Штраф за удаленность от соседей
+            if min_distance_to_neighbors < float('inf'):
+                score += int(min_distance_to_neighbors * 200)
+
+            # 5. ШТРАФ ЗА БЛОКИРОВАНИЕ ПРОСТРАНСТВА
+            # Если ковер висит высоко без опоры снизу - это блокирует пространство
+            bottom_y = bounds[1]
+            if bottom_y > 50:
+                # Проверяем опору снизу
+                support_area = 0
+                for placed in placed_polygons:
+                    if placed.polygon.bounds[3] <= bottom_y + 5:
+                        # Проверяем пересечение снизу
+                        support_test = translate_polygon(test_poly, 0, -3)
+                        if support_test.intersects(placed.polygon):
+                            intersection = support_test.intersection(placed.polygon)
+                            support_area += intersection.area
+
+                support_ratio = support_area / test_poly.area if test_poly.area > 0 else 0
+                if support_ratio < 0.4:
+                    # Висячая позиция - ОГРОМНЫЙ штраф
+                    score += int((0.4 - support_ratio) * 100000)
+
+            valid_positions.append((score, x, y, i))
+
+    # Выбираем позицию с МИНИМАЛЬНЫМ score (лучшая плотность)
+    if valid_positions:
+        valid_positions.sort()  # Сортируем по score
+        best_score, best_x, best_y, best_i = valid_positions[0]
+
+        return best_x, best_y
 
     return None, None
 
@@ -3174,93 +3672,62 @@ def calculate_placement_waste(
 def try_simple_placement(
     carpet: Carpet, existing_placed: list[PlacedCarpet], sheet_size: tuple[float, float]
 ) -> PlacedCarpet | None:
-    """ULTRA-AGGRESSIVE placement with TETRIS QUALITY evaluation."""
+    """FAST placement using find_bottom_left_position for priority2 carpets."""
     import shapely.affinity
 
     # Convert sheet size from cm to mm
     sheet_width_mm, sheet_height_mm = sheet_size[0] * 10, sheet_size[1] * 10
 
-    # Get existing obstacles
-    obstacles = [placed.polygon for placed in existing_placed]
+    # Try all 4 rotations for better placement
+    for angle in [0, 90, 180, 270]:
+        rotated = get_cached_rotation(carpet, angle)
+        bounds = rotated.bounds
+        poly_width = bounds[2] - bounds[0]
+        poly_height = bounds[3] - bounds[1]
 
-    # Try multiple approaches for maximum space utilization
-    placement_strategies = [
-        {
-            "step": 10,
-            "rotations": [0, 90, 180, 270],
-        },  # Увеличен шаг с 5 до 10мм для ускорения
-    ]
+        # Skip if doesn't fit
+        if poly_width > sheet_width_mm or poly_height > sheet_height_mm:
+            continue
 
-    # Cache rotation results to avoid repeated calculations
-    rotation_cache = {}
+        # Use find_bottom_left_position which intelligently checks edges and key positions
+        bl_x, bl_y = find_bottom_left_position(
+            rotated, existing_placed, sheet_width_mm, sheet_height_mm
+        )
 
-    for strategy in placement_strategies:
-        step: int = strategy["step"]
-        rotations = strategy["rotations"]
+        if bl_x is not None and bl_y is not None:
+            # Calculate final position
+            dx = bl_x - bounds[0]
+            dy = bl_y - bounds[1]
+            positioned_polygon = shapely.affinity.translate(rotated, dx, dy)
 
-        # Try different rotations
-        for angle in rotations:
-            # Use cached rotation
-            if angle not in rotation_cache:
-                rotation_cache[angle] = get_cached_rotation(carpet, angle)
-            rotated_polygon = rotation_cache[angle]
-
-            bounds = rotated_polygon.bounds
-            poly_width = bounds[2] - bounds[0]
-            poly_height = bounds[3] - bounds[1]
-
-            # Skip if doesn't fit in sheet
-            if poly_width > sheet_width_mm or poly_height > sheet_height_mm:
+            # Check if it fits in sheet
+            pos_bounds = positioned_polygon.bounds
+            if (pos_bounds[0] < 0 or pos_bounds[1] < 0 or
+                pos_bounds[2] > sheet_width_mm or pos_bounds[3] > sheet_height_mm):
                 continue
 
-            # BOTTOM-LEFT FIRST approach for maximum compaction
-            for y in range(0, int(sheet_height_mm - poly_height + 1), step):
-                for x in range(0, int(sheet_width_mm - poly_width + 1), step):
-                    # Move polygon to position
-                    dx = x - bounds[0]
-                    dy = y - bounds[1]
-                    positioned_polygon = shapely.affinity.translate(
-                        rotated_polygon, dx, dy
-                    )
+            # Check for collisions with existing polygons
+            has_collision = False
+            for placed in existing_placed:
+                if positioned_polygon.intersects(placed.polygon):
+                    intersection = positioned_polygon.intersection(placed.polygon)
+                    if hasattr(intersection, "area") and intersection.area > 0.1:
+                        has_collision = True
+                        break
 
-                    # Check if it fits in sheet
-                    pos_bounds = positioned_polygon.bounds
-                    if (
-                        pos_bounds[0] >= 0
-                        and pos_bounds[1] >= 0
-                        and pos_bounds[2] <= sheet_width_mm
-                        and pos_bounds[3] <= sheet_height_mm
-                    ):
-                        # Check for collisions with existing polygons
-                        has_collision = False
-                        for obstacle in obstacles:
-                            if positioned_polygon.intersects(obstacle):
-                                intersection = positioned_polygon.intersection(obstacle)
-                                if (
-                                    hasattr(intersection, "area")
-                                    and intersection.area > 0.1
-                                ):  # Ultra-tight packing
-                                    has_collision = True
-                                    break
-
-                        if not has_collision:
-                            # For Priority 2, take first valid position for speed
-                            # Calculate correct offsets from original position
-                            original_bounds = carpet.polygon.bounds
-                            final_x_offset = dx + (original_bounds[0] - bounds[0])
-                            final_y_offset = dy + (original_bounds[1] - bounds[1])
-
-                            return PlacedCarpet(
-                                polygon=positioned_polygon,
-                                x_offset=final_x_offset,
-                                y_offset=final_y_offset,
-                                angle=angle,
-                                filename=carpet.filename,
-                                color=carpet.color,
-                                order_id=carpet.order_id,
-                                carpet_id=carpet.carpet_id,
-                                priority=carpet.priority,
-                            )
+            if not has_collision:
+                # Found valid placement - return immediately
+                return PlacedCarpet(
+                    polygon=positioned_polygon,
+                    x_offset=dx,
+                    y_offset=dy,
+                    angle=angle,
+                    filename=carpet.filename,
+                    color=carpet.color,
+                    order_id=carpet.order_id,
+                    carpet_id=carpet.carpet_id,
+                    priority=carpet.priority,
+                )
 
     return None  # No valid placement found
 
