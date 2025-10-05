@@ -274,7 +274,7 @@ def apply_tetris_right_compaction(
             # Проверяем коллизии
             collision = False
             for obstacle in obstacles:
-                if check_collision(test_polygon, obstacle, min_gap=2.0):
+                if check_collision(test_polygon, obstacle, min_gap=10.0):
                     collision = True
                     break
 
@@ -382,7 +382,7 @@ def apply_tetris_left_compaction(
             # Проверяем коллизии
             collision = False
             for obstacle in obstacles:
-                if check_collision(test_polygon, obstacle, min_gap=2.0):
+                if check_collision(test_polygon, obstacle, min_gap=10.0):
                     collision = True
                     break
 
@@ -989,8 +989,11 @@ def check_collision_fast(
         return True
 
 
-def check_collision(polygon1: Polygon, polygon2: Polygon, min_gap: float = 0.1) -> bool:
-    """Check if two polygons collide using TRUE GEOMETRIC distance with speed optimization."""
+def check_collision(polygon1: Polygon, polygon2: Polygon, min_gap: float = 10.0) -> bool:
+    """Check if two polygons collide using TRUE GEOMETRIC distance with speed optimization.
+
+    min_gap=10.0mm чтобы компенсировать погрешность при экспорте SPLINE entities в DXF.
+    """
     return check_collision_fast(polygon1, polygon2, min_gap)
 
 
@@ -1234,7 +1237,7 @@ def bin_packing_with_existing(
                             if check_collision(
                                 improved_placed[i].polygon,
                                 improved_placed[j].polygon,
-                                min_gap=2.0,  # Строгий 2мм зазор
+                                min_gap=10.0,  # Строгий 2мм зазор
                             ):
                                 safe = False
                                 break
@@ -1987,7 +1990,7 @@ def bin_packing(
                             if check_collision(
                                 final_optimized[i].polygon,
                                 final_optimized[j].polygon,
-                                min_gap=2.0,  # Строгий 2мм зазор
+                                min_gap=10.0,  # Строгий 2мм зазор
                             ):
                                 collision_found = True
                                 break
@@ -3413,7 +3416,7 @@ def find_quick_position(
             collision = False
             for placed_poly in placed_polygons:
                 if check_collision(
-                    test_polygon, placed_poly.polygon, min_gap=2.0
+                    test_polygon, placed_poly.polygon, min_gap=10.0
                 ):  # Looser gap
                     collision = True
                     break

@@ -391,14 +391,13 @@ def check_collision_fast_indexed(polygon, spatial_cache, min_gap=0.1):
     return False
 
 
-def check_collision_fast_indexed_intersects_only(polygon, spatial_cache):
-    """Fast collision check using ONLY intersects (no min_gap).
-
-    This matches the original bc9bc54 behavior - only checks for actual overlap.
+def check_collision_fast_indexed_intersects_only(polygon, spatial_cache, min_gap=10.0):
+    """Fast collision check with min_gap for DXF export accuracy.
 
     Args:
         polygon: Shapely Polygon to test
         spatial_cache: SpatialIndexCache instance
+        min_gap: Minimum gap in mm (default 10.0mm for DXF SPLINE export)
 
     Returns:
         True if collision detected, False otherwise
@@ -415,9 +414,13 @@ def check_collision_fast_indexed_intersects_only(polygon, spatial_cache):
     if not possible_indices:
         return False
 
-    # Check ONLY for intersections (no distance/gap check)
+    # Check for intersections OR distance < min_gap
     for idx in possible_indices:
-        if polygon.intersects(spatial_cache.polygons[idx]):
+        other = spatial_cache.polygons[idx]
+        if polygon.intersects(other):
+            return True
+        # Check distance for min_gap
+        if polygon.distance(other) < min_gap:
             return True
 
     return False
