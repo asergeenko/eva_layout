@@ -353,153 +353,88 @@ if excel_file is not None:
                 # Interactive table with controls for each row
                 st.markdown("**Выберите заказы для раскроя:**")
 
-                # Prepare data for DataFrame display
+                # ОПТИМИЗАЦИЯ: Используем st.data_editor для быстрой работы с большими таблицами
+                import pandas as pd
+
+                # Prepare data for DataFrame
                 orders_data = []
                 for i, order in enumerate(orders_to_show):
                     actual_idx = start_idx + i
-
-                    # Get current selection state and quantity
                     is_selected = st.session_state.get(f"order_{actual_idx}", False)
                     current_qty = st.session_state.get(f"quantity_{actual_idx}", 1)
 
-                    # Color emoji
                     color = order.get("color", "серый")
-                    color_emoji = (
-                        "⚫"
-                        if color == "чёрный"
-                        else "⚪"
-                        if color == "серый"
-                        else "🔘"
-                    )
+                    color_emoji = "⚫" if color == "чёрный" else "⚪" if color == "серый" else "🔘"
 
-                    orders_data.append(
-                        {
-                            "№": actual_idx + 1,
-                            "Выбрать": "✓" if is_selected else "",
-                            "Кол-во": current_qty,
-                            "Артикул": order["article"],
-                            "Товар": order["product"][:40] + "..."
-                            if len(order["product"]) > 40
-                            else order["product"],
-                            "Тип": order.get("product_type", ""),
-                            "Цвет": color_emoji,
-                            "Дата": order.get("date", "")[:10]
-                            if order.get("date", "")
-                            else "",
-                            "Кант цвет": order.get("border_color", ""),
-                            "Маркетплейс": order.get("marketplace", ""),
-                        }
-                    )
+                    orders_data.append({
+                        "Выбрать": is_selected,
+                        "Кол-во": current_qty,
+                        "Артикул": order["article"],
+                        "Товар": order["product"][:40] + "..." if len(order["product"]) > 40 else order["product"],
+                        "Тип": order.get("product_type", ""),
+                        "Цвет": color_emoji,
+                        "Кант": order.get("border_color", ""),
+                        "Маркетплейс": order.get("marketplace", ""),
+                    })
 
-                ###########################################33
-                with st.container(height=400):
-                    cols = st.columns([1, 2, 10, 6, 3, 3, 3])
-                    with cols[1]:
-                        st.write("**Количество**")
-                    with cols[2]:
-                        st.write("**Артикул**")
-                    with cols[3]:
-                        st.write("**Товар**")
-                    with cols[4]:
-                        st.write("**Изделие**")
-                    with cols[5]:
-                        st.write("**Кант цвет**")
-                    with cols[6]:
-                        st.write("**Маркетплейс**")
+                df = pd.DataFrame(orders_data)
 
-                    # Create columns for interactive controls
-                    for i, order in enumerate(orders_to_show):
-                        actual_idx = start_idx + i
+                # Use data_editor for fast rendering
+                edited_df = st.data_editor(
+                    df,
+                    hide_index=True,
+                    use_container_width=True,
+                    height=400,
+                    column_config={
+                        "Выбрать": st.column_config.CheckboxColumn("Выбрать", default=False),
+                        "Кол-во": st.column_config.NumberColumn("Кол-во", min_value=1, max_value=1000, default=1),
+                        "Артикул": st.column_config.TextColumn("Артикул", disabled=True),
+                        "Товар": st.column_config.TextColumn("Товар", disabled=True),
+                        "Тип": st.column_config.TextColumn("Тип", disabled=True),
+                        "Цвет": st.column_config.TextColumn("Цвет", disabled=True),
+                        "Кант": st.column_config.TextColumn("Кант", disabled=True),
+                        "Маркетплейс": st.column_config.TextColumn("Маркетплейс", disabled=True),
+                    },
+                )
 
-                        cols = st.columns([1, 2, 10, 6, 3, 3, 3])
-
-                        # Selection checkbox
-                        with cols[0]:
-                            is_selected = st.checkbox(
-                                f"№{actual_idx + 1}",
-                                value=st.session_state.get(
-                                    f"order_{actual_idx}", False
-                                ),
-                                key=f"select_{actual_idx}",
-                                label_visibility="collapsed",
-                            )
-                            st.session_state[f"order_{actual_idx}"] = is_selected
-
-                        # Quantity number input
-                        with cols[1]:
-                            quantity = st.number_input(
-                                f"Количество для заказа {actual_idx + 1}",
-                                min_value=1,
-                                max_value=1000,
-                                value=st.session_state.get(f"quantity_{actual_idx}", 1),
-                                key=f"qty_{actual_idx}",
-                                label_visibility="collapsed",
-                            )
-                            st.session_state[f"quantity_{actual_idx}"] = quantity
-
-                        # Display order info for reference
-                        with cols[2]:
-                            st.write(f"**{order['article']}**")
-
-                        with cols[3]:
-                            product_text = (
-                                order["product"][:30] + "..."
-                                if len(order["product"]) > 30
-                                else order["product"]
-                            )
-                            st.write(product_text)
-
-                        with cols[4]:
-                            color = order.get("color", "серый")
-                            color_emoji = (
-                                "⚫"
-                                if color == "чёрный"
-                                else "⚪"
-                                if color == "серый"
-                                else "🔘"
-                            )
-                            st.write(f"{color_emoji} {order.get('product_type', '')}")
-
-                        with cols[5]:
-                            st.write(order.get("border_color", ""))
-
-                        with cols[6]:
-                            st.write(order.get("marketplace", ""))
-                ####################################################
+                # Update session state from edited dataframe
+                for i in range(len(edited_df)):
+                    actual_idx = start_idx + i
+                    st.session_state[f"order_{actual_idx}"] = edited_df.iloc[i]["Выбрать"]
+                    st.session_state[f"quantity_{actual_idx}"] = edited_df.iloc[i]["Кол-во"]
 
                 # Bulk controls
                 col1, col2 = st.columns([1, 1])
                 with col1:
                     if st.button("✅ Выбрать все", key="select_all_orders"):
-                        for i in range(len(orders_to_show)):
-                            st.session_state[f"order_{start_idx + i}"] = True
+                        for i in range(len(display_orders)):
+                            st.session_state[f"order_{i}"] = True
                         st.rerun()
 
                 with col2:
                     if st.button("❌ Снять выбор", key="deselect_all_orders"):
-                        deselect(orders_to_show, start_idx)
+                        for i in range(len(display_orders)):
+                            st.session_state[f"order_{i}"] = False
+                        st.rerun()
 
             # Collect all selected orders, multiplying by quantity
-            all_selected_orders = []
-            for i in range(len(display_orders)):
-                if st.session_state.get(f"order_{i}", False):
-                    order = display_orders[i]
-                    quantity = st.session_state.get(f"quantity_{i}", 1)
-
-                    # Add the order multiple times based on quantity
-                    for repeat_num in range(quantity):
-                        # Create a copy of the order with a unique identifier
-                        repeated_order = order.copy()
-                        repeated_order["repeat_index"] = repeat_num + 1
-                        repeated_order["original_index"] = i
-
-                        # Make order_id unique for each repeat
-                        if quantity > 1:
-                            repeated_order["order_id"] = (
-                                f"{order['order_id']}_повтор_{repeat_num + 1}"
-                            )
-
-                        all_selected_orders.append(repeated_order)
+            # ОПТИМИЗАЦИЯ: Используем list comprehension для скорости
+            all_selected_orders = [
+                {
+                    **order,
+                    "repeat_index": repeat_num + 1,
+                    "original_index": i,
+                    "order_id": (
+                        f"{order['order_id']}_повтор_{repeat_num + 1}"
+                        if quantity > 1
+                        else order["order_id"]
+                    ),
+                }
+                for i, order in enumerate(display_orders)
+                if st.session_state.get(f"order_{i}", False)
+                for quantity in [st.session_state.get(f"quantity_{i}", 1)]
+                for repeat_num in range(quantity)
+            ]
 
             if all_selected_orders:
                 # Count unique orders
