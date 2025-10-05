@@ -15,6 +15,7 @@ from fast_geometry import (
     SpatialIndexCache,
     check_collision_fast_indexed_intersects_only,
     batch_check_collisions_cached_fast,
+    filter_positions_by_bounds,
 )
 
 # Настройка логирования
@@ -1959,13 +1960,13 @@ def bin_packing(
             if False and len(placed) >= 2:  # ОТКЛЮЧЕНО
                 try:
                     # Этап 1: АГРЕССИВНАЯ Post-Placement оптимизация (полное переразмещение проблемных ковров)
-                    post_optimized = post_placement_optimize_aggressive(
-                        placed, sheet_width_mm, sheet_height_mm
-                    )
+                    # post_optimized = post_placement_optimize_aggressive(
+                    #    placed, sheet_width_mm, sheet_height_mm
+                    # )
 
                     # Этап 2: Гравитация для финальной компактификации
                     gravity_optimized = apply_tetris_gravity(
-                        post_optimized, sheet_width_mm, sheet_height_mm
+                        placed, sheet_width_mm, sheet_height_mm
                     )
 
                     # Этап 3: НОВОЕ! Сжатие к правому краю (как в настоящем Тетрисе)
