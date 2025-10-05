@@ -21,6 +21,7 @@ packages:
   - nginx
   - ufw
   - curl
+  - vsftpd
 
 users:
   - name: eva
@@ -66,6 +67,37 @@ write_files:
           }
       }
 
+  - path: /etc/vsftpd.conf
+    content: |
+      # FTP Server Configuration
+      listen=YES
+      listen_ipv6=NO
+      anonymous_enable=NO
+      local_enable=YES
+      write_enable=YES
+      local_umask=022
+      dirmessage_enable=YES
+      use_localtime=YES
+      xferlog_enable=YES
+      connect_from_port_20=YES
+      chroot_local_user=YES
+      secure_chroot_dir=/var/run/vsftpd/empty
+      pam_service_name=vsftpd
+      ssl_enable=NO
+      pasv_enable=YES
+      pasv_min_port=40000
+      pasv_max_port=50000
+      user_sub_token=$USER
+      local_root=/home/eva/eva_layout/data
+      allow_writeable_chroot=YES
+      userlist_enable=YES
+      userlist_file=/etc/vsftpd.userlist
+      userlist_deny=NO
+
+  - path: /etc/vsftpd.userlist
+    content: |
+      eva
+
 runcmd:
   # Setup GitHub access for private repository
   - sudo -u eva mkdir -p /home/eva/.ssh
@@ -96,7 +128,13 @@ runcmd:
   - ufw allow 22/tcp
   - ufw allow 80/tcp
   - ufw allow 443/tcp
+  - ufw allow 21/tcp
+  - ufw allow 40000:50000/tcp
   - ufw --force enable
+
+  # Configure and start FTP server
+  - systemctl restart vsftpd
+  - systemctl enable vsftpd
 
   # Enable and start the application
   - systemctl daemon-reload
@@ -109,17 +147,31 @@ runcmd:
 final_message: |
   Eva Layout Optimizer has been successfully deployed!
 
-  The application is running on port 80 via nginx reverse proxy.
-  Access it at: http://YOUR_SERVER_IP
+  WEB ACCESS:
+    - Application URL: http://YOUR_SERVER_IP
+    - Running on port 80 via nginx reverse proxy
 
-  Service management:
+  FTP ACCESS:
+    - Host: YOUR_SERVER_IP
+    - Port: 21
+    - Username: eva
+    - Password: (set during server setup)
+    - Directory: /data (автоматический переход)
+    - Passive ports: 40000-50000
+
+  SERVICE MANAGEMENT:
     - View status: sudo systemctl status eva-layout
     - View logs: sudo journalctl -u eva-layout -f
     - Restart: sudo systemctl restart eva-layout
+    - FTP status: sudo systemctl status vsftpd
 
   Application directory: /home/eva/eva_layout
+  Data directory (FTP root): /home/eva/eva_layout/data
   User: eva
 
   To update the application:
     sudo -u eva git -C /home/eva/eva_layout pull
     sudo systemctl restart eva-layout
+
+  IMPORTANT: Set password for user 'eva':
+    sudo passwd eva
