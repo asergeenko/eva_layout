@@ -21,7 +21,8 @@ packages:
   - nginx
   - ufw
   - curl
-  - vsftpd
+  - openssh-server
+  - rsync
 
 users:
   - name: eva
@@ -54,6 +55,9 @@ write_files:
           listen 80;
           server_name _;
 
+          # Увеличиваем лимит размера загружаемых файлов до 100MB
+          client_max_body_size 100M;
+
           location / {
               proxy_pass http://localhost:8501;
               proxy_http_version 1.1;
@@ -67,36 +71,15 @@ write_files:
           }
       }
 
-  - path: /etc/vsftpd.conf
+  - path: /etc/ssh/sshd_config.d/eva_sftp.conf
     content: |
-      # FTP Server Configuration
-      listen=YES
-      listen_ipv6=NO
-      anonymous_enable=NO
-      local_enable=YES
-      write_enable=YES
-      local_umask=022
-      dirmessage_enable=YES
-      use_localtime=YES
-      xferlog_enable=YES
-      connect_from_port_20=YES
-      chroot_local_user=YES
-      secure_chroot_dir=/var/run/vsftpd/empty
-      pam_service_name=vsftpd
-      ssl_enable=NO
-      pasv_enable=YES
-      pasv_min_port=40000
-      pasv_max_port=50000
-      user_sub_token=$USER
-      local_root=/home/eva/eva_layout/data
-      allow_writeable_chroot=YES
-      userlist_enable=YES
-      userlist_file=/etc/vsftpd.userlist
-      userlist_deny=NO
-
-  - path: /etc/vsftpd.userlist
-    content: |
-      eva
+      # SFTP configuration for eva user
+      # Auto-navigate to /data directory on login
+      Match User eva
+          ChrootDirectory /home/eva_sftp
+          ForceCommand internal-sftp
+          AllowTcpForwarding no
+          X11Forwarding no
 
 runcmd:
   # Setup GitHub access for private repository
@@ -114,9 +97,18 @@ runcmd:
   - sudo -u eva /home/eva/eva_layout/venv/bin/pip install -r /home/eva/eva_layout/requirements.txt
 
   # Create necessary directories
-  - sudo -u eva mkdir -p /home/eva/eva_layout/data
-  - sudo -u eva mkdir -p /home/eva/eva_layout/tmp_test
-  - sudo -u eva mkdir -p /home/eva/eva_layout/logs
+  - mkdir -p /home/eva/eva_layout/tmp_test
+  - mkdir -p /home/eva/eva_layout/logs
+
+  # Setup SFTP chroot directory structure
+  - mkdir -p /home/eva_sftp/data
+  - chown root:root /home/eva_sftp
+  - chmod 755 /home/eva_sftp
+  - chown eva:eva /home/eva_sftp/data
+  - chmod 755 /home/eva_sftp/data
+
+  # Create symlink for application
+  - ln -sf /home/eva_sftp/data /home/eva/eva_layout/data
 
   # Configure nginx
   - rm -f /etc/nginx/sites-enabled/default
@@ -128,13 +120,13 @@ runcmd:
   - ufw allow 22/tcp
   - ufw allow 80/tcp
   - ufw allow 443/tcp
-  - ufw allow 21/tcp
-  - ufw allow 40000:50000/tcp
   - ufw --force enable
 
-  # Configure and start FTP server
-  - systemctl restart vsftpd
-  - systemctl enable vsftpd
+  # Set default password for eva user (CHANGE THIS AFTER DEPLOYMENT!)
+  - echo 'eva:eva2025' | chpasswd
+
+  # Restart SSH to apply SFTP configuration
+  - systemctl restart sshd
 
   # Enable and start the application
   - systemctl daemon-reload
@@ -151,27 +143,37 @@ final_message: |
     - Application URL: http://YOUR_SERVER_IP
     - Running on port 80 via nginx reverse proxy
 
-  FTP ACCESS:
+  SFTP ACCESS (File Upload):
+    - Protocol: SFTP (SSH File Transfer Protocol)
     - Host: YOUR_SERVER_IP
-    - Port: 21
+    - Port: 22
     - Username: eva
-    - Password: (set during server setup)
-    - Directory: /data (автоматический переход)
-    - Passive ports: 40000-50000
+    - Password: eva2025 (CHANGE IMMEDIATELY: sudo passwd eva)
+    - Directory: /data (автоматический переход при подключении)
+
+  FileZilla Settings:
+    - Protocol: SFTP - SSH File Transfer Protocol
+    - Host: YOUR_SERVER_IP
+    - Port: 22
+    - Logon Type: Normal
+    - User: eva
+    - Password: eva2025
 
   SERVICE MANAGEMENT:
     - View status: sudo systemctl status eva-layout
     - View logs: sudo journalctl -u eva-layout -f
     - Restart: sudo systemctl restart eva-layout
-    - FTP status: sudo systemctl status vsftpd
 
-  Application directory: /home/eva/eva_layout
-  Data directory (FTP root): /home/eva/eva_layout/data
-  User: eva
+  DIRECTORIES:
+    - Application: /home/eva/eva_layout
+    - Data (SFTP root): /home/eva_sftp/data
+    - Symlink: /home/eva/eva_layout/data -> /home/eva_sftp/data
 
   To update the application:
     sudo -u eva git -C /home/eva/eva_layout pull
     sudo systemctl restart eva-layout
 
-  IMPORTANT: Set password for user 'eva':
-    sudo passwd eva
+  IMPORTANT SECURITY:
+    1. Change password: sudo passwd eva
+    2. Consider using SSH keys instead of password
+    3. First SFTP connection will ask to trust host key - accept it

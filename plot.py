@@ -4,6 +4,7 @@ from io import BytesIO
 from matplotlib import pyplot as plt
 from matplotlib.ticker import MultipleLocator
 from shapely import Polygon
+from shapely.geometry import MultiPolygon
 
 from carpet import Carpet, PlacedCarpet
 
@@ -145,18 +146,34 @@ def plot_layout(
         angle = placed_tuple.angle
         color = placed_tuple.color
 
-        x, y = polygon.exterior.xy
-        # Use file-based color for visualization consistency
-        display_color = get_color_for_file(file_name)
-        ax.fill(
-            x,
-            y,
-            alpha=0.7,
-            color=display_color,
-            edgecolor="black",
-            linewidth=1,
-            label=f"{file_name} ({angle:.0f}°) - {color}",
-        )
+        # Handle both Polygon and MultiPolygon
+        if isinstance(polygon, MultiPolygon):
+            # For MultiPolygon, plot each sub-polygon
+            for sub_poly in polygon.geoms:
+                x, y = sub_poly.exterior.xy
+                display_color = get_color_for_file(file_name)
+                ax.fill(
+                    x,
+                    y,
+                    alpha=0.7,
+                    color=display_color,
+                    edgecolor="black",
+                    linewidth=1,
+                    label=f"{file_name} ({angle:.0f}°) - {color}",
+                )
+        else:
+            x, y = polygon.exterior.xy
+            # Use file-based color for visualization consistency
+            display_color = get_color_for_file(file_name)
+            ax.fill(
+                x,
+                y,
+                alpha=0.7,
+                color=display_color,
+                edgecolor="black",
+                linewidth=1,
+                label=f"{file_name} ({angle:.0f}°) - {color}",
+            )
 
         # Add file name at polygon centroid
         centroid = polygon.centroid
