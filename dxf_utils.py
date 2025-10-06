@@ -152,7 +152,9 @@ def save_dxf_layout_complete(
                 original_polygon = original_data["combined_polygon"]
                 # Use original_bounds if available (before normalization to 0,0)
                 # Otherwise use polygon bounds (for backward compatibility)
-                orig_bounds = original_data.get("original_bounds", original_polygon.bounds)
+                orig_bounds = original_data.get(
+                    "original_bounds", original_polygon.bounds
+                )
                 target_bounds = transformed_polygon.bounds
 
                 # Calculate uniform scale factor to avoid distortion
@@ -777,13 +779,19 @@ def parse_dxf_complete(file: BytesIO | str, verbose: bool = True):
     # выдаем предупреждение и возвращаем None
     if result["combined_polygon"] and result["combined_polygon"].area < 10000:
         # Проверяем количество SPLINE в файле
-        spline_count = sum(1 for e in result["original_entities"] if e["type"] == "SPLINE")
+        spline_count = sum(
+            1 for e in result["original_entities"] if e["type"] == "SPLINE"
+        )
         if spline_count > 10:
             bounds = result["combined_polygon"].bounds
             size = f"{bounds[2]-bounds[0]:.0f}x{bounds[3]-bounds[1]:.0f}"
-            logger.info(f"⚠️  ПРЕДУПРЕЖДЕНИЕ: Файл содержит {spline_count} SPLINE, но получен очень маленький полигон ({size} мм, area={result['combined_polygon'].area:.0f} мм²)")
-            logger.info(f"   Возможно контур не замкнут или содержит только текст/надписи")
-            logger.info(f"   Файл будет пропущен при раскладке")
+            logger.info(
+                f"⚠️  ПРЕДУПРЕЖДЕНИЕ: Файл содержит {spline_count} SPLINE, но получен очень маленький полигон ({size} мм, area={result['combined_polygon'].area:.0f} мм²)"
+            )
+            logger.info(
+                "   Возможно контур не замкнут или содержит только текст/надписи"
+            )
+            logger.info("   Файл будет пропущен при раскладке")
             result["combined_polygon"] = None
             result["parse_warning"] = "незамкнутый контур или только текст"
 

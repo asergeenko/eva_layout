@@ -166,6 +166,13 @@ def get_dxf_files_for_product_type(
                 if target_file.exists():
                     found_files.append(target_file)
 
+        elif product_type == "без бортов":
+            # Files 1.dxf to 6.dxf
+            for i in range(1, 7):
+                target_file = base_folder / f"{i}.dxf"
+                if target_file.exists():
+                    found_files.append(target_file)
+
         elif product_type == "водитель":
             # Only 1.dxf
             target_file = base_folder / "1.dxf"

@@ -114,7 +114,16 @@ with col_clear:
         keys_to_remove = [
             key
             for key in st.session_state.keys()
-            if key.startswith(("order_", "quantity_", "select_", "qty_", "excel_upload", "manual_dxf_"))
+            if key.startswith(
+                (
+                    "order_",
+                    "quantity_",
+                    "select_",
+                    "qty_",
+                    "excel_upload",
+                    "manual_dxf_",
+                )
+            )
         ]
         for key in keys_to_remove:
             del st.session_state[key]
@@ -239,7 +248,9 @@ if "manual_files" not in st.session_state:
 st.subheader("1. Excel файл")
 # Excel file upload with clear_counter in key to reset on clear
 excel_file = st.file_uploader(
-    "Загрузите файл заказов Excel", type=["xlsx", "xls"], key=f"excel_upload_{st.session_state.clear_counter}"
+    "Загрузите файл заказов Excel",
+    type=["xlsx", "xls"],
+    key=f"excel_upload_{st.session_state.clear_counter}",
 )
 
 # Track current Excel file to detect changes
@@ -364,18 +375,28 @@ if excel_file is not None:
                     current_qty = st.session_state.get(f"quantity_{actual_idx}", 1)
 
                     color = order.get("color", "серый")
-                    color_emoji = "⚫" if color == "чёрный" else "⚪" if color == "серый" else "🔘"
+                    color_emoji = (
+                        "⚫"
+                        if color == "чёрный"
+                        else "⚪"
+                        if color == "серый"
+                        else "🔘"
+                    )
 
-                    orders_data.append({
-                        "Выбрать": is_selected,
-                        "Кол-во": current_qty,
-                        "Артикул": order["article"],
-                        "Товар": order["product"][:40] + "..." if len(order["product"]) > 40 else order["product"],
-                        "Тип": order.get("product_type", ""),
-                        "Цвет": color_emoji,
-                        "Кант": order.get("border_color", ""),
-                        "Маркетплейс": order.get("marketplace", ""),
-                    })
+                    orders_data.append(
+                        {
+                            "Выбрать": is_selected,
+                            "Кол-во": current_qty,
+                            "Артикул": order["article"],
+                            "Товар": order["product"][:40] + "..."
+                            if len(order["product"]) > 40
+                            else order["product"],
+                            "Тип": order.get("product_type", ""),
+                            "Цвет": color_emoji,
+                            "Кант": order.get("border_color", ""),
+                            "Маркетплейс": order.get("marketplace", ""),
+                        }
+                    )
 
                 df = pd.DataFrame(orders_data)
 
@@ -386,22 +407,34 @@ if excel_file is not None:
                     use_container_width=True,
                     height=400,
                     column_config={
-                        "Выбрать": st.column_config.CheckboxColumn("Выбрать", default=False),
-                        "Кол-во": st.column_config.NumberColumn("Кол-во", min_value=1, max_value=1000, default=1),
-                        "Артикул": st.column_config.TextColumn("Артикул", disabled=True),
+                        "Выбрать": st.column_config.CheckboxColumn(
+                            "Выбрать", default=False
+                        ),
+                        "Кол-во": st.column_config.NumberColumn(
+                            "Кол-во", min_value=1, max_value=1000, default=1
+                        ),
+                        "Артикул": st.column_config.TextColumn(
+                            "Артикул", disabled=True
+                        ),
                         "Товар": st.column_config.TextColumn("Товар", disabled=True),
                         "Тип": st.column_config.TextColumn("Тип", disabled=True),
                         "Цвет": st.column_config.TextColumn("Цвет", disabled=True),
                         "Кант": st.column_config.TextColumn("Кант", disabled=True),
-                        "Маркетплейс": st.column_config.TextColumn("Маркетплейс", disabled=True),
+                        "Маркетплейс": st.column_config.TextColumn(
+                            "Маркетплейс", disabled=True
+                        ),
                     },
                 )
 
                 # Update session state from edited dataframe
                 for i in range(len(edited_df)):
                     actual_idx = start_idx + i
-                    st.session_state[f"order_{actual_idx}"] = edited_df.iloc[i]["Выбрать"]
-                    st.session_state[f"quantity_{actual_idx}"] = edited_df.iloc[i]["Кол-во"]
+                    st.session_state[f"order_{actual_idx}"] = edited_df.iloc[i][
+                        "Выбрать"
+                    ]
+                    st.session_state[f"quantity_{actual_idx}"] = edited_df.iloc[i][
+                        "Кол-во"
+                    ]
 
                 # Bulk controls
                 col1, col2 = st.columns([1, 1])
@@ -492,7 +525,9 @@ if "group_counter" not in st.session_state:
 
 # File uploader for new files - each selection creates a new group
 # Use group_counter in key to reset uploader after each group creation
-uploader_key = f"manual_dxf_{st.session_state.clear_counter}_{len(st.session_state.file_groups)}"
+uploader_key = (
+    f"manual_dxf_{st.session_state.clear_counter}_{len(st.session_state.file_groups)}"
+)
 manual_files = st.file_uploader(
     "Выберите DXF файлы (будет создана новая группа). Каждая группа будет иметь свои настройки цвета и количества.",
     type=["dxf"],
@@ -504,7 +539,9 @@ if manual_files:
     # Store current files for this group configuration
     current_group_key = f"current_group_{len(st.session_state.file_groups)}"
 
-    st.write(f"**Новая группа #{st.session_state.group_counter}:** ({len(manual_files)} файлов)")
+    st.write(
+        f"**Новая группа #{st.session_state.group_counter}:** ({len(manual_files)} файлов)"
+    )
 
     # Settings for this group
     col1, col2, col3 = st.columns([1, 1, 1])
@@ -731,8 +768,8 @@ if st.button("🚀 Оптимизировать раскрой"):
         # Show single warning for all not found orders
         if not_found_orders:
             st.warning(
-                f"⚠️ Не найдены DXF файлы для следующих заказов:\n" +
-                "\n".join(f"• {order}" for order in not_found_orders)
+                "⚠️ Не найдены DXF файлы для следующих заказов:\n"
+                + "\n".join(f"• {order}" for order in not_found_orders)
             )
 
         # Load manual files if any (already configured with colors and quantities)
@@ -808,7 +845,9 @@ if st.button("🚀 Оптимизировать раскрой"):
                 original_dxf_data_map[display_name] = parsed_data
             elif parsed_data and parsed_data.get("parse_warning"):
                 # Collect warning with file path
-                parse_warnings.add(f"• `{display_name}`: {parsed_data['parse_warning']}")
+                parse_warnings.add(
+                    f"• `{display_name}`: {parsed_data['parse_warning']}"
+                )
 
         # Clear progress indicators
         progress_bar.empty()
@@ -819,7 +858,9 @@ if st.button("🚀 Оптимизировать раскрой"):
         # Show all parsing warnings in one message (deduplicate against not_found_orders)
         if parse_warnings:
             # Remove duplicates by converting to set and back to list
-            warning_message = "**⚠️ Некоторые файлы пропущены:**\n\n" + "\n".join(parse_warnings)
+            warning_message = "**⚠️ Некоторые файлы пропущены:**\n\n" + "\n".join(
+                parse_warnings
+            )
             st.warning(warning_message)
 
         if not carpets:

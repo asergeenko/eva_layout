@@ -3,14 +3,13 @@
 """
 
 from layout_optimizer import PlacedCarpet, check_collision, translate_polygon
-from shapely.geometry import Polygon
 
 
 def try_relocate_carpet(
     carpet_index: int,
     placed_carpets: list[PlacedCarpet],
     sheet_width_mm: float,
-    sheet_height_mm: float
+    sheet_height_mm: float,
 ) -> tuple[PlacedCarpet | None, float]:
     """
     Пробует переместить один ковер в лучшую позицию.
@@ -43,8 +42,12 @@ def try_relocate_carpet(
 
             # Проверяем границы
             test_bounds = test_polygon.bounds
-            if (test_bounds[0] < 0 or test_bounds[1] < 0 or
-                test_bounds[2] > sheet_width_mm or test_bounds[3] > sheet_height_mm):
+            if (
+                test_bounds[0] < 0
+                or test_bounds[1] < 0
+                or test_bounds[2] > sheet_width_mm
+                or test_bounds[3] > sheet_height_mm
+            ):
                 continue
 
             # Проверяем коллизии
@@ -59,8 +62,12 @@ def try_relocate_carpet(
 
             # Вычисляем новую максимальную высоту
             new_max_height = max(
-                max(c.polygon.bounds[3] for i, c in enumerate(placed_carpets) if i != carpet_index),
-                test_bounds[3]
+                max(
+                    c.polygon.bounds[3]
+                    for i, c in enumerate(placed_carpets)
+                    if i != carpet_index
+                ),
+                test_bounds[3],
             )
 
             # Если это улучшает максимальную высоту
@@ -86,7 +93,7 @@ def apply_relocation_optimization(
     placed_carpets: list[PlacedCarpet],
     sheet_width_mm: float,
     sheet_height_mm: float,
-    max_iterations: int = 3
+    max_iterations: int = 3,
 ) -> list[PlacedCarpet]:
     """
     Пробует переставлять ковры для улучшения упаковки.
@@ -103,7 +110,7 @@ def apply_relocation_optimization(
         carpet_indices = sorted(
             range(len(optimized)),
             key=lambda i: optimized[i].polygon.bounds[3],
-            reverse=True
+            reverse=True,
         )
 
         # Пробуем переставить первые 3 ковра

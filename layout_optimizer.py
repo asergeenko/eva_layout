@@ -15,7 +15,6 @@ from fast_geometry import (
     SpatialIndexCache,
     check_collision_fast_indexed_intersects_only,
     batch_check_collisions_cached_fast,
-    filter_positions_by_bounds,
 )
 
 # Настройка логирования
@@ -990,7 +989,9 @@ def check_collision_fast(
         return True
 
 
-def check_collision(polygon1: Polygon, polygon2: Polygon, min_gap: float = 10.0) -> bool:
+def check_collision(
+    polygon1: Polygon, polygon2: Polygon, min_gap: float = 10.0
+) -> bool:
     """Check if two polygons collide using TRUE GEOMETRIC distance with speed optimization.
 
     min_gap=10.0mm чтобы компенсировать погрешность при экспорте SPLINE entities в DXF.
@@ -1149,7 +1150,9 @@ def bin_packing_with_existing(
                 bottom_y = test_bounds[1]
 
                 # УСИЛЕННЫЙ ШТРАФ: даже небольшая высота от дна должна штрафоваться
-                if bottom_y > 50:  # Снижен порог с 100 до 50 для более строгой компактности
+                if (
+                    bottom_y > 50
+                ):  # Снижен порог с 100 до 50 для более строгой компактности
                     # Проверяем площадь опоры снизу
                     support_area = 0
                     for other in placed:
@@ -1167,7 +1170,9 @@ def bin_packing_with_existing(
                     # УСИЛЕННЫЕ требования: нужно минимум 40% опоры (было 30%)
                     if support_ratio < 0.4:
                         # ОГРОМНЫЙ штраф за висящие ковры - они блокируют пространство!
-                        hanging_penalty = int((0.4 - support_ratio) * 150000)  # Утроен с 50000
+                        hanging_penalty = int(
+                            (0.4 - support_ratio) * 150000
+                        )  # Утроен с 50000
                         shape_bonus += hanging_penalty
 
                     # Дополнительный штраф за саму высоту - чем выше, тем хуже
@@ -1422,7 +1427,10 @@ def simple_compaction(
                 for j in range(n):
                     if j != i:
                         # Check both intersection and minimum gap
-                        if test.intersects(current_polys[j]) or test.distance(current_polys[j]) < min_gap:
+                        if (
+                            test.intersects(current_polys[j])
+                            or test.distance(current_polys[j]) < min_gap
+                        ):
                             collision = True
                             break
 
@@ -1466,7 +1474,10 @@ def simple_compaction(
                 for j in range(n):
                     if j != i:
                         # Check both intersection and minimum gap
-                        if test.intersects(current_polys[j]) or test.distance(current_polys[j]) < min_gap:
+                        if (
+                            test.intersects(current_polys[j])
+                            or test.distance(current_polys[j]) < min_gap
+                        ):
                             collision = True
                             break
 
@@ -1719,7 +1730,9 @@ def bin_packing(
 
             # Пробуем сначала самый популярный угол, потом все остальные
             # Это даёт плотную упаковку: одинаковые ковры под одним углом стыкуются лучше
-            rotation_angles = [most_common_angle] + [a for a in [0, 90, 180, 270] if a != most_common_angle]
+            rotation_angles = [most_common_angle] + [
+                a for a in [0, 90, 180, 270] if a != most_common_angle
+            ]
 
         for angle in rotation_angles:
             rotated = get_cached_rotation(carpet, angle)
@@ -1832,7 +1845,9 @@ def bin_packing(
                 bottom_y = test_bounds[1]
 
                 # УСИЛЕННЫЙ ШТРАФ: даже небольшая высота от дна должна штрафоваться
-                if bottom_y > 50:  # Снижен порог с 100 до 50 для более строгой компактности
+                if (
+                    bottom_y > 50
+                ):  # Снижен порог с 100 до 50 для более строгой компактности
                     # Проверяем площадь опоры снизу
                     support_area = 0
                     for other in placed:
@@ -1850,7 +1865,9 @@ def bin_packing(
                     # УСИЛЕННЫЕ требования: нужно минимум 40% опоры (было 30%)
                     if support_ratio < 0.4:
                         # ОГРОМНЫЙ штраф за висящие ковры - они блокируют пространство!
-                        hanging_penalty = int((0.4 - support_ratio) * 150000)  # Утроен с 50000
+                        hanging_penalty = int(
+                            (0.4 - support_ratio) * 150000
+                        )  # Утроен с 50000
                         shape_bonus += hanging_penalty
 
                     # Дополнительный штраф за саму высоту - чем выше, тем хуже
@@ -1874,8 +1891,11 @@ def bin_packing(
 
                     # Сдвигаем обе формы в (0,0)
                     from shapely.affinity import translate as shapely_translate
+
                     norm_0 = shapely_translate(rot_0, -bounds_0[0], -bounds_0[1])
-                    norm_180 = shapely_translate(rot_180, -bounds_180[0], -bounds_180[1])
+                    norm_180 = shapely_translate(
+                        rot_180, -bounds_180[0], -bounds_180[1]
+                    )
 
                     # Сравниваем центроиды после нормализации
                     cent_0 = norm_0.centroid
@@ -1890,8 +1910,7 @@ def bin_packing(
                     cent_diff_y = abs(cent_0.y - cent_180.y)
 
                     is_asymmetric = (
-                        cent_diff_x > max_dim * 0.05 or
-                        cent_diff_y > max_dim * 0.05
+                        cent_diff_x > max_dim * 0.05 or cent_diff_y > max_dim * 0.05
                     )
 
                     if is_asymmetric:
@@ -1899,9 +1918,13 @@ def bin_packing(
                         # Если последний ковер был 270°, текущий должен быть 90° (и наоборот)
                         last_angle = angles_used[-1]
 
-                        if (last_angle == 270 and angle == 90) or (last_angle == 90 and angle == 270):
+                        if (last_angle == 270 and angle == 90) or (
+                            last_angle == 90 and angle == 270
+                        ):
                             orientation_bonus = -200000  # ОГРОМНЫЙ бонус за чередование
-                        elif (last_angle == 0 and angle == 180) or (last_angle == 180 and angle == 0):
+                        elif (last_angle == 0 and angle == 180) or (
+                            last_angle == 180 and angle == 0
+                        ):
                             orientation_bonus = -200000
                         elif angle == last_angle:
                             # Одинаковый угол для асимметричных - ОГРОМНЫЙ штраф
@@ -1952,7 +1975,6 @@ def bin_packing(
                     order_id=carpet.order_id,
                 )
             )
-
 
             # POST-PLACEMENT OPTIMIZATION - DISABLED
             # Эта оптимизация переразмещает ковры и ломает правильную раскладку
@@ -2114,7 +2136,7 @@ def bin_packing(
         )
 
     # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
-    #placed = simple_compaction(placed, sheet_size, min_gap=1.0)
+    # placed = simple_compaction(placed, sheet_size, min_gap=1.0)
 
     # # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
     if len(placed) <= 20:  # Optimize most reasonable sets
@@ -2133,7 +2155,7 @@ def bin_packing(
     #     # Light tightening to clean up - ТЕСТИРУЕМ
     #     placed = tighten_layout(placed, sheet_size, min_gap=0.5, step=2.0, max_passes=1)
     elif (
-            len(placed) <= 35
+        len(placed) <= 35
     ):  # COMPACTION DISABLED - breaks optimal layout from find_bottom_left_position
         # placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.7)
         # placed = simple_compaction(placed, sheet_size)
@@ -2904,7 +2926,9 @@ def calculate_tetris_quality_bonus(
     if right_edge < sheet_width - 50:  # Есть пространство справа (>50мм)
         # Проверяем точки справа на доступность сверху
         test_points_right = []
-        for x in np.linspace(right_edge + 10, min(right_edge + 200, sheet_width - 10), 5):
+        for x in np.linspace(
+            right_edge + 10, min(right_edge + 200, sheet_width - 10), 5
+        ):
             for y in np.linspace(bounds[1], bounds[3], 3):
                 test_points_right.append((x, y))
 
@@ -2923,7 +2947,9 @@ def calculate_tetris_quality_bonus(
                 if blocked:
                     blocked_from_top += 1
 
-            pocket_ratio = blocked_from_top / len(test_points_right) if test_points_right else 0
+            pocket_ratio = (
+                blocked_from_top / len(test_points_right) if test_points_right else 0
+            )
             pocket_penalty = pocket_ratio  # 0..1, чем больше тем хуже
 
     # Weighted combination - увеличен вес штрафа за карманы
@@ -3446,7 +3472,6 @@ def find_bottom_left_position(
     step = max(10.0, min(poly_width, poly_height) / 3)  # Large adaptive step for speed
 
     best_y = None
-    best_positions = []
 
     # КРИТИЧНО: Генерируем X позиции для МАКСИМАЛЬНОЙ компактности
     # Проверяем: 0 (левый край), справа от каждого ковра, правый край
@@ -3493,7 +3518,9 @@ def find_bottom_left_position(
             test_y_positions.append(other_bounds[3] + 2.0)  # Above with 2mm gap
             # Добавляем также позиции справа от ковров для лучшей компактности
             test_y_positions.append(other_bounds[1])  # На той же высоте что низ
-            test_y_positions.append(other_bounds[1] + (other_bounds[3] - other_bounds[1]) / 2)  # Посередине
+            test_y_positions.append(
+                other_bounds[1] + (other_bounds[3] - other_bounds[1]) / 2
+            )  # Посередине
 
         # Collect valid positions
         for test_y in sorted(set(test_y_positions)):
@@ -3533,8 +3560,12 @@ def find_bottom_left_position(
                     bounds[2] + x_offset,
                     bounds[3] + y_offset,
                 )
-                if (test_bounds[0] >= 0 and test_bounds[1] >= 0 and
-                    test_bounds[2] <= sheet_width and test_bounds[3] <= sheet_height):
+                if (
+                    test_bounds[0] >= 0
+                    and test_bounds[1] >= 0
+                    and test_bounds[2] <= sheet_width
+                    and test_bounds[3] <= sheet_height
+                ):
                     all_candidates.append((x, y, x_offset, y_offset))
 
                 if len(all_candidates) >= 50:  # Limit fallback candidates
@@ -3594,18 +3625,22 @@ def find_bottom_left_position(
 
             # 4. КРИТИЧЕСКИЙ БОНУС: близость к уже размещенным коврам
             # Ковер должен быть как можно ближе к соседям для плотности
-            min_distance_to_neighbors = float('inf')
+            min_distance_to_neighbors = float("inf")
             for placed in placed_polygons:
                 placed_bounds = placed.polygon.bounds
 
                 # Расстояние между boundary boxes
-                dx = max(0, max(bounds[0] - placed_bounds[2], placed_bounds[0] - bounds[2]))
-                dy = max(0, max(bounds[1] - placed_bounds[3], placed_bounds[1] - bounds[3]))
-                dist = (dx*dx + dy*dy) ** 0.5
+                dx = max(
+                    0, max(bounds[0] - placed_bounds[2], placed_bounds[0] - bounds[2])
+                )
+                dy = max(
+                    0, max(bounds[1] - placed_bounds[3], placed_bounds[1] - bounds[3])
+                )
+                dist = (dx * dx + dy * dy) ** 0.5
                 min_distance_to_neighbors = min(min_distance_to_neighbors, dist)
 
             # Штраф за удаленность от соседей
-            if min_distance_to_neighbors < float('inf'):
+            if min_distance_to_neighbors < float("inf"):
                 score += int(min_distance_to_neighbors * 200)
 
             # 5. ШТРАФ ЗА БЛОКИРОВАНИЕ ПРОСТРАНСТВА
@@ -3622,7 +3657,9 @@ def find_bottom_left_position(
                             intersection = support_test.intersection(placed.polygon)
                             support_area += intersection.area
 
-                support_ratio = support_area / test_poly.area if test_poly.area > 0 else 0
+                support_ratio = (
+                    support_area / test_poly.area if test_poly.area > 0 else 0
+                )
                 if support_ratio < 0.4:
                     # Висячая позиция - ОГРОМНЫЙ штраф
                     score += int((0.4 - support_ratio) * 100000)
@@ -3702,8 +3739,12 @@ def try_simple_placement(
 
             # Check if it fits in sheet
             pos_bounds = positioned_polygon.bounds
-            if (pos_bounds[0] < 0 or pos_bounds[1] < 0 or
-                pos_bounds[2] > sheet_width_mm or pos_bounds[3] > sheet_height_mm):
+            if (
+                pos_bounds[0] < 0
+                or pos_bounds[1] < 0
+                or pos_bounds[2] > sheet_width_mm
+                or pos_bounds[3] > sheet_height_mm
+            ):
                 continue
 
             # Check for collisions with existing polygons
