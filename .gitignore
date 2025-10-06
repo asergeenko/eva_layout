@@ -163,7 +163,6 @@ Desktop.ini
 
 # Project specific
 output_layouts/
-.streamlit/
 
 .claude/
 tmp_test/

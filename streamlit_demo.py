@@ -500,12 +500,11 @@ manual_files = st.file_uploader(
     key=uploader_key,
 )
 
-# Process newly uploaded files - show settings and create group when ready
 if manual_files:
     # Store current files for this group configuration
     current_group_key = f"current_group_{len(st.session_state.file_groups)}"
 
-    st.write(f"**Новая группа #{st.session_state.group_counter}:**")
+    st.write(f"**Новая группа #{st.session_state.group_counter}:** ({len(manual_files)} файлов)")
 
     # Settings for this group
     col1, col2, col3 = st.columns([1, 1, 1])

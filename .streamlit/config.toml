@@ -1,0 +1,17 @@
+[server]
+# Maximum size in MB for uploaded files
+maxUploadSize = 500
+
+# Enable CORS for better file handling
+enableCORS = false
+
+# Enable XSRF protection
+enableXsrfProtection = true
+
+[browser]
+# Gather usage stats
+gatherUsageStats = false
+
+[theme]
+# Use default theme
+base = "light"
