@@ -122,6 +122,8 @@ with col_clear:
                     "qty_",
                     "excel_upload",
                     "manual_dxf_",
+                    "orders_table_data_",
+                    "orders_editor_",
                 )
             )
         ]
@@ -273,7 +275,16 @@ if excel_file is not None:
                 keys_to_remove = [
                     key
                     for key in st.session_state.keys()
-                    if key.startswith(("order_", "quantity_", "select_", "qty_"))
+                    if key.startswith(
+                        (
+                            "order_",
+                            "quantity_",
+                            "select_",
+                            "qty_",
+                            "orders_table_data_",
+                            "orders_editor_",
+                        )
+                    )
                 ]
                 for key in keys_to_remove:
                     del st.session_state[key]
@@ -370,10 +381,6 @@ if excel_file is not None:
                 # Prepare data for DataFrame
                 orders_data = []
                 for i, order in enumerate(orders_to_show):
-                    actual_idx = start_idx + i
-                    is_selected = st.session_state.get(f"order_{actual_idx}", False)
-                    current_qty = st.session_state.get(f"quantity_{actual_idx}", 1)
-
                     color = order.get("color", "серый")
                     color_emoji = (
                         "⚫"
@@ -385,8 +392,8 @@ if excel_file is not None:
 
                     orders_data.append(
                         {
-                            "Выбрать": is_selected,
-                            "Кол-во": current_qty,
+                            "Выбрать": False,
+                            "Кол-во": 1,
                             "Артикул": order["article"],
                             "Товар": order["product"][:40] + "..."
                             if len(order["product"]) > 40
@@ -400,12 +407,14 @@ if excel_file is not None:
 
                 df = pd.DataFrame(orders_data)
 
-                # Use data_editor for fast rendering
+                # Use data_editor with unique key - Streamlit manages state automatically
+                filter_key = f"{selected_marketplace}_{selected_border_color}_{len(orders_to_show)}"
                 edited_df = st.data_editor(
                     df,
                     hide_index=True,
                     use_container_width=True,
                     height=400,
+                    key=f"orders_editor_{filter_key}",
                     column_config={
                         "Выбрать": st.column_config.CheckboxColumn(
                             "Выбрать", default=False
@@ -426,48 +435,43 @@ if excel_file is not None:
                     },
                 )
 
-                # Update session state from edited dataframe
-                for i in range(len(edited_df)):
-                    actual_idx = start_idx + i
-                    st.session_state[f"order_{actual_idx}"] = edited_df.iloc[i][
-                        "Выбрать"
-                    ]
-                    st.session_state[f"quantity_{actual_idx}"] = edited_df.iloc[i][
-                        "Кол-во"
-                    ]
-
                 # Bulk controls
                 col1, col2 = st.columns([1, 1])
                 with col1:
                     if st.button("✅ Выбрать все", key="select_all_orders"):
-                        for i in range(len(display_orders)):
-                            st.session_state[f"order_{i}"] = True
+                        # Update the data_editor state
+                        editor_key = f"orders_editor_{filter_key}"
+                        if editor_key in st.session_state:
+                            st.session_state[editor_key]["Выбрать"] = True
                         st.rerun()
 
                 with col2:
                     if st.button("❌ Снять выбор", key="deselect_all_orders"):
-                        for i in range(len(display_orders)):
-                            st.session_state[f"order_{i}"] = False
+                        # Update the data_editor state
+                        editor_key = f"orders_editor_{filter_key}"
+                        if editor_key in st.session_state:
+                            st.session_state[editor_key]["Выбрать"] = False
                         st.rerun()
 
-            # Collect all selected orders, multiplying by quantity
-            # ОПТИМИЗАЦИЯ: Используем list comprehension для скорости
-            all_selected_orders = [
-                {
-                    **order,
-                    "repeat_index": repeat_num + 1,
-                    "original_index": i,
-                    "order_id": (
-                        f"{order['order_id']}_повтор_{repeat_num + 1}"
-                        if quantity > 1
-                        else order["order_id"]
-                    ),
-                }
-                for i, order in enumerate(display_orders)
-                if st.session_state.get(f"order_{i}", False)
-                for quantity in [st.session_state.get(f"quantity_{i}", 1)]
-                for repeat_num in range(quantity)
-            ]
+                # Collect all selected orders, multiplying by quantity
+                all_selected_orders = [
+                    {
+                        **order,
+                        "repeat_index": repeat_num + 1,
+                        "original_index": i,
+                        "order_id": (
+                            f"{order['order_id']}_повтор_{repeat_num + 1}"
+                            if quantity > 1
+                            else order["order_id"]
+                        ),
+                    }
+                    for i, order in enumerate(display_orders)
+                    if edited_df.iloc[i]["Выбрать"]
+                    for quantity in [int(edited_df.iloc[i]["Кол-во"])]
+                    for repeat_num in range(quantity)
+                ]
+            else:
+                all_selected_orders = []
 
             if all_selected_orders:
                 # Count unique orders
