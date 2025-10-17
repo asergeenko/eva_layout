@@ -251,6 +251,20 @@ def get_dxf_files_for_product_type(
                 if target_file.exists():
                     found_files.append(target_file)
 
+        elif product_type == "минивен":
+            # Files 1.dxf to 20.dxf
+            for i in range(1, 21):
+                target_file = base_folder / f"{i}.dxf"
+                if target_file.exists():
+                    found_files.append(target_file)
+
+        elif product_type == "набор ковров":
+            # Files 1.dxf to 5.dxf
+            for i in range(1, 6):
+                target_file = base_folder / f"{i}.dxf"
+                if target_file.exists():
+                    found_files.append(target_file)
+
         elif product_type in ["самокат", "лодка", "ковер"]:
             # All available files in the folder
             found_files = all_dxf_files
