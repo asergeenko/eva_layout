@@ -465,7 +465,7 @@ def filter_candidates_by_bounds(positions, poly_bounds, sheet_width, sheet_heigh
     return valid
 
 
-def batch_check_collisions_cached_fast(polygons, spatial_cache):
+def batch_check_collisions_cached_fast(polygons, spatial_cache, min_gap=10.0):
     """ULTRA-FAST batch collision check using vectorized STRtree queries.
 
     Uses STRtree.query (bulk mode) for massive speedup.
@@ -473,6 +473,7 @@ def batch_check_collisions_cached_fast(polygons, spatial_cache):
     Args:
         polygons: List of Shapely Polygons to test
         spatial_cache: SpatialIndexCache instance
+        min_gap: Minimum gap between polygons in mm (default 10.0mm)
 
     Returns:
         numpy array of booleans (True = collision detected)
@@ -506,9 +507,14 @@ def batch_check_collisions_cached_fast(polygons, spatial_cache):
             possible_indices = list(spatial_cache.query(poly))
 
             if possible_indices:
-                # Check for actual intersections
+                # ИСПРАВЛЕНО: Проверяем как intersections, так и min_gap
                 for idx in possible_indices:
-                    if poly.intersects(spatial_cache.polygons[idx]):
+                    other = spatial_cache.polygons[idx]
+                    if poly.intersects(other):
+                        results[actual_idx] = True
+                        break
+                    # КРИТИЧНО: Проверяем min_gap расстояние
+                    if poly.distance(other) < min_gap:
                         results[actual_idx] = True
                         break
 

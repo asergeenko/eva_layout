@@ -379,6 +379,20 @@ if excel_file is not None:
                 import pandas as pd
 
                 # Prepare data for DataFrame
+                filter_key = f"{selected_marketplace}_{selected_border_color}_{len(orders_to_show)}"
+
+                # Check for bulk action flags
+                select_all_key = f"select_all_{filter_key}"
+                deselect_all_key = f"deselect_all_{filter_key}"
+
+                default_selected = False
+                if select_all_key in st.session_state:
+                    default_selected = True
+                    del st.session_state[select_all_key]  # Clear flag after use
+                elif deselect_all_key in st.session_state:
+                    default_selected = False
+                    del st.session_state[deselect_all_key]  # Clear flag after use
+
                 orders_data = []
                 for i, order in enumerate(orders_to_show):
                     color = order.get("color", "серый")
@@ -392,7 +406,7 @@ if excel_file is not None:
 
                     orders_data.append(
                         {
-                            "Выбрать": False,
+                            "Выбрать": default_selected,
                             "Кол-во": 1,
                             "Артикул": order["article"],
                             "Товар": order["product"][:40] + "..."
@@ -408,7 +422,6 @@ if excel_file is not None:
                 df = pd.DataFrame(orders_data)
 
                 # Use data_editor with unique key - Streamlit manages state automatically
-                filter_key = f"{selected_marketplace}_{selected_border_color}_{len(orders_to_show)}"
                 edited_df = st.data_editor(
                     df,
                     hide_index=True,
@@ -439,18 +452,24 @@ if excel_file is not None:
                 col1, col2 = st.columns([1, 1])
                 with col1:
                     if st.button("✅ Выбрать все", key="select_all_orders"):
-                        # Update the data_editor state
+                        # Set flag to select all on next render
+                        select_all_key = f"select_all_{filter_key}"
+                        st.session_state[select_all_key] = True
+                        # Clear editor state to force recreation
                         editor_key = f"orders_editor_{filter_key}"
                         if editor_key in st.session_state:
-                            st.session_state[editor_key]["Выбрать"] = True
+                            del st.session_state[editor_key]
                         st.rerun()
 
                 with col2:
                     if st.button("❌ Снять выбор", key="deselect_all_orders"):
-                        # Update the data_editor state
+                        # Set flag to deselect all on next render
+                        deselect_all_key = f"deselect_all_{filter_key}"
+                        st.session_state[deselect_all_key] = True
+                        # Clear editor state to force recreation
                         editor_key = f"orders_editor_{filter_key}"
                         if editor_key in st.session_state:
-                            st.session_state[editor_key]["Выбрать"] = False
+                            del st.session_state[editor_key]
                         st.rerun()
 
                 # Collect all selected orders, multiplying by quantity
