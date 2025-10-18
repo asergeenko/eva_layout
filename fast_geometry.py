@@ -391,7 +391,7 @@ def check_collision_fast_indexed(polygon, spatial_cache, min_gap=0.1):
     return False
 
 
-def check_collision_fast_indexed_intersects_only(polygon, spatial_cache, min_gap=10.0):
+def check_collision_fast_indexed_intersects_only(polygon, spatial_cache, min_gap=3.0):
     """Fast collision check with min_gap for DXF export accuracy.
 
     Args:
@@ -465,7 +465,7 @@ def filter_candidates_by_bounds(positions, poly_bounds, sheet_width, sheet_heigh
     return valid
 
 
-def batch_check_collisions_cached_fast(polygons, spatial_cache, min_gap=10.0):
+def batch_check_collisions_cached_fast(polygons, spatial_cache, min_gap=3.0):
     """ULTRA-FAST batch collision check using vectorized STRtree queries.
 
     Uses STRtree.query (bulk mode) for massive speedup.
@@ -473,7 +473,7 @@ def batch_check_collisions_cached_fast(polygons, spatial_cache, min_gap=10.0):
     Args:
         polygons: List of Shapely Polygons to test
         spatial_cache: SpatialIndexCache instance
-        min_gap: Minimum gap between polygons in mm (default 10.0mm)
+        min_gap: Minimum gap between polygons in mm (default 3.0mm)
 
     Returns:
         numpy array of booleans (True = collision detected)

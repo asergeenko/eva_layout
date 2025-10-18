@@ -425,7 +425,7 @@ def apply_aggressive_gravity(
 
                 has_collision = False
                 for obstacle in obstacles:
-                    if check_collision(test_polygon, obstacle, min_gap=10.0):
+                    if check_collision(test_polygon, obstacle, min_gap=3.0):
                         has_collision = True
                         break
 
@@ -453,7 +453,7 @@ def apply_aggressive_gravity(
 
                     has_collision = False
                     for obstacle in obstacles:
-                        if check_collision(test_polygon, obstacle, min_gap=10.0):
+                        if check_collision(test_polygon, obstacle, min_gap=3.0):
                             has_collision = True
                             break
 
@@ -571,7 +571,7 @@ def apply_aggressive_horizontal_compaction(
 
                 has_collision = False
                 for obstacle in obstacles:
-                    if check_collision(test_polygon, obstacle, min_gap=10.0):
+                    if check_collision(test_polygon, obstacle, min_gap=3.0):
                         has_collision = True
                         break
 
@@ -598,7 +598,7 @@ def apply_aggressive_horizontal_compaction(
 
                     has_collision = False
                     for obstacle in obstacles:
-                        if check_collision(test_polygon, obstacle, min_gap=10.0):
+                        if check_collision(test_polygon, obstacle, min_gap=3.0):
                             has_collision = True
                             break
 
@@ -780,7 +780,7 @@ def apply_tetris_right_compaction(
             # Проверяем коллизии
             collision = False
             for obstacle in obstacles:
-                if check_collision(test_polygon, obstacle, min_gap=10.0):
+                if check_collision(test_polygon, obstacle, min_gap=3.0):
                     collision = True
                     break
 
@@ -888,7 +888,7 @@ def apply_tetris_left_compaction(
             # Проверяем коллизии
             collision = False
             for obstacle in obstacles:
-                if check_collision(test_polygon, obstacle, min_gap=10.0):
+                if check_collision(test_polygon, obstacle, min_gap=3.0):
                     collision = True
                     break
 
@@ -1501,7 +1501,7 @@ def check_collision(
 ) -> bool:
     """Check if two polygons collide using TRUE GEOMETRIC distance with speed optimization.
 
-    min_gap=10.0mm чтобы компенсировать погрешность при экспорте SPLINE entities в DXF.
+    min_gap=3.0mm чтобы компенсировать погрешность при экспорте SPLINE entities в DXF.
     """
     return check_collision_fast(polygon1, polygon2, min_gap)
 
@@ -1754,7 +1754,7 @@ def bin_packing_with_existing(
                             if check_collision(
                                 improved_placed[i].polygon,
                                 improved_placed[j].polygon,
-                                min_gap=10.0,  # Строгий 2мм зазор
+                                min_gap=3.0,  # Строгий 2мм зазор
                             ):
                                 safe = False
                                 break
@@ -2540,7 +2540,7 @@ def bin_packing(
                             if check_collision(
                                 final_optimized[i].polygon,
                                 final_optimized[j].polygon,
-                                min_gap=10.0,  # Строгий 2мм зазор
+                                min_gap=3.0,  # Строгий 2мм зазор
                             ):
                                 collision_found = True
                                 break
@@ -2680,7 +2680,7 @@ def bin_packing(
     #     placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.5)
     #
     #     # Light tightening to clean up - ТЕСТИРУЕМ
-    #     placed = tighten_layout(placed, sheet_size, min_gap=10.0, step=2.0, max_passes=1)
+    #     placed = tighten_layout(placed, sheet_size, min_gap=3.0, step=2.0, max_passes=1)
     elif (
         len(placed) <= 35
     ):  # COMPACTION DISABLED - breaks optimal layout from find_bottom_left_position
@@ -2705,14 +2705,23 @@ def bin_packing(
                 if check_collision(
                     placed[i].polygon,
                     placed[j].polygon,
-                    min_gap=10.0,
+                    min_gap=3.0,
                 ):
                     collision_found = True
+                    distance = placed[i].polygon.distance(placed[j].polygon)
                     logger.error(
                         f"❌ КРИТИЧЕСКАЯ ОШИБКА: Обнаружено пересечение между коврами {i} и {j}"
                     )
-                    logger.error(f"   Ковёр {i}: {placed[i].filename}")
-                    logger.error(f"   Ковёр {j}: {placed[j].filename}")
+                    logger.error(
+                        f"   Ковёр {i}: {placed[i].filename}, bounds={placed[i].polygon.bounds}"
+                    )
+                    logger.error(
+                        f"   Ковёр {j}: {placed[j].filename}, bounds={placed[j].polygon.bounds}"
+                    )
+                    logger.error(f"   Расстояние: {distance:.2f}mm (требуется ≥3.0mm)")
+                    logger.error(
+                        f"   Intersects: {placed[i].polygon.intersects(placed[j].polygon)}"
+                    )
                     break
             if collision_found:
                 break
@@ -2736,7 +2745,7 @@ def bin_packing(
     #                 if check_collision(
     #                     compacted_placed[i].polygon,
     #                     compacted_placed[j].polygon,
-    #                     min_gap=10.0,
+    #                     min_gap=3.0,
     #                 ):
     #                     collision_found = True
     #                     logger.warning(f"⚠️ Обнаружена коллизия после компрессии между {i} и {j}")
@@ -3643,7 +3652,7 @@ def find_super_dense_position(
 
     # BATCH: Check all collisions at once using fast batch check
     collisions = batch_check_collisions_cached_fast(
-        test_polygons, _global_spatial_cache, min_gap=10.0
+        test_polygons, _global_spatial_cache, min_gap=3.0
     )
 
     # Find first non-colliding position (already sorted by Y, then X)
@@ -3870,7 +3879,7 @@ def find_ultra_tight_position(
 
     # BATCH: Check all collisions at once using fast batch check
     collisions = batch_check_collisions_cached_fast(
-        test_polygons, _global_spatial_cache, min_gap=10.0
+        test_polygons, _global_spatial_cache, min_gap=3.0
     )
 
     # Find first non-colliding position (already sorted by Y, then X)
@@ -3985,7 +3994,7 @@ def find_bottom_left_position_with_obstacles(
 
     # BATCH: Check all collisions at once using fast batch check
     collisions = batch_check_collisions_cached_fast(
-        test_polygons, _global_spatial_cache, min_gap=10.0
+        test_polygons, _global_spatial_cache, min_gap=3.0
     )
 
     # Find first non-colliding position (already sorted by Y, then X for bottom-left)
@@ -4034,7 +4043,7 @@ def find_quick_position(
             # Quick collision check with tight tolerance for maximum density
             collision = False
             for placed_poly in placed_polygons:
-                if check_collision(test_polygon, placed_poly.polygon, min_gap=10.0):
+                if check_collision(test_polygon, placed_poly.polygon, min_gap=3.0):
                     collision = True
                     break
 
@@ -4083,7 +4092,7 @@ def find_bottom_left_position(
         right_edge = placed_poly.polygon.bounds[2]
         if right_edge + poly_width <= sheet_width:
             x_positions.append(
-                int(right_edge) + 10
+                int(right_edge) + 3
             )  # ИСПРАВЛЕНО: 10mm gap для совместимости с check_collision
 
     # 3. Правый край листа (прижать к правому краю!)
@@ -4116,7 +4125,7 @@ def find_bottom_left_position(
         for placed_poly in placed_polygons:  # Проверяем все полигоны
             other_bounds = placed_poly.polygon.bounds
             y_above = (
-                other_bounds[3] + 10.0
+                other_bounds[3] + 3.0
             )  # ИСПРАВЛЕНО: 10mm gap для совместимости с check_collision
             test_y_positions.append(y_above)
             logger.debug(
@@ -4190,7 +4199,7 @@ def find_bottom_left_position(
 
     # BATCH: Check all collisions at once using fast batch check
     collisions = batch_check_collisions_cached_fast(
-        test_polygons, _global_spatial_cache, min_gap=10.0
+        test_polygons, _global_spatial_cache, min_gap=3.0
     )
 
     # КРИТИЧЕСКОЕ УЛУЧШЕНИЕ: Вместо выбора первой позиции с минимальным Y,
