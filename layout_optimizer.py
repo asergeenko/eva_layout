@@ -93,6 +93,153 @@ def get_cached_rotation(
     return _rotation_cache[carpet_id][angle]
 
 
+def calculate_optimal_rotation_angles(
+    polygon: Polygon, angle_step: int = 5
+) -> list[float]:
+    """
+    🎯 ОПТИМАЛЬНЫЕ УГЛЫ ПОВОРОТА: Вычисляет углы, которые максимизируют плотность упаковки.
+
+    Стратегия:
+    1. Находит минимальный ограничивающий прямоугольник (minimum bounding rectangle)
+    2. Определяет угол наклона этого прямоугольника
+    3. Возвращает ПРИОРИТЕТНЫЕ углы: стандартные + оптимальные для формы
+
+    Args:
+        polygon: Shapely Polygon для анализа
+        angle_step: Шаг углов для тестирования (по умолчанию 5°)
+
+    Returns:
+        Список оптимальных углов поворота, отсортированных по приоритету
+    """
+    from shapely import minimum_rotated_rectangle
+    import math
+
+    # Получаем минимальный ограничивающий прямоугольник
+    min_rect = minimum_rotated_rectangle(polygon)
+
+    # Извлекаем координаты углов прямоугольника
+    coords = list(min_rect.exterior.coords)
+
+    # Вычисляем угол наклона первой стороны прямоугольника
+    dx = coords[1][0] - coords[0][0]
+    dy = coords[1][1] - coords[0][1]
+    angle_rad = math.atan2(dy, dx)
+    angle_deg = math.degrees(angle_rad)
+
+    # Нормализуем угол к диапазону [0, 90) так как прямоугольник симметричен
+    angle_deg = angle_deg % 90
+
+    # ПРИОРИТЕТНАЯ СТРАТЕГИЯ: Ограничиваем количество углов для скорости
+    angles = []
+
+    # 1. ВЫСОКИЙ ПРИОРИТЕТ: Стандартные углы (0°, 90°, 180°, 270°)
+    standard_angles = [0, 90, 180, 270]
+    angles.extend(standard_angles)
+
+    # 2. ВЫСОКИЙ ПРИОРИТЕТ: Оптимальные углы на основе формы ковра
+    optimal_angle_1 = -angle_deg  # Поворот для выравнивания по горизонтали
+    optimal_angle_2 = 90 - angle_deg  # Поворот для выравнивания по вертикали
+
+    # Проверяем, насколько оптимальные углы отличаются от стандартных
+    # Если отличие меньше 3°, не добавляем (избыточно)
+    for opt_angle in [optimal_angle_1, optimal_angle_2]:
+        norm_angle = opt_angle % 360
+        # Проверяем, не слишком ли близко к уже добавленным углам
+        is_unique = all(
+            abs(norm_angle - existing) > 3 and abs(norm_angle - existing - 360) > 3
+            for existing in angles
+        )
+        if (
+            is_unique and abs(angle_deg) > 3
+        ):  # Только если форма действительно наклонена
+            angles.append(norm_angle)
+            # Добавляем эти углы со всех 4 сторон
+            for base_rotation in [0, 90, 180, 270]:
+                rotated = (norm_angle + base_rotation) % 360
+                if all(abs(rotated - existing) > 3 for existing in angles):
+                    angles.append(rotated)
+
+    # 3. СРЕДНИЙ ПРИОРИТЕТ: Небольшие вариации оптимальных углов
+    # Только если форма значительно наклонена (> 10°)
+    if abs(angle_deg) > 10:
+        for base in [optimal_angle_1, optimal_angle_2]:
+            for delta in [-angle_step, angle_step]:
+                varied_angle = (base + delta) % 360
+                if all(abs(varied_angle - existing) > 3 for existing in angles):
+                    angles.append(varied_angle)
+
+    # 4. НИЗКИЙ ПРИОРИТЕТ: Промежуточные углы (только для очень нестандартных форм)
+    # Добавляем только если форма ОЧЕНЬ наклонена (> 20°) и отличается от стандартной
+    if abs(angle_deg) > 20:
+        # Добавляем углы с шагом 15° в диапазоне ±30° от оптимального
+        for opt_angle in [optimal_angle_1, optimal_angle_2]:
+            for additional_angle in range(-30, 31, 15):
+                test_angle = (opt_angle + additional_angle) % 360
+                if all(abs(test_angle - existing) > 3 for existing in angles):
+                    angles.append(test_angle)
+
+    # Убираем дубликаты и сортируем
+    # ВАЖНО: Приоритет - стандартные углы идут первыми
+    angles = sorted(set(round(a, 1) for a in angles))
+
+    # Переупорядочиваем: стандартные углы (0,90,180,270) в начало
+    standard_set = set(standard_angles)
+    priority_angles = [a for a in angles if a in standard_set]
+    other_angles = [a for a in angles if a not in standard_set]
+
+    return priority_angles + other_angles
+
+
+def analyze_edge_straightness(polygon: Polygon) -> dict:
+    """
+    📏 АНАЛИЗ ПРЯМОЛИНЕЙНОСТИ КРАЁВ: Определяет, какие края ковра наиболее прямые.
+
+    Возвращает словарь с информацией о краях:
+    - straightest_edge_angle: угол наиболее прямого края
+    - straightness_score: оценка прямолинейности (0-1, где 1 = идеально прямой)
+    """
+    import math
+
+    coords = list(polygon.exterior.coords)
+    if len(coords) < 3:
+        return {"straightest_edge_angle": 0, "straightness_score": 0}
+
+    # Анализируем каждый край полигона
+    edge_info = []
+
+    for i in range(len(coords) - 1):
+        p1 = coords[i]
+        p2 = coords[i + 1]
+
+        # Длина края
+        dx = p2[0] - p1[0]
+        dy = p2[1] - p1[1]
+        length = math.sqrt(dx * dx + dy * dy)
+
+        if length < 1:  # Игнорируем очень короткие края
+            continue
+
+        # Угол края
+        angle = math.degrees(math.atan2(dy, dx))
+
+        edge_info.append({"length": length, "angle": angle, "start": p1, "end": p2})
+
+    if not edge_info:
+        return {"straightest_edge_angle": 0, "straightness_score": 0}
+
+    # Находим самый длинный край (обычно он наиболее важен для стыковки)
+    longest_edge = max(edge_info, key=lambda e: e["length"])
+
+    # Оценка прямолинейности = отношение длины к периметру
+    straightness = longest_edge["length"] / polygon.length
+
+    return {
+        "straightest_edge_angle": longest_edge["angle"],
+        "straightness_score": straightness,
+        "longest_edge_length": longest_edge["length"],
+    }
+
+
 def apply_tetris_gravity(
     placed_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float
 ) -> list[PlacedCarpet]:
@@ -189,6 +336,365 @@ def apply_tetris_gravity(
     return gravity_carpets
 
 
+def apply_aggressive_gravity(
+    placed_carpets: list[PlacedCarpet],
+    sheet_width_mm: float,
+    sheet_height_mm: float,
+    max_iterations: int = 10,
+) -> list[PlacedCarpet]:
+    """
+    🎯 АГРЕССИВНАЯ ГРАВИТАЦИЯ: Опускает ВСЕ ковры максимально вниз.
+
+    Стратегия:
+    1. Сортирует ковры снизу вверх (нижние не двигаются, верхние падают)
+    2. Для каждого ковра находит самую низкую возможную позицию
+    3. Повторяет несколько итераций для максимальной плотности
+
+    Args:
+        placed_carpets: Размещённые ковры
+        sheet_width_mm: Ширина листа
+        sheet_height_mm: Высота листа
+        max_iterations: Максимальное количество итераций
+
+    Returns:
+        Ковры после применения гравитации
+    """
+    if not placed_carpets:
+        return placed_carpets
+
+    # Создаем копии
+    result = []
+    for carpet in placed_carpets:
+        result.append(
+            PlacedCarpet(
+                polygon=carpet.polygon,
+                x_offset=carpet.x_offset,
+                y_offset=carpet.y_offset,
+                angle=carpet.angle,
+                filename=carpet.filename,
+                color=carpet.color,
+                order_id=carpet.order_id,
+                carpet_id=carpet.carpet_id,
+                priority=carpet.priority,
+            )
+        )
+
+    # Итеративно применяем гравитацию
+    for iteration in range(max_iterations):
+        any_movement = False
+        logger.info(
+            f"   Вертикальная гравитация - итерация {iteration + 1}/{max_iterations}"
+        )
+
+        # Сортируем по Y (снизу вверх) - нижние сначала, они стабильны
+        result.sort(key=lambda c: c.polygon.bounds[1])
+
+        # Пытаемся опустить каждый ковёр
+        for i, carpet in enumerate(result):
+            current_bounds = carpet.polygon.bounds
+            current_bottom_y = current_bounds[1]
+
+            # Если уже на дне, пропускаем
+            if current_bottom_y < 1:
+                logger.debug(f"     Ковёр {i} уже на дне (Y={current_bottom_y:.1f})")
+                continue
+
+            # Препятствия = все остальные ковры
+            obstacles = [other.polygon for j, other in enumerate(result) if j != i]
+
+            # Ищем самую низкую позицию без коллизий
+            # Начинаем с Y=0 и двигаемся вверх, пока не найдём свободное место
+            best_y = current_bottom_y
+
+            # ПРАВИЛЬНАЯ СТРАТЕГИЯ: Ищем САМУЮ НИЗКУЮ позицию
+            # Начинаем с текущей позиции и двигаемся ВНИЗ, пока не найдём препятствие
+            # Последняя позиция без коллизии = самая низкая возможная позиция
+
+            # Шаг 1: Грубый поиск сверху вниз (шаг 5мм для баланса скорости и точности)
+            coarse_step = 5
+            best_y = current_bottom_y
+
+            # Идём от текущей позиции вниз до Y=0
+            for test_y in range(int(current_bottom_y), -1, -coarse_step):
+                y_shift = test_y - current_bounds[1]
+                test_polygon = translate_polygon(carpet.polygon, 0, y_shift)
+
+                test_bounds = test_polygon.bounds
+                if test_bounds[1] < -0.1 or test_bounds[3] > sheet_height_mm + 0.1:
+                    break  # Вышли за границы листа
+
+                has_collision = False
+                for obstacle in obstacles:
+                    if check_collision(test_polygon, obstacle, min_gap=3.0):
+                        has_collision = True
+                        break
+
+                if not has_collision:
+                    # Эта позиция валидна, запоминаем и продолжаем спускаться
+                    best_y = test_y
+                else:
+                    # Нашли коллизию, останавливаемся (предыдущая позиция была самой низкой)
+                    break
+
+            # Шаг 2: Точный поиск в диапазоне (best_y, best_y + coarse_step) (шаг 1мм)
+            # Проверяем промежуточные позиции, которые могли пропустить в грубом поиске
+            if best_y < current_bottom_y:
+                search_start = int(best_y + coarse_step)
+                search_end = int(best_y) - 1
+
+                # Идём от более высокой позиции к best_y
+                for test_y in range(search_start, search_end, -1):
+                    y_shift = test_y - current_bounds[1]
+                    test_polygon = translate_polygon(carpet.polygon, 0, y_shift)
+
+                    test_bounds = test_polygon.bounds
+                    if test_bounds[1] < -0.1 or test_bounds[3] > sheet_height_mm + 0.1:
+                        continue
+
+                    has_collision = False
+                    for obstacle in obstacles:
+                        if check_collision(test_polygon, obstacle, min_gap=3.0):
+                            has_collision = True
+                            break
+
+                    if not has_collision:
+                        best_y = test_y
+                    else:
+                        break  # Нашли коллизию, останавливаемся
+
+            # Применяем перемещение если есть улучшение
+            if best_y < current_bottom_y - 0.1:  # Хотя бы 0.1мм улучшения
+                y_shift = best_y - current_bounds[1]
+                movement = current_bottom_y - best_y
+                logger.info(
+                    f"     ✓ Ковёр {i}: опущен на {movement:.1f}мм (Y={current_bottom_y:.1f} → {best_y:.1f})"
+                )
+                carpet.polygon = translate_polygon(carpet.polygon, 0, y_shift)
+                carpet.y_offset += y_shift
+                any_movement = True
+            else:
+                logger.debug(
+                    f"     Ковёр {i}: не может опуститься ниже (best_y={best_y:.1f})"
+                )
+
+        # Если ничего не двигалось, завершаем
+        if not any_movement:
+            logger.info("   Вертикальная гравитация: нет больше движений, завершаем")
+            break
+
+    return result
+
+
+def apply_aggressive_horizontal_compaction(
+    placed_carpets: list[PlacedCarpet],
+    sheet_width_mm: float,
+    sheet_height_mm: float,
+    max_iterations: int = 10,
+) -> list[PlacedCarpet]:
+    """
+    🎯 АГРЕССИВНАЯ ГОРИЗОНТАЛЬНАЯ КОМПРЕССИЯ: Прижимает ВСЕ ковры максимально влево.
+
+    Стратегия:
+    1. Сортирует ковры слева направо (левые не двигаются, правые сдвигаются влево)
+    2. Для каждого ковра находит самую левую возможную позицию
+    3. Повторяет несколько итераций для максимальной плотности
+
+    Args:
+        placed_carpets: Размещённые ковры
+        sheet_width_mm: Ширина листа
+        sheet_height_mm: Высота листа
+        max_iterations: Максимальное количество итераций
+
+    Returns:
+        Ковры после применения горизонтальной компрессии
+    """
+    if not placed_carpets:
+        return placed_carpets
+
+    # Создаем копии
+    result = []
+    for carpet in placed_carpets:
+        result.append(
+            PlacedCarpet(
+                polygon=carpet.polygon,
+                x_offset=carpet.x_offset,
+                y_offset=carpet.y_offset,
+                angle=carpet.angle,
+                filename=carpet.filename,
+                color=carpet.color,
+                order_id=carpet.order_id,
+                carpet_id=carpet.carpet_id,
+                priority=carpet.priority,
+            )
+        )
+
+    # Итеративно применяем горизонтальную компрессию
+    for iteration in range(max_iterations):
+        any_movement = False
+        logger.info(
+            f"   Горизонтальная компрессия - итерация {iteration + 1}/{max_iterations}"
+        )
+
+        # Сортируем по X (слева направо) - левые сначала, они стабильны
+        result.sort(key=lambda c: c.polygon.bounds[0])
+
+        # Пытаемся сдвинуть каждый ковёр влево
+        for i, carpet in enumerate(result):
+            current_bounds = carpet.polygon.bounds
+            current_left_x = current_bounds[0]
+
+            # Если уже у левой границы, пропускаем
+            if current_left_x < 1:
+                logger.debug(
+                    f"     Ковёр {i} уже у левой границы (X={current_left_x:.1f})"
+                )
+                continue
+
+            # Препятствия = все остальные ковры
+            obstacles = [other.polygon for j, other in enumerate(result) if j != i]
+
+            # Ищем самую левую позицию без коллизий
+            best_x = current_left_x
+            logger.debug(f"     Ковёр {i}: текущая позиция X={current_left_x:.1f}")
+
+            # Шаг 1: Грубый поиск справа налево (шаг 5мм)
+            coarse_step = 5
+
+            # Идём от текущей позиции влево до X=0
+            for test_x in range(int(current_left_x), -1, -coarse_step):
+                x_shift = test_x - current_bounds[0]
+                test_polygon = translate_polygon(carpet.polygon, x_shift, 0)
+
+                test_bounds = test_polygon.bounds
+                if test_bounds[0] < -0.1 or test_bounds[2] > sheet_width_mm + 0.1:
+                    break  # Вышли за границы листа
+
+                has_collision = False
+                for obstacle in obstacles:
+                    if check_collision(test_polygon, obstacle, min_gap=3.0):
+                        has_collision = True
+                        break
+
+                if not has_collision:
+                    # Эта позиция валидна, запоминаем и продолжаем двигаться влево
+                    best_x = test_x
+                else:
+                    # Нашли коллизию, останавливаемся (предыдущая позиция была самой левой)
+                    break
+
+            # Шаг 2: Точный поиск в диапазоне (best_x, best_x + coarse_step) (шаг 1мм)
+            if best_x < current_left_x:
+                search_start = int(best_x + coarse_step)
+                search_end = int(best_x) - 1
+
+                # Идём от более правой позиции к best_x
+                for test_x in range(search_start, search_end, -1):
+                    x_shift = test_x - current_bounds[0]
+                    test_polygon = translate_polygon(carpet.polygon, x_shift, 0)
+
+                    test_bounds = test_polygon.bounds
+                    if test_bounds[0] < -0.1 or test_bounds[2] > sheet_width_mm + 0.1:
+                        continue
+
+                    has_collision = False
+                    for obstacle in obstacles:
+                        if check_collision(test_polygon, obstacle, min_gap=3.0):
+                            has_collision = True
+                            break
+
+                    if not has_collision:
+                        best_x = test_x
+                    else:
+                        break  # Нашли коллизию, останавливаемся
+
+            # Применяем перемещение если есть улучшение
+            if best_x < current_left_x - 0.1:  # Хотя бы 0.1мм улучшения
+                x_shift = best_x - current_bounds[0]
+                movement = current_left_x - best_x
+                logger.info(
+                    f"     ✓ Ковёр {i}: сдвинут влево на {movement:.1f}мм (X={current_left_x:.1f} → {best_x:.1f})"
+                )
+                carpet.polygon = translate_polygon(carpet.polygon, x_shift, 0)
+                carpet.x_offset += x_shift
+                any_movement = True
+            else:
+                logger.debug(
+                    f"     Ковёр {i}: не может сдвинуться влево (best_x={best_x:.1f})"
+                )
+
+        # Если ничего не двигалось, завершаем
+        if not any_movement:
+            logger.info("   Горизонтальная компрессия: нет больше движений, завершаем")
+            break
+
+    return result
+
+
+def apply_combined_compaction(
+    placed_carpets: list[PlacedCarpet],
+    sheet_width_mm: float,
+    sheet_height_mm: float,
+    max_iterations: int = 5,
+) -> list[PlacedCarpet]:
+    """
+    🎯 КОМБИНИРОВАННАЯ КОМПРЕССИЯ: Чередует вертикальную гравитацию и горизонтальную компрессию.
+
+    Стратегия:
+    1. Применяет вертикальную гравитацию (опускает вниз)
+    2. Применяет горизонтальную компрессию (прижимает влево)
+    3. Повторяет цикл пока есть движение
+
+    Args:
+        placed_carpets: Размещённые ковры
+        sheet_width_mm: Ширина листа
+        sheet_height_mm: Высота листа
+        max_iterations: Максимальное количество внешних итераций
+
+    Returns:
+        Ковры после применения комбинированной компрессии
+    """
+    if not placed_carpets:
+        return placed_carpets
+
+    result = placed_carpets
+
+    for iteration in range(max_iterations):
+        logger.info(
+            f"🔄 Комбинированная компрессия - цикл {iteration + 1}/{max_iterations}"
+        )
+
+        # Запоминаем текущие позиции для проверки движения
+        before_positions = [(c.polygon.bounds[0], c.polygon.bounds[1]) for c in result]
+
+        # Шаг 1: Вертикальная гравитация (опускаем вниз)
+        result = apply_aggressive_gravity(
+            result, sheet_width_mm, sheet_height_mm, max_iterations=3
+        )
+
+        # Шаг 2: Горизонтальная компрессия (прижимаем влево)
+        result = apply_aggressive_horizontal_compaction(
+            result, sheet_width_mm, sheet_height_mm, max_iterations=3
+        )
+
+        # Проверяем было ли движение
+        after_positions = [(c.polygon.bounds[0], c.polygon.bounds[1]) for c in result]
+
+        total_movement = sum(
+            abs(before[0] - after[0]) + abs(before[1] - after[1])
+            for before, after in zip(before_positions, after_positions)
+        )
+
+        logger.info(
+            f"   Общее движение в цикле {iteration + 1}: {total_movement:.1f}мм"
+        )
+
+        if total_movement < 1.0:  # Меньше 1мм суммарного движения - стабилизация
+            logger.info("   Компрессия стабилизировалась, завершаем")
+            break
+
+    return result
+
+
 def apply_tetris_right_compaction(
     placed_carpets: list[PlacedCarpet], sheet_width_mm: float, sheet_height_mm: float
 ) -> list[PlacedCarpet]:
@@ -274,7 +780,7 @@ def apply_tetris_right_compaction(
             # Проверяем коллизии
             collision = False
             for obstacle in obstacles:
-                if check_collision(test_polygon, obstacle, min_gap=10.0):
+                if check_collision(test_polygon, obstacle, min_gap=3.0):
                     collision = True
                     break
 
@@ -382,7 +888,7 @@ def apply_tetris_left_compaction(
             # Проверяем коллизии
             collision = False
             for obstacle in obstacles:
-                if check_collision(test_polygon, obstacle, min_gap=10.0):
+                if check_collision(test_polygon, obstacle, min_gap=3.0):
                     collision = True
                     break
 
@@ -763,13 +1269,14 @@ def post_placement_optimize(
             best_improvement = 0
             best_rotation = None
 
+            # Получаем оригинальный полигон для анализа
+            original_polygon = rotate_polygon(
+                current_carpet.polygon, -current_carpet.angle
+            )  # Возвращаем к 0°
+
             for test_angle in [0, 90, 180, 270]:
                 if test_angle == current_carpet.angle:
                     continue
-
-                original_polygon = rotate_polygon(
-                    current_carpet.polygon, -current_carpet.angle
-                )  # Возвращаем к 0°
                 rotated_polygon = rotate_polygon(original_polygon, test_angle)
 
                 # Создаем тестовый ковер с новым углом
@@ -994,7 +1501,7 @@ def check_collision(
 ) -> bool:
     """Check if two polygons collide using TRUE GEOMETRIC distance with speed optimization.
 
-    min_gap=10.0mm чтобы компенсировать погрешность при экспорте SPLINE entities в DXF.
+    min_gap=3.0mm чтобы компенсировать погрешность при экспорте SPLINE entities в DXF.
     """
     return check_collision_fast(polygon1, polygon2, min_gap)
 
@@ -1046,7 +1553,7 @@ def bin_packing_with_existing(
         best_placement = None
         best_priority = float("inf")  # Lower is better (Y*1000 + X)
 
-        # Only allowed rotation angles for cutting machines
+        # Стандартные углы для резки (0°, 90°, 180°, 270°)
         rotation_angles = [0, 90, 180, 270]
 
         for angle in rotation_angles:
@@ -1097,11 +1604,12 @@ def bin_packing_with_existing(
                     else 0
                 )
 
-                # PRIMARY SCORE: Penalize orientations that increase maximum height
-                # BALANCE: Уменьшен вес для лучшей локальной компактности (было 10000)
+                # PRIMARY SCORE: Умеренный штраф за увеличение высоты
+                # ИЗМЕНЕНО: Уменьшен множитель для разрешения размещения в верхних карманах
+                # Вместо жёсткой минимизации высоты, приоритизируем локальную плотность
                 global_height_score = (
-                    max_height_after * 5000
-                )  # Сбалансирован с локальными факторами
+                    max_height_after * 1000  # Уменьшено с 5000 до 1000
+                )  # Позволяет размещать ковры в верхней части при высокой заполненности
 
                 # SECONDARY SCORE: X position for tie-breaking (prefer left placement)
                 x_position_score = best_x
@@ -1167,16 +1675,19 @@ def bin_packing_with_existing(
                     carpet_area = test_translated.area
                     support_ratio = support_area / carpet_area if carpet_area > 0 else 0
 
-                    # УСИЛЕННЫЕ требования: нужно минимум 40% опоры (было 30%)
+                    # ИЗМЕНЕНО: Умеренный штраф за недостаточную опору
+                    # Разрешаем размещение в верхних карманах при хорошей локальной плотности
                     if support_ratio < 0.4:
-                        # ОГРОМНЫЙ штраф за висящие ковры - они блокируют пространство!
+                        # Умеренный штраф вместо огромного (было 150000)
+                        # Это позволяет размещать ковры в верхних карманах между другими коврами
                         hanging_penalty = int(
-                            (0.4 - support_ratio) * 150000
-                        )  # Утроен с 50000
+                            (0.4 - support_ratio) * 10000
+                        )  # Уменьшено с 150000
                         shape_bonus += hanging_penalty
 
-                    # Дополнительный штраф за саму высоту - чем выше, тем хуже
-                    height_penalty = int(bottom_y * 50)  # Штраф пропорциональный высоте
+                    # ИЗМЕНЕНО: Минимальный штраф за высоту, не блокирующий
+                    # Уменьшено с 50 до 10 для разрешения верхнего размещения
+                    height_penalty = int(bottom_y * 10)  # Минимальный штраф
                     shape_bonus += height_penalty
 
                 total_score = position_score + shape_bonus
@@ -1243,7 +1754,7 @@ def bin_packing_with_existing(
                             if check_collision(
                                 improved_placed[i].polygon,
                                 improved_placed[j].polygon,
-                                min_gap=10.0,  # Строгий 2мм зазор
+                                min_gap=3.0,  # Строгий 2мм зазор
                             ):
                                 safe = False
                                 break
@@ -1715,6 +2226,7 @@ def bin_packing(
         best_placement = None
         best_score = float("inf")  # Lower is better
 
+        # Стандартные углы для резки (0°, 90°, 180°, 270°)
         rotation_angles = [0, 90, 180, 270]
 
         # ПРИОРИТЕТ ОДИНАКОВОГО УГЛА: Для одинаковых ковров сначала пробуем тот же угол
@@ -1784,11 +2296,12 @@ def bin_packing(
                     else 0
                 )
 
-                # PRIMARY SCORE: Penalize orientations that increase maximum height
-                # BALANCE: Уменьшен вес для лучшей локальной компактности (было 10000)
+                # PRIMARY SCORE: Умеренный штраф за увеличение высоты
+                # ИЗМЕНЕНО: Уменьшен множитель для разрешения размещения в верхних карманах
+                # Вместо жёсткой минимизации высоты, приоритизируем локальную плотность
                 global_height_score = (
-                    max_height_after * 5000
-                )  # Сбалансирован с локальными факторами
+                    max_height_after * 1000  # Уменьшено с 5000 до 1000
+                )  # Позволяет размещать ковры в верхней части при высокой заполненности
 
                 # SECONDARY SCORE: X position for tie-breaking (prefer left placement)
                 x_position_score = best_x
@@ -1862,16 +2375,19 @@ def bin_packing(
                     carpet_area = test_translated.area
                     support_ratio = support_area / carpet_area if carpet_area > 0 else 0
 
-                    # УСИЛЕННЫЕ требования: нужно минимум 40% опоры (было 30%)
+                    # ИЗМЕНЕНО: Умеренный штраф за недостаточную опору
+                    # Разрешаем размещение в верхних карманах при хорошей локальной плотности
                     if support_ratio < 0.4:
-                        # ОГРОМНЫЙ штраф за висящие ковры - они блокируют пространство!
+                        # Умеренный штраф вместо огромного (было 150000)
+                        # Это позволяет размещать ковры в верхних карманах между другими коврами
                         hanging_penalty = int(
-                            (0.4 - support_ratio) * 150000
-                        )  # Утроен с 50000
+                            (0.4 - support_ratio) * 10000
+                        )  # Уменьшено с 150000
                         shape_bonus += hanging_penalty
 
-                    # Дополнительный штраф за саму высоту - чем выше, тем хуже
-                    height_penalty = int(bottom_y * 50)  # Штраф пропорциональный высоте
+                    # ИЗМЕНЕНО: Минимальный штраф за высоту, не блокирующий
+                    # Уменьшено с 50 до 10 для разрешения верхнего размещения
+                    height_penalty = int(bottom_y * 10)  # Минимальный штраф
                     shape_bonus += height_penalty
 
                 # КРИТИЧЕСКИ ВАЖНЫЙ БОНУС ЗА ПРАВИЛЬНУЮ ОРИЕНТАЦИЮ
@@ -1953,6 +2469,12 @@ def bin_packing(
                     actual_x_offset = final_bounds[0] - orig_bounds[0]
                     actual_y_offset = final_bounds[1] - orig_bounds[1]
 
+                    logger.debug(f"📍 НОВОЕ ЛУЧШЕЕ РАЗМЕЩЕНИЕ для {carpet.filename}:")
+                    logger.debug(
+                        f"   Угол: {angle}°, Позиция: ({best_x:.1f}, {best_y:.1f}), Score: {total_score:.0f}"
+                    )
+                    logger.debug(f"   Финальные bounds: {final_bounds}")
+
                     best_placement = {
                         "polygon": translated,
                         "x_offset": actual_x_offset,
@@ -1962,18 +2484,23 @@ def bin_packing(
 
         # Apply best placement if found
         if best_placement:
-            placed.append(
-                PlacedCarpet(
-                    polygon=best_placement["polygon"],  # type: ignore
-                    carpet_id=carpet.carpet_id,
-                    priority=carpet.priority,
-                    x_offset=best_placement["x_offset"],  # type: ignore
-                    y_offset=best_placement["y_offset"],  # type: ignore
-                    angle=best_placement["angle"],  # type: ignore
-                    filename=carpet.filename,
-                    color=carpet.color,
-                    order_id=carpet.order_id,
-                )
+            new_carpet = PlacedCarpet(
+                polygon=best_placement["polygon"],  # type: ignore
+                carpet_id=carpet.carpet_id,
+                priority=carpet.priority,
+                x_offset=best_placement["x_offset"],  # type: ignore
+                y_offset=best_placement["y_offset"],  # type: ignore
+                angle=best_placement["angle"],  # type: ignore
+                filename=carpet.filename,
+                color=carpet.color,
+                order_id=carpet.order_id,
+            )
+            placed.append(new_carpet)
+            logger.debug(
+                f"✅ Размещён ковёр {carpet.filename} с углом {best_placement['angle']}°"
+            )
+            logger.debug(
+                f"   Polygon bounds сразу после размещения: {new_carpet.polygon.bounds}"
             )
 
             # POST-PLACEMENT OPTIMIZATION - DISABLED
@@ -2013,7 +2540,7 @@ def bin_packing(
                             if check_collision(
                                 final_optimized[i].polygon,
                                 final_optimized[j].polygon,
-                                min_gap=10.0,  # Строгий 2мм зазор
+                                min_gap=3.0,  # Строгий 2мм зазор
                             ):
                                 collision_found = True
                                 break
@@ -2138,8 +2665,8 @@ def bin_packing(
     # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
     # placed = simple_compaction(placed, sheet_size, min_gap=1.0)
 
-    # # ULTRA-AGGRESSIVE LEFT COMPACTION - always apply for maximum density
-    if len(placed) <= 20:  # Optimize most reasonable sets
+    # # ULTRA-AGGRESSIVE LEFT COMPACTION - ОТКЛЮЧЕНА для предотвращения пересечений
+    if False and len(placed) <= 20:  # ОТКЛЮЧЕНО: вызывает пересечения
         # Ultra-aggressive left compaction to squeeze everything left - ТЕСТИРУЕМ
         placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.7)
         #
@@ -2153,7 +2680,7 @@ def bin_packing(
     #     placed = ultra_left_compaction(placed, sheet_size, target_width_fraction=0.5)
     #
     #     # Light tightening to clean up - ТЕСТИРУЕМ
-    #     placed = tighten_layout(placed, sheet_size, min_gap=0.5, step=2.0, max_passes=1)
+    #     placed = tighten_layout(placed, sheet_size, min_gap=3.0, step=2.0, max_passes=1)
     elif (
         len(placed) <= 35
     ):  # COMPACTION DISABLED - breaks optimal layout from find_bottom_left_position
@@ -2164,9 +2691,83 @@ def bin_packing(
     #
     # # No optimization for very large sets
 
-    # POST-OPTIMIZATION: Gravity compaction - ОТКЛЮЧЕНО (создает пересечения)
-    # if placed:
-    #     placed = apply_gravity_optimization(placed, sheet_width_mm, sheet_height_mm)
+    # 🎯 ФИНАЛЬНАЯ КОМБИНИРОВАННАЯ КОМПРЕССИЯ: ВРЕМЕННО ОТКЛЮЧЕНА
+    # Отключаем компрессию для исключения пересечений
+    logger.info(f"📊 Размещено {len(placed)} ковров на листе")
+    logger.warning("⚠️ КОМПРЕССИЯ ОТКЛЮЧЕНА для предотвращения пересечений")
+
+    # 🔍 ФИНАЛЬНАЯ ПРОВЕРКА НА ПЕРЕСЕЧЕНИЯ
+    if placed:
+        logger.info("🔍 Выполняем финальную проверку на пересечения...")
+        collision_found = False
+        for i in range(len(placed)):
+            for j in range(i + 1, len(placed)):
+                if check_collision(
+                    placed[i].polygon,
+                    placed[j].polygon,
+                    min_gap=3.0,
+                ):
+                    collision_found = True
+                    distance = placed[i].polygon.distance(placed[j].polygon)
+                    logger.error(
+                        f"❌ КРИТИЧЕСКАЯ ОШИБКА: Обнаружено пересечение между коврами {i} и {j}"
+                    )
+                    logger.error(
+                        f"   Ковёр {i}: {placed[i].filename}, bounds={placed[i].polygon.bounds}"
+                    )
+                    logger.error(
+                        f"   Ковёр {j}: {placed[j].filename}, bounds={placed[j].polygon.bounds}"
+                    )
+                    logger.error(f"   Расстояние: {distance:.2f}mm (требуется ≥3.0mm)")
+                    logger.error(
+                        f"   Intersects: {placed[i].polygon.intersects(placed[j].polygon)}"
+                    )
+                    break
+            if collision_found:
+                break
+
+        if not collision_found:
+            logger.info("✓ Проверка пройдена: пересечений не обнаружено")
+        else:
+            logger.error("❌ ВНИМАНИЕ: Обнаружены пересечения в финальной раскладке!")
+
+    # if placed and len(placed) <= 100:
+    #     try:
+    #         logger.info(f"🎯 Применяем комбинированную компрессию к {len(placed)} коврам...")
+    #         compacted_placed = apply_combined_compaction(
+    #             placed, sheet_width_mm, sheet_height_mm, max_iterations=3
+    #         )
+    #
+    #         # Проверяем безопасность результата
+    #         collision_found = False
+    #         for i in range(len(compacted_placed)):
+    #             for j in range(i + 1, len(compacted_placed)):
+    #                 if check_collision(
+    #                     compacted_placed[i].polygon,
+    #                     compacted_placed[j].polygon,
+    #                     min_gap=3.0,
+    #                 ):
+    #                     collision_found = True
+    #                     logger.warning(f"⚠️ Обнаружена коллизия после компрессии между {i} и {j}")
+    #                     break
+    #             if collision_found:
+    #                 break
+    #
+    #         if not collision_found:
+    #             placed = compacted_placed
+    #             logger.info("✓ Комбинированная компрессия применена успешно")
+    #         else:
+    #             logger.warning("⚠️ Откатываем комбинированную компрессию из-за коллизий")
+    #     except Exception as e:
+    #         logger.exception(f"❌ Ошибка при применении комбинированной компрессии: {e}")
+    # else:
+    #     if placed:
+    #         logger.warning(f"⚠️ Компрессия НЕ применяется: слишком много ковров ({len(placed)} > 100)")
+
+    # ОТЛАДКА: Проверяем bounds перед возвратом
+    logger.debug("🔍 ФИНАЛЬНЫЕ BOUNDS ПЕРЕД ВОЗВРАТОМ:")
+    for i, carpet in enumerate(placed):
+        logger.debug(f"   Ковёр {i} ({carpet.filename}): {carpet.polygon.bounds}")
 
     return placed, unplaced
 
@@ -3051,7 +3652,7 @@ def find_super_dense_position(
 
     # BATCH: Check all collisions at once using fast batch check
     collisions = batch_check_collisions_cached_fast(
-        test_polygons, _global_spatial_cache
+        test_polygons, _global_spatial_cache, min_gap=3.0
     )
 
     # Find first non-colliding position (already sorted by Y, then X)
@@ -3278,7 +3879,7 @@ def find_ultra_tight_position(
 
     # BATCH: Check all collisions at once using fast batch check
     collisions = batch_check_collisions_cached_fast(
-        test_polygons, _global_spatial_cache
+        test_polygons, _global_spatial_cache, min_gap=3.0
     )
 
     # Find first non-colliding position (already sorted by Y, then X)
@@ -3393,7 +3994,7 @@ def find_bottom_left_position_with_obstacles(
 
     # BATCH: Check all collisions at once using fast batch check
     collisions = batch_check_collisions_cached_fast(
-        test_polygons, _global_spatial_cache
+        test_polygons, _global_spatial_cache, min_gap=3.0
     )
 
     # Find first non-colliding position (already sorted by Y, then X for bottom-left)
@@ -3439,12 +4040,10 @@ def find_quick_position(
             y_offset = y - bounds[1]
             test_polygon = translate_polygon(polygon, x_offset, y_offset)
 
-            # Quick collision check with looser tolerance
+            # Quick collision check with tight tolerance for maximum density
             collision = False
             for placed_poly in placed_polygons:
-                if check_collision(
-                    test_polygon, placed_poly.polygon, min_gap=10.0
-                ):  # Looser gap
+                if check_collision(test_polygon, placed_poly.polygon, min_gap=3.0):
                     collision = True
                     break
 
@@ -3460,13 +4059,21 @@ def find_bottom_left_position(
     """FAST Simple bottom-left placement - prioritize speed over perfect density."""
     _Stats.call_counter += 1
 
+    logger.debug(
+        f"🔍 find_bottom_left_position вызвана для полигона с bounds={polygon.bounds}"
+    )
+    logger.debug(f"   Уже размещено ковров: {len(placed_polygons)}")
+
     # First placement - always bottom-left corner
     if not placed_polygons:
+        logger.debug("   ✓ Первый ковёр - размещаем в (0, 0)")
         return 0, 0
 
     bounds = polygon.bounds
     poly_width = bounds[2] - bounds[0]
     poly_height = bounds[3] - bounds[1]
+
+    logger.debug(f"   Размеры ковра: {poly_width:.1f} x {poly_height:.1f}")
 
     # FAST SCAN: Use large steps for speed
     step = max(10.0, min(poly_width, poly_height) / 3)  # Large adaptive step for speed
@@ -3484,7 +4091,9 @@ def find_bottom_left_position(
     for placed_poly in placed_polygons:
         right_edge = placed_poly.polygon.bounds[2]
         if right_edge + poly_width <= sheet_width:
-            x_positions.append(int(right_edge) + 2)  # 2mm gap
+            x_positions.append(
+                int(right_edge) + 3
+            )  # ИСПРАВЛЕНО: 10mm gap для совместимости с check_collision
 
     # 3. Правый край листа (прижать к правому краю!)
     right_aligned_x = int(sheet_width - poly_width)
@@ -3515,7 +4124,13 @@ def find_bottom_left_position(
         # КРИТИЧНО для плотности: нужно учитывать ВСЕ размещенные ковры
         for placed_poly in placed_polygons:  # Проверяем все полигоны
             other_bounds = placed_poly.polygon.bounds
-            test_y_positions.append(other_bounds[3] + 2.0)  # Above with 2mm gap
+            y_above = (
+                other_bounds[3] + 3.0
+            )  # ИСПРАВЛЕНО: 10mm gap для совместимости с check_collision
+            test_y_positions.append(y_above)
+            logger.debug(
+                f"      Генерируем Y позицию выше ковра {placed_poly.filename}: {other_bounds[3]:.1f} + 10.0 = {y_above:.1f}"
+            )
             # Добавляем также позиции справа от ковров для лучшей компактности
             test_y_positions.append(other_bounds[1])  # На той же высоте что низ
             test_y_positions.append(
@@ -3584,7 +4199,7 @@ def find_bottom_left_position(
 
     # BATCH: Check all collisions at once using fast batch check
     collisions = batch_check_collisions_cached_fast(
-        test_polygons, _global_spatial_cache
+        test_polygons, _global_spatial_cache, min_gap=3.0
     )
 
     # КРИТИЧЕСКОЕ УЛУЧШЕНИЕ: Вместо выбора первой позиции с минимальным Y,
@@ -3600,51 +4215,67 @@ def find_bottom_left_position(
             score = 0
             bounds = test_poly.bounds
 
-            # 1. ПРИОРИТЕТ НИЗКОЙ ПОЗИЦИИ (основной фактор)
-            score += y * 1000
+            # 1. АДАПТИВНЫЙ ПРИОРИТЕТ ПОЗИЦИИ
+            # Вместо жёсткого штрафа за Y, приоритизируем близость к соседям
+            # Это позволяет размещать ковры в верхних "карманах" если они там хорошо помещаются
 
-            # 2. ШТРАФ за удаленность от левого края (меньше X = лучше)
-            # Градиентный штраф: чем правее, тем хуже
-            score += bounds[0] * 50  # Умеренный штраф за X-позицию
+            # 1. ПРИОРИТЕТ: Количество контактов (стенок) с соседями и границами
+            # Чем больше контактов, тем плотнее упаковка
+            contact_count = 0
+            contact_bonus = 0
 
-            # 3. КРИТИЧЕСКИЙ БОНУС ЗА ПРИЖАТОСТЬ К КРАЯМ ЛИСТА
-            # Левый край - ОГРОМНЫЙ приоритет для максимизации открытого пространства
-            left_distance = bounds[0]
-            if left_distance < 5:
-                score -= 300000  # Идеальная прижатость к левому краю
-            elif left_distance < 50:
-                # Сильный градиентный бонус: ближе = значительно лучше
-                score -= int((50 - left_distance) * 5000)
-
-            # Правый край - тоже важен, но менее приоритетен чем левый
-            right_distance = abs(bounds[2] - sheet_width)
-            if right_distance < 5:
-                score -= 200000  # Прижатость к правому краю
-            elif right_distance < 50:
-                score -= int((50 - right_distance) * 3000)
-
-            # 4. КРИТИЧЕСКИЙ БОНУС: близость к уже размещенным коврам
-            # Ковер должен быть как можно ближе к соседям для плотности
-            min_distance_to_neighbors = float("inf")
+            # Считаем контакты с соседями (близость < 5мм = контакт)
             for placed in placed_polygons:
                 placed_bounds = placed.polygon.bounds
 
-                # Расстояние между boundary boxes
-                dx = max(
-                    0, max(bounds[0] - placed_bounds[2], placed_bounds[0] - bounds[2])
-                )
-                dy = max(
-                    0, max(bounds[1] - placed_bounds[3], placed_bounds[1] - bounds[3])
-                )
-                dist = (dx * dx + dy * dy) ** 0.5
-                min_distance_to_neighbors = min(min_distance_to_neighbors, dist)
+                # Проверяем близость со всех 4 сторон
+                left_gap = bounds[0] - placed_bounds[2]  # Слева от placed
+                right_gap = placed_bounds[0] - bounds[2]  # Справа от placed
+                bottom_gap = bounds[1] - placed_bounds[3]  # Снизу от placed
+                top_gap = placed_bounds[1] - bounds[3]  # Сверху от placed
 
-            # Штраф за удаленность от соседей
-            if min_distance_to_neighbors < float("inf"):
-                score += int(min_distance_to_neighbors * 200)
+                # Контакт если зазор < 5мм
+                if -5 < left_gap < 5:
+                    contact_count += 1
+                    contact_bonus -= 200000
+                if -5 < right_gap < 5:
+                    contact_count += 1
+                    contact_bonus -= 200000
+                if -5 < bottom_gap < 5:
+                    contact_count += 1
+                    contact_bonus -= 200000
+                if -5 < top_gap < 5:
+                    contact_count += 1
+                    contact_bonus -= 200000
 
-            # 5. ШТРАФ ЗА БЛОКИРОВАНИЕ ПРОСТРАНСТВА
-            # Если ковер висит высоко без опоры снизу - это блокирует пространство
+            # Контакты с границами листа
+            if bounds[0] < 5:  # Левый край
+                contact_count += 1
+                contact_bonus -= 100000
+            if bounds[1] < 5:  # Нижний край
+                contact_count += 1
+                contact_bonus -= 100000
+            if abs(bounds[2] - sheet_width) < 5:  # Правый край
+                contact_count += 1
+                contact_bonus -= 100000
+            if abs(bounds[3] - sheet_height) < 5:  # Верхний край (реже нужно)
+                contact_count += 1
+                contact_bonus -= 50000
+
+            score += contact_bonus
+
+            # 2. МИНИМАЛЬНЫЙ штраф за высоту (приоритет для нижних, но не блокирующий)
+            score += y * 20
+
+            # 3. МИНИМАЛЬНЫЙ штраф за удалённость от левого края
+            score += bounds[0] * 5
+
+            # 4. Если нет контактов вообще, большой штраф (изолированная позиция)
+            if contact_count == 0:
+                score += 1000000  # Очень плохо - ковёр в пустоте
+
+            # 5. УМЕРЕННЫЙ ШТРАФ ЗА НЕДОСТАТОЧНУЮ ОПОРУ
+            # Проверяем опору снизу, но не блокируем размещение в верхних карманах
             bottom_y = bounds[1]
             if bottom_y > 50:
                 # Проверяем опору снизу
@@ -3660,9 +4291,19 @@ def find_bottom_left_position(
                 support_ratio = (
                     support_area / test_poly.area if test_poly.area > 0 else 0
                 )
+
+                # ИЗМЕНЕНО: Умеренный штраф вместо огромного
+                # Если есть близкие соседи, опора не так важна
                 if support_ratio < 0.4:
-                    # Висячая позиция - ОГРОМНЫЙ штраф
-                    score += int((0.4 - support_ratio) * 100000)
+                    # Вместо 100000, используем 5000 - умеренный штраф
+                    # Это позволяет размещать ковры в верхних карманах
+                    support_penalty = int((0.4 - support_ratio) * 5000)
+
+                    # Если ковер имеет много контактов (в кармане), уменьшаем штраф
+                    if contact_count >= 2:
+                        support_penalty = support_penalty // 2
+
+                    score += support_penalty
 
             valid_positions.append((score, x, y, i))
 
@@ -3671,8 +4312,20 @@ def find_bottom_left_position(
         valid_positions.sort()  # Сортируем по score
         best_score, best_x, best_y, best_i = valid_positions[0]
 
+        logger.debug(f"   ✓ Найдено {len(valid_positions)} валидных позиций")
+        logger.debug(
+            f"   ✓ Выбрана лучшая позиция: ({best_x:.1f}, {best_y:.1f}) со score={best_score}"
+        )
+        if len(valid_positions) > 1:
+            logger.debug(
+                f"   Альтернативы (top 3): {[(score, x, y) for score, x, y, _ in valid_positions[:3]]}"
+            )
+
         return best_x, best_y
 
+    logger.warning(
+        f"   ❌ НЕ НАЙДЕНО валидных позиций! Всего кандидатов: {len(all_candidates)}, коллизий: {sum(collisions)}"
+    )
     return None, None
 
 

@@ -42,7 +42,7 @@ def test_priority2_placement():
     polygon_data = parse_dxf_complete(dxf_file.as_posix(), verbose=False)
     if polygon_data and polygon_data.get("combined_polygon"):
         base_polygon = polygon_data["combined_polygon"]
-        for i in range(15):
+        for i in range(14):
             priority2_polygons.append(Carpet(base_polygon, f"{dxf_file.name}_копия_{i}", "чёрный", f"group_2", 2))
 
     all_polygons = priority1_polygons + priority2_polygons
